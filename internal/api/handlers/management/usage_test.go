@@ -94,3 +94,32 @@ func requireRecordID(t *testing.T, raw json.RawMessage, want int) {
 		t.Fatalf("record id = %d, want %d", payload.ID, want)
 	}
 }
+
+func TestUsageMonitorHandlersReturnAndResetSnapshot(t *testing.T) {
+	redisqueue.ResetUsageMonitor()
+	t.Cleanup(redisqueue.ResetUsageMonitor)
+
+	h := &Handler{}
+	getRec := httptest.NewRecorder()
+	getCtx, _ := gin.CreateTestContext(getRec)
+	getCtx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/usage-monitor", nil)
+	h.GetUsageMonitor(getCtx)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d body=%s", getRec.Code, http.StatusOK, getRec.Body.String())
+	}
+	var snapshot redisqueue.UsageMonitorSnapshot
+	if errUnmarshal := json.Unmarshal(getRec.Body.Bytes(), &snapshot); errUnmarshal != nil {
+		t.Fatalf("unmarshal snapshot: %v", errUnmarshal)
+	}
+	if snapshot.Requests != 0 || snapshot.Providers == nil {
+		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	}
+
+	resetRec := httptest.NewRecorder()
+	resetCtx, _ := gin.CreateTestContext(resetRec)
+	resetCtx.Request = httptest.NewRequest(http.MethodDelete, "/v0/management/usage-monitor", nil)
+	h.ResetUsageMonitor(resetCtx)
+	if resetRec.Code != http.StatusOK {
+		t.Fatalf("reset status = %d, want %d body=%s", resetRec.Code, http.StatusOK, resetRec.Body.String())
+	}
+}

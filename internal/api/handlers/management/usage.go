@@ -53,3 +53,22 @@ func parseUsageQueueCount(value string) (int, error) {
 	}
 	return count, nil
 }
+
+// GetUsageMonitor returns non-destructive token usage aggregates grouped by provider and model.
+func (h *Handler) GetUsageMonitor(c *gin.Context) {
+	if h == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, redisqueue.GetUsageMonitorSnapshot())
+}
+
+// ResetUsageMonitor clears all in-memory token usage aggregates.
+func (h *Handler) ResetUsageMonitor(c *gin.Context) {
+	if h == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler unavailable"})
+		return
+	}
+	redisqueue.ResetUsageMonitor()
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}

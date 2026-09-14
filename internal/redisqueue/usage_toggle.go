@@ -8,9 +8,14 @@ func init() {
 	usageStatisticsEnabled.Store(true)
 }
 
-// SetUsageStatisticsEnabled toggles whether usage records are enqueued into the redisqueue payload buffer.
+// SetUsageStatisticsEnabled toggles usage monitoring and redisqueue payload collection.
 // This is controlled by the config field `usage-statistics-enabled` and the corresponding management API.
-func SetUsageStatisticsEnabled(enabled bool) { usageStatisticsEnabled.Store(enabled) }
+func SetUsageStatisticsEnabled(enabled bool) {
+	previous := usageStatisticsEnabled.Swap(enabled)
+	if previous != enabled {
+		ResetUsageMonitor()
+	}
+}
 
-// UsageStatisticsEnabled reports whether the usage queue plugin should publish records.
+// UsageStatisticsEnabled reports whether the usage plugin should collect records.
 func UsageStatisticsEnabled() bool { return usageStatisticsEnabled.Load() }

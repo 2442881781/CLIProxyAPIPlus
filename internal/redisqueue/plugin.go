@@ -22,7 +22,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	if p == nil {
 		return
 	}
-	if !Enabled() || !UsageStatisticsEnabled() {
+	if !UsageStatisticsEnabled() {
 		return
 	}
 
@@ -95,6 +95,10 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	failed := record.Failed
 	if !failed {
 		failed = !resolveSuccess(ctx)
+	}
+	observeUsageRecord(record, usageDetail, failed, timestamp)
+	if !Enabled() {
+		return
 	}
 	fail := resolveFail(ctx, record, failed)
 
