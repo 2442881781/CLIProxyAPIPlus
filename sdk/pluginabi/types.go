@@ -17,7 +17,8 @@ const (
 	// Version 6 preserves raw JSON bodies for plugin management responses.
 	// Plugins that still require HTML entity escaping on JSON response strings
 	// should keep schema_version < 6.
-	SchemaVersion uint32 = 6
+	// Version 7 adds the bounded host.auth.delete callback.
+	SchemaVersion uint32 = 7
 	// SchemaVersionStreamChunkOmitRequestBody is the first schema version that omits
 	// request bodies on payload stream-chunk interceptor calls.
 	SchemaVersionStreamChunkOmitRequestBody uint32 = 3
@@ -30,6 +31,9 @@ const (
 	// SchemaVersionRawManagementResponse is the first schema version where plugin
 	// management JSON responses are preserved without HTML-escaping strings.
 	SchemaVersionRawManagementResponse uint32 = 6
+	// SchemaVersionHostAuthDelete is the first schema version that exposes the
+	// bounded host.auth.delete callback for plugin-owned physical auth files.
+	SchemaVersionHostAuthDelete uint32 = 7
 )
 
 const (
@@ -107,6 +111,7 @@ const (
 	MethodHostAuthGet            = "host.auth.get"
 	MethodHostAuthGetRuntime     = "host.auth.get_runtime"
 	MethodHostAuthSave           = "host.auth.save"
+	MethodHostAuthDelete         = "host.auth.delete"
 	MethodHostAffinityLookup     = "host.affinity.lookup"
 )
 

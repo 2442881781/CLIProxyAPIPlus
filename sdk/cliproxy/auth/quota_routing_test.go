@@ -437,3 +437,14 @@ func TestPreferredQuotaMigrationAuthsFallsBackAcrossProviders(t *testing.T) {
 		t.Fatalf("preferred = %#v, want cross-provider auth %q", preferred, otherProvider.ID)
 	}
 }
+
+func TestQuotaStateRemainingPercentUsesNormalizedPluginObservation(t *testing.T) {
+	now := time.Now()
+	observation := quotaStateRemainingPercent("opencode-go", QuotaState{
+		ObservedAt: now,
+		Signals:    map[string]string{"normalized_quota_remaining_percent": "37.5"},
+	}, now)
+	if !observation.known || observation.percent != 37.5 {
+		t.Fatalf("observation = %+v", observation)
+	}
+}

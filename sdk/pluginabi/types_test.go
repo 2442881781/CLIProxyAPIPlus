@@ -27,8 +27,8 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 }
 
 func TestMethodNamesAreStable(t *testing.T) {
-	if SchemaVersion != 6 {
-		t.Fatalf("SchemaVersion = %d, want 6", SchemaVersion)
+	if SchemaVersion != 7 {
+		t.Fatalf("SchemaVersion = %d, want 7", SchemaVersion)
 	}
 	if SchemaVersionWebSocketResponseObserver != 4 {
 		t.Fatalf("SchemaVersionWebSocketResponseObserver = %d, want 4", SchemaVersionWebSocketResponseObserver)
@@ -41,6 +41,9 @@ func TestMethodNamesAreStable(t *testing.T) {
 	}
 	if SchemaVersionRawManagementResponse != 6 {
 		t.Fatalf("SchemaVersionRawManagementResponse = %d, want 6", SchemaVersionRawManagementResponse)
+	}
+	if SchemaVersionHostAuthDelete != 7 {
+		t.Fatalf("SchemaVersionHostAuthDelete = %d, want 7", SchemaVersionHostAuthDelete)
 	}
 	if MethodPluginRegister != "plugin.register" {
 		t.Fatalf("MethodPluginRegister = %q", MethodPluginRegister)
@@ -95,6 +98,9 @@ func TestMethodNamesAreStable(t *testing.T) {
 	}
 	if MethodHostAuthSave != "host.auth.save" {
 		t.Fatalf("MethodHostAuthSave = %q", MethodHostAuthSave)
+	}
+	if MethodHostAuthDelete != "host.auth.delete" {
+		t.Fatalf("MethodHostAuthDelete = %q", MethodHostAuthDelete)
 	}
 	if MethodHostAffinityLookup != "host.affinity.lookup" {
 		t.Fatalf("MethodHostAffinityLookup = %q", MethodHostAffinityLookup)

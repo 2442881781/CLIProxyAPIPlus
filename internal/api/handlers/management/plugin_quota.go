@@ -105,6 +105,7 @@ func (h *Handler) FetchCredentialQuota(c *gin.Context) {
 				c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed to fetch quota: %v", errFetch)})
 				return
 			}
+			h.observePluginQuota(c, auth, quotaResp)
 			c.JSON(http.StatusOK, quotaResp)
 			return
 		}
@@ -293,7 +294,40 @@ func (h *Handler) fetchQuotaForPlugin(c *gin.Context, pluginID, authIndex string
 		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed to fetch quota: %v", errFetch)})
 		return
 	}
+	h.observePluginQuota(c, auth, quotaResp)
 	c.JSON(http.StatusOK, quotaResp)
+}
+
+func (h *Handler) observePluginQuota(c *gin.Context, auth *coreauth.Auth, quota pluginapi.QuotaFetchResponse) {
+	if h == nil || h.authManager == nil || auth == nil {
+		return
+	}
+	remaining, ok := normalizedQuotaRemainingFraction(quota)
+	if !ok {
+		return
+	}
+	signals := map[string]string{"normalized_quota_remaining_percent": strconv.FormatFloat(remaining*100, 'f', 6, 64)}
+	if _, errObserve := h.authManager.ObserveQuota(c.Request.Context(), auth.ID, time.Now(), signals); errObserve != nil {
+		log.WithError(errObserve).Warnf("failed to record quota observation for credential %s", auth.Index)
+	}
+}
+
+func normalizedQuotaRemainingFraction(quota pluginapi.QuotaFetchResponse) (float64, bool) {
+	remaining := 1.0
+	found := false
+	for _, group := range quota.Groups {
+		for _, bucket := range group.Buckets {
+			value := bucket.RemainingFraction
+			if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1 {
+				continue
+			}
+			if !found || value < remaining {
+				remaining = value
+			}
+			found = true
+		}
+	}
+	return remaining, found
 }
 
 // ResetPluginQuota handles DELETE /v0/management/plugins/:id/quota and POST /v0/management/plugins/:id/quota/reset

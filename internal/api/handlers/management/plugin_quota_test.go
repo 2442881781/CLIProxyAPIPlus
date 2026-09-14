@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -186,6 +187,20 @@ func TestFetchCredentialQuota_Endpoint(t *testing.T) {
 	}
 	if quotaResp.Groups[0].Buckets[0].RemainingFraction != 0.9 {
 		t.Fatalf("unexpected fraction: %f", quotaResp.Groups[0].Buckets[0].RemainingFraction)
+	}
+	observed, okObserved := manager.GetByID(auth.ID)
+	if !okObserved || observed.Quota.ObservedAt.IsZero() || observed.Quota.Signals["normalized_quota_remaining_percent"] != "90.000000" {
+		t.Fatalf("quota observation was not recorded: %+v", observed)
+	}
+}
+
+func TestNormalizedQuotaRemainingFractionRejectsInvalidBuckets(t *testing.T) {
+	quota := pluginapi.QuotaFetchResponse{Groups: []pluginapi.QuotaGroup{{Buckets: []pluginapi.QuotaBucket{
+		{RemainingFraction: 0.8}, {RemainingFraction: math.NaN()}, {RemainingFraction: -1}, {RemainingFraction: 0.25},
+	}}}}
+	remaining, ok := normalizedQuotaRemainingFraction(quota)
+	if !ok || remaining != 0.25 {
+		t.Fatalf("remaining = %v, ok = %v", remaining, ok)
 	}
 }
 

@@ -392,11 +392,162 @@ func TestHostAuthSaveCallbackWritesPhysicalFile(t *testing.T) {
 	if errRead != nil {
 		t.Fatalf("read saved file: %v", errRead)
 	}
-	if string(data) != `{"type":"demo","email":"saved@example.com","api_key":"saved-key"}` {
+	var saved map[string]any
+	if errUnmarshal := json.Unmarshal(data, &saved); errUnmarshal != nil || saved["type"] != "demo" || saved["api_key"] != "saved-key" {
 		t.Fatalf("saved file = %q, want credential json", string(data))
 	}
 	auths := host.currentAuthManager().List()
 	if len(auths) != 1 || auths[0].FileName != "saved.json" {
 		t.Fatalf("auths = %#v, want one registered auth", auths)
+	}
+}
+
+func TestHostAuthSaveCallbackUsesPluginAuthParser(t *testing.T) {
+	authDir := t.TempDir()
+	host := newHostWithRecords(capabilityRecord{
+		id: "commandcode-plugin",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{AuthProvider: fakeAuthProvider{
+			identifier: "commandcode",
+			parseAuth: func(_ context.Context, req pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {
+				return pluginapi.AuthParseResponse{Handled: true, Auths: []pluginapi.AuthData{{
+					Provider: "commandcode", ID: "stable-auth", Label: "Primary", ProxyURL: "http://proxy.local",
+					StorageJSON: req.RawJSON,
+					Attributes:  map[string]string{"api_key": "selected-key", "priority": "8", "weight": "3", "auth_index_seed": "stable-auth"},
+				}}}, nil
+			},
+		}}},
+	})
+	host.runtimeConfig = &config.Config{AuthDir: authDir}
+	manager := coreauth.NewManager(nil, nil, nil)
+	host.SetAuthManager(manager)
+
+	req, errMarshal := json.Marshal(pluginapi.HostAuthSaveRequest{
+		Name: "commandcode-key.json",
+		JSON: json.RawMessage(`{"type":"commandcode","api_key":"selected-key"}`),
+	})
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+	pluginCtx := withHostCallbackPluginID(context.Background(), "commandcode-plugin")
+	if _, errCall := host.callFromPlugin(pluginCtx, pluginabi.MethodHostAuthSave, req); errCall != nil {
+		t.Fatal(errCall)
+	}
+	auth, ok := manager.GetByID("stable-auth")
+	if !ok || auth.Provider != "commandcode" || auth.Attributes["api_key"] != "selected-key" || auth.Attributes["priority"] != "8" || auth.Attributes["weight"] != "3" || auth.ProxyURL != "http://proxy.local" {
+		t.Fatalf("auth = %+v", auth)
+	}
+}
+
+func TestHostAuthDeleteCallbackRemovesPhysicalFileAndRuntimeAuth(t *testing.T) {
+	authDir := t.TempDir()
+	host := newHostWithRecords(capabilityRecord{
+		id: "commandcode-plugin",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{AuthProvider: fakeAuthProvider{
+			identifier: "commandcode",
+			parseAuth: func(_ context.Context, req pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {
+				return pluginapi.AuthParseResponse{Handled: true, Auth: pluginapi.AuthData{
+					Provider: "commandcode", ID: "managed-auth", StorageJSON: req.RawJSON,
+					Attributes: map[string]string{"api_key": "secret", "auth_index_seed": "managed-auth"},
+				}}, nil
+			},
+		}}},
+	})
+	host.runtimeConfig = &config.Config{AuthDir: authDir}
+	manager := coreauth.NewManager(nil, nil, nil)
+	host.SetAuthManager(manager)
+
+	saveReq, errMarshal := json.Marshal(pluginapi.HostAuthSaveRequest{
+		Name: "plugin-managed.json",
+		JSON: json.RawMessage(`{"type":"commandcode","api_key":"secret"}`),
+	})
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+	pluginCtx := withHostCallbackPluginID(context.Background(), "commandcode-plugin")
+	if _, errCall := host.callFromPlugin(pluginCtx, pluginabi.MethodHostAuthSave, saveReq); errCall != nil {
+		t.Fatal(errCall)
+	}
+	registered := manager.List()
+	if len(registered) != 1 {
+		t.Fatalf("registered auths = %+v", registered)
+	}
+	authID := registered[0].ID
+
+	deleteReq, errMarshal := json.Marshal(pluginapi.HostAuthDeleteRequest{Name: "plugin-managed.json"})
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+	rawResp, errCall := host.callFromPlugin(pluginCtx, pluginabi.MethodHostAuthDelete, deleteReq)
+	if errCall != nil {
+		t.Fatal(errCall)
+	}
+	resp, errDecode := decodeRPCEnvelope[pluginapi.HostAuthDeleteResponse](rawResp)
+	if errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if resp.Name != "plugin-managed.json" {
+		t.Fatalf("response = %+v", resp)
+	}
+	if _, errStat := os.Stat(filepath.Join(authDir, "plugin-managed.json")); !os.IsNotExist(errStat) {
+		t.Fatalf("auth file still exists: %v", errStat)
+	}
+	if _, ok := manager.GetByID(authID); ok {
+		t.Fatalf("auth %q still registered", authID)
+	}
+}
+
+func TestHostAuthDeleteCallbackRejectsUnsafeName(t *testing.T) {
+	host := New()
+	host.runtimeConfig = &config.Config{AuthDir: t.TempDir()}
+	req, errMarshal := json.Marshal(pluginapi.HostAuthDeleteRequest{Name: "../outside.json"})
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+	if _, errCall := host.callFromPlugin(context.Background(), pluginabi.MethodHostAuthDelete, req); errCall == nil {
+		t.Fatal("expected unsafe name rejection")
+	}
+}
+
+func TestHostAuthDeleteCallbackRejectsOtherPluginOwnedFile(t *testing.T) {
+	authDir := t.TempDir()
+	path := filepath.Join(authDir, "owned.json")
+	if errWrite := os.WriteFile(path, []byte(`{"type":"commandcode","_plugin_owner":"owner-plugin"}`), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	host := New()
+	host.runtimeConfig = &config.Config{AuthDir: authDir}
+	req, _ := json.Marshal(pluginapi.HostAuthDeleteRequest{Name: "owned.json"})
+	ctx := withHostCallbackPluginID(context.Background(), "other-plugin")
+	if _, errCall := host.callFromPlugin(ctx, pluginabi.MethodHostAuthDelete, req); errCall == nil {
+		t.Fatal("expected plugin ownership rejection")
+	}
+	if _, errStat := os.Stat(path); errStat != nil {
+		t.Fatalf("owned file was removed: %v", errStat)
+	}
+}
+
+func TestHostAuthSaveBeforePluginActivationWritesOnlyPhysicalFile(t *testing.T) {
+	authDir := t.TempDir()
+	host := New()
+	host.runtimeConfig = &config.Config{AuthDir: authDir}
+	manager := coreauth.NewManager(nil, nil, nil)
+	host.SetAuthManager(manager)
+	req, _ := json.Marshal(pluginapi.HostAuthSaveRequest{
+		Name: "pending.json", JSON: json.RawMessage(`{"type":"commandcode","api_key":"secret"}`),
+	})
+	ctx := withHostCallbackPluginID(context.Background(), "pending-plugin")
+	if _, errCall := host.callFromPlugin(ctx, pluginabi.MethodHostAuthSave, req); errCall != nil {
+		t.Fatal(errCall)
+	}
+	if len(manager.List()) != 0 {
+		t.Fatalf("inactive plugin created runtime auth: %+v", manager.List())
+	}
+	data, errRead := os.ReadFile(filepath.Join(authDir, "pending.json"))
+	if errRead != nil {
+		t.Fatal(errRead)
+	}
+	owner, errOwner := hostAuthPluginOwner(data)
+	if errOwner != nil || owner != "pending-plugin" {
+		t.Fatalf("owner = %q, err=%v", owner, errOwner)
 	}
 }

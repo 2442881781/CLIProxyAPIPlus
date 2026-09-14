@@ -39,6 +39,9 @@ func (q *QuotaState) ObserveResponseHeadersForProvider(provider string, headers 
 		return false
 	}
 	if !ProviderSupportsQuotaObservation(provider) {
+		if _, ok := normalizedRemainingPercent(q.Signals); ok {
+			return false
+		}
 		return q.ClearObservationSignals()
 	}
 	next := collectQuotaSignals(provider, headers)

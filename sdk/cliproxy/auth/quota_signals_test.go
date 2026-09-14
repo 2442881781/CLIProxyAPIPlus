@@ -150,6 +150,18 @@ func TestQuotaStateObserveResponseHeadersDropsKimiGrokAndAntigravitySignals(t *t
 	}
 }
 
+func TestQuotaStateObserveResponseHeadersPreservesNormalizedPluginObservation(t *testing.T) {
+	observedAt := time.Unix(1786082736, 0)
+	quota := QuotaState{
+		ObservedAt: observedAt,
+		Signals:    map[string]string{"normalized_quota_remaining_percent": "42"},
+	}
+	changed := quota.ObserveResponseHeadersForProvider("opencode-go", http.Header{"X-Ignored": []string{"value"}}, time.Now())
+	if changed || !quota.ObservedAt.Equal(observedAt) || quota.Signals["normalized_quota_remaining_percent"] != "42" {
+		t.Fatalf("normalized plugin observation changed: changed=%v quota=%#v", changed, quota)
+	}
+}
+
 func TestCooldownEqualityIgnoresObservationSignals(t *testing.T) {
 	base := QuotaState{
 		Exceeded:      true,

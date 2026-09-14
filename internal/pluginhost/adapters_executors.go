@@ -41,7 +41,6 @@ func (h *Host) RegisterExecutors(manager executorManager, modelRegistry modelPro
 	registrations := h.snapshotModelRegistrations()
 	selectedModels := make(map[string][]*registry.ModelInfo)
 	providerModels := make(map[string][]*registry.ModelInfo)
-	claimedModels := make(map[string]struct{})
 	claimedProviders := make(map[string]string)
 	for _, registration := range registrations {
 		if !registration.hasExecutor {
@@ -68,21 +67,8 @@ func (h *Host) RegisterExecutors(manager executorManager, modelRegistry modelPro
 		if owner := claimedProviders[provider]; owner != "" && owner != record.id {
 			continue
 		}
-		for _, model := range registration.models {
-			modelID := strings.TrimSpace(model.ID)
-			if modelID == "" {
-				continue
-			}
-			if _, claimed := claimedModels[modelID]; claimed {
-				continue
-			}
-			if h.modelHasNativeExecutor(manager, modelRegistry, modelID) {
-				continue
-			}
-			claimedModels[modelID] = struct{}{}
-			claimedProviders[provider] = record.id
-			selectedModels[record.id] = append(selectedModels[record.id], model)
-		}
+		claimedProviders[provider] = record.id
+		selectedModels[record.id] = cloneRegistryModels(registration.models)
 	}
 
 	seenProviders := make(map[string]struct{})
@@ -275,18 +261,6 @@ func (h *Host) providerHasNativeExecutor(manager executorManager, provider strin
 	}
 	existing, okExecutor := manager.Executor(provider)
 	return okExecutor && existing != nil && !h.ownsExecutor(existing)
-}
-
-func (h *Host) modelHasNativeExecutor(manager executorManager, modelRegistry modelProviderRegistry, modelID string) bool {
-	if h == nil || manager == nil || modelRegistry == nil {
-		return false
-	}
-	for _, provider := range modelRegistry.GetModelProviders(modelID) {
-		if h.providerHasNativeExecutor(manager, provider) {
-			return true
-		}
-	}
-	return false
 }
 
 func appendModelsForProvider(out map[string][]*registry.ModelInfo, provider string, models []*registry.ModelInfo) {

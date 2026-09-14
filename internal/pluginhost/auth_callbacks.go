@@ -122,6 +122,10 @@ func (h *Host) callHostAuthSave(ctx context.Context, request []byte) ([]byte, er
 	if errValidate != nil {
 		return nil, errValidate
 	}
+	rawJSON, errOwner := h.prepareHostAuthSave(ctx, name, rawJSON)
+	if errOwner != nil {
+		return nil, errOwner
+	}
 	path, errSave := h.saveAuthFile(ctx, name, rawJSON)
 	if errSave != nil {
 		return nil, errSave
@@ -130,6 +134,41 @@ func (h *Host) callHostAuthSave(ctx context.Context, request []byte) ([]byte, er
 		Name: name,
 		Path: path,
 	})
+}
+
+func (h *Host) callHostAuthDelete(ctx context.Context, request []byte) ([]byte, error) {
+	var req pluginapi.HostAuthDeleteRequest
+	if errUnmarshal := json.Unmarshal(request, &req); errUnmarshal != nil {
+		return nil, fmt.Errorf("decode host auth delete request: %w", errUnmarshal)
+	}
+	name := strings.TrimSpace(req.Name)
+	if isUnsafeAuthFileName(name) || !strings.HasSuffix(strings.ToLower(name), ".json") {
+		return nil, fmt.Errorf("invalid auth file name")
+	}
+	authDir := h.resolvedAuthDir()
+	if authDir == "" {
+		return nil, fmt.Errorf("auth directory is unavailable")
+	}
+	path := filepath.Join(authDir, filepath.Base(name))
+	if errOwner := validateHostAuthDeleteOwner(ctx, path); errOwner != nil {
+		return nil, errOwner
+	}
+	if errRemove := os.Remove(path); errRemove != nil && !os.IsNotExist(errRemove) {
+		return nil, fmt.Errorf("failed to delete auth file: %w", errRemove)
+	}
+	if manager := h.currentAuthManager(); manager != nil {
+		cleanPath := filepath.Clean(path)
+		for _, auth := range manager.List() {
+			if auth == nil {
+				continue
+			}
+			authPath := strings.TrimSpace(authAttribute(auth, coreauth.AttributePath))
+			if authPath != "" && filepath.Clean(authPath) == cleanPath {
+				manager.Remove(ctx, auth.ID)
+			}
+		}
+	}
+	return marshalRPCResult(pluginapi.HostAuthDeleteResponse{Name: filepath.Base(name), Path: path})
 }
 
 func (h *Host) listAuthFiles() ([]pluginapi.HostAuthFileEntry, error) {
@@ -281,6 +320,91 @@ func validateHostAuthSaveRequest(req pluginapi.HostAuthSaveRequest) (string, []b
 	return filepath.Base(name), rawJSON, nil
 }
 
+const hostAuthPluginOwnerField = "_plugin_owner"
+
+func (h *Host) prepareHostAuthSave(ctx context.Context, name string, rawJSON []byte) ([]byte, error) {
+	pluginID := hostCallbackPluginIDFromContext(ctx)
+	if pluginID == "" {
+		return rawJSON, nil
+	}
+	authDir := h.resolvedAuthDir()
+	if authDir == "" {
+		return nil, fmt.Errorf("auth directory is unavailable")
+	}
+	path := filepath.Join(authDir, filepath.Base(name))
+	if existing, errRead := os.ReadFile(path); errRead == nil {
+		owner, errOwner := hostAuthPluginOwner(existing)
+		if errOwner != nil {
+			return nil, fmt.Errorf("auth file is not owned by calling plugin")
+		}
+		if owner == "" {
+			if !hostAuthFileMatchesPluginPrefix(pluginID, filepath.Base(name)) {
+				return nil, fmt.Errorf("auth file is not owned by calling plugin")
+			}
+		} else if owner != pluginID {
+			return nil, fmt.Errorf("auth file is not owned by calling plugin")
+		}
+	} else if !os.IsNotExist(errRead) {
+		return nil, fmt.Errorf("failed to inspect auth file: %w", errRead)
+	}
+	var metadata map[string]any
+	if errUnmarshal := json.Unmarshal(rawJSON, &metadata); errUnmarshal != nil {
+		return nil, fmt.Errorf("invalid auth json: %w", errUnmarshal)
+	}
+	if owner, _ := metadata[hostAuthPluginOwnerField].(string); strings.TrimSpace(owner) != "" && strings.TrimSpace(owner) != pluginID {
+		return nil, fmt.Errorf("auth file owner does not match calling plugin")
+	}
+	metadata[hostAuthPluginOwnerField] = pluginID
+	ownedJSON, errMarshal := json.Marshal(metadata)
+	if errMarshal != nil {
+		return nil, fmt.Errorf("failed to encode auth json: %w", errMarshal)
+	}
+	return ownedJSON, nil
+}
+
+func validateHostAuthDeleteOwner(ctx context.Context, path string) error {
+	pluginID := hostCallbackPluginIDFromContext(ctx)
+	if pluginID == "" {
+		return fmt.Errorf("plugin identity is required")
+	}
+	data, errRead := os.ReadFile(path)
+	if os.IsNotExist(errRead) {
+		return nil
+	}
+	if errRead != nil {
+		return fmt.Errorf("failed to inspect auth file: %w", errRead)
+	}
+	owner, errOwner := hostAuthPluginOwner(data)
+	if errOwner != nil {
+		return fmt.Errorf("auth file is not owned by calling plugin")
+	}
+	if owner == "" {
+		if !hostAuthFileMatchesPluginPrefix(pluginID, filepath.Base(path)) {
+			return fmt.Errorf("auth file is not owned by calling plugin")
+		}
+		return nil
+	}
+	if owner != pluginID {
+		return fmt.Errorf("auth file is not owned by calling plugin")
+	}
+	return nil
+}
+
+func hostAuthFileMatchesPluginPrefix(pluginID, name string) bool {
+	pluginID = strings.TrimSpace(pluginID)
+	name = strings.TrimSpace(name)
+	return pluginID != "" && strings.HasPrefix(name, pluginID+"-key-") && strings.HasSuffix(strings.ToLower(name), ".json")
+}
+
+func hostAuthPluginOwner(rawJSON []byte) (string, error) {
+	var metadata map[string]any
+	if errUnmarshal := json.Unmarshal(rawJSON, &metadata); errUnmarshal != nil {
+		return "", errUnmarshal
+	}
+	owner, _ := metadata[hostAuthPluginOwnerField].(string)
+	return strings.TrimSpace(owner), nil
+}
+
 func (h *Host) saveAuthFile(ctx context.Context, name string, data []byte) (string, error) {
 	authDir := h.resolvedAuthDir()
 	if authDir == "" {
@@ -292,12 +416,21 @@ func (h *Host) saveAuthFile(ctx context.Context, name string, data []byte) (stri
 			dst = abs
 		}
 	}
-	auth, errBuild := h.buildAuthFromFileData(dst, data)
-	if errBuild != nil {
-		return "", errBuild
+	pluginID := hostCallbackPluginIDFromContext(ctx)
+	pluginActive := pluginID == "" || h.hasActiveAuthProviderPlugin(pluginID)
+	var auth *coreauth.Auth
+	if pluginActive {
+		var errBuild error
+		auth, errBuild = h.buildAuthFromFileData(ctx, dst, data)
+		if errBuild != nil {
+			return "", errBuild
+		}
 	}
 	if errWrite := os.WriteFile(dst, data, 0o600); errWrite != nil {
 		return "", fmt.Errorf("failed to write auth file: %w", errWrite)
+	}
+	if !pluginActive {
+		return dst, nil
 	}
 	if errUpsert := h.upsertAuthRecord(ctx, auth); errUpsert != nil {
 		return "", errUpsert
@@ -305,7 +438,20 @@ func (h *Host) saveAuthFile(ctx context.Context, name string, data []byte) (stri
 	return dst, nil
 }
 
-func (h *Host) buildAuthFromFileData(path string, data []byte) (*coreauth.Auth, error) {
+func (h *Host) hasActiveAuthProviderPlugin(pluginID string) bool {
+	pluginID = strings.TrimSpace(pluginID)
+	if h == nil || pluginID == "" {
+		return false
+	}
+	for _, record := range h.activeRecords() {
+		if record.id == pluginID && record.plugin.Capabilities.AuthProvider != nil && !h.isPluginFused(record.id) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Host) buildAuthFromFileData(ctx context.Context, path string, data []byte) (*coreauth.Auth, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("auth path is empty")
 	}
@@ -321,6 +467,38 @@ func (h *Host) buildAuthFromFileData(path string, data []byte) (*coreauth.Auth, 
 		return nil, fmt.Errorf("invalid auth file: %w", errUnmarshal)
 	}
 	coreauth.NormalizeCredentialMetadata(metadata)
+	if h != nil {
+		providerHint, _ := metadata["type"].(string)
+		var auths []*coreauth.Auth
+		var handled bool
+		var errParse error
+		if pluginID := hostCallbackPluginIDFromContext(ctx); pluginID != "" {
+			for _, record := range h.activeRecords() {
+				if record.id != pluginID || record.plugin.Capabilities.AuthProvider == nil {
+					continue
+				}
+				auths, handled, errParse = h.callParseAuths(ctx, record, pluginapi.AuthParseRequest{
+					Provider: strings.TrimSpace(providerHint), Path: path, FileName: filepath.Base(path), RawJSON: data,
+				})
+				break
+			}
+		} else {
+			auths, handled, errParse = h.ParseAuths(ctx, pluginapi.AuthParseRequest{
+				Provider: strings.TrimSpace(providerHint), Path: path, FileName: filepath.Base(path), RawJSON: data,
+			})
+		}
+		if errParse != nil {
+			return nil, errParse
+		}
+		if handled {
+			if len(auths) != 1 || auths[0] == nil {
+				return nil, fmt.Errorf("host auth save requires exactly one auth per file")
+			}
+			parsed := auths[0].Clone()
+			parsed.FileName = filepath.Base(path)
+			return parsed, nil
+		}
+	}
 	provider, _ := metadata["type"].(string)
 	if strings.TrimSpace(provider) == "" {
 		provider = "unknown"

@@ -65,6 +65,9 @@ func quotaStateRemainingPercent(provider string, quota QuotaState, now time.Time
 
 	var remaining float64
 	var ok bool
+	if normalized, normalizedOK := normalizedRemainingPercent(quota.Signals); normalizedOK {
+		return quotaRemainingObservation{percent: normalized, observedAt: quota.ObservedAt, known: true}
+	}
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "claude":
 		remaining, ok = claudeRemainingPercent(quota.Signals)
@@ -79,6 +82,15 @@ func quotaStateRemainingPercent(provider string, quota QuotaState, now time.Time
 		return quotaRemainingObservation{}
 	}
 	return quotaRemainingObservation{percent: clampQuotaPercent(remaining), observedAt: quota.ObservedAt, known: true}
+}
+
+func normalizedRemainingPercent(signals map[string]string) (float64, bool) {
+	for key, raw := range signals {
+		if strings.EqualFold(strings.TrimSpace(key), "normalized_quota_remaining_percent") {
+			return parseQuotaPercent(raw)
+		}
+	}
+	return 0, false
 }
 
 func claudeRemainingPercent(signals map[string]string) (float64, bool) {

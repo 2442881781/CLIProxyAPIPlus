@@ -778,7 +778,21 @@ type HostAuthSaveResponse struct {
 	Path string `json:"path"`
 }
 
+// HostAuthDeleteRequest asks the host to remove one physical auth file.
+// Name must be a base .json file name; paths and runtime-only credentials are
+// rejected by the host.
+type HostAuthDeleteRequest struct {
+	Name string `json:"name"`
+}
+
+// HostAuthDeleteResponse reports the removed physical auth file.
+type HostAuthDeleteResponse struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
 // Host affinity lookup status outcomes.
+
 const (
 	HostAffinityStatusBound       = "bound"
 	HostAffinityStatusUnbound     = "unbound"

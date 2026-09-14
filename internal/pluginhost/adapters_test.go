@@ -458,7 +458,7 @@ func TestRegisterExecutorsIdentifierPanicFusesPlugin(t *testing.T) {
 	}
 }
 
-func TestRegisterExecutorsSelectsHighestPriorityPluginExecutorPerModel(t *testing.T) {
+func TestRegisterExecutorsAllowsMultipleProvidersForSharedModel(t *testing.T) {
 	modelRegistry := newFakeModelRegistry()
 	manager := newFakeExecutorManager()
 	host := newHostWithRecords(
@@ -483,14 +483,14 @@ func TestRegisterExecutorsSelectsHighestPriorityPluginExecutorPerModel(t *testin
 
 	host.RegisterExecutors(manager, modelRegistry)
 
-	if _, okLow := manager.executors["low-provider"]; okLow {
-		t.Fatal("low priority executor was registered for shared-model")
+	if _, okLow := manager.executors["low-provider"]; !okLow {
+		t.Fatal("low provider executor was not registered for shared-model")
 	}
 	if _, okHigh := manager.executors["high-provider"]; !okHigh {
 		t.Fatal("high priority executor was not registered for shared-model")
 	}
-	if got := host.ModelsForProvider("low-provider"); len(got) != 0 {
-		t.Fatalf("low provider models = %#v, want none", got)
+	if got := host.ModelsForProvider("low-provider"); len(got) != 1 || got[0].ID != "shared-model" {
+		t.Fatalf("low provider models = %#v, want shared-model", got)
 	}
 	got := host.ModelsForProvider("high-provider")
 	if len(got) != 1 || got[0].ID != "shared-model" {
@@ -528,7 +528,7 @@ func TestRegisterExecutorsKeepsPluginModelsForNativeProviderWithoutOverwritingEx
 	}
 }
 
-func TestRegisterExecutorsSkipsPluginModelWhenModelAlreadyHasNativeExecutor(t *testing.T) {
+func TestRegisterExecutorsKeepsPluginProviderWhenModelAlsoHasNativeExecutor(t *testing.T) {
 	modelRegistry := newFakeModelRegistry()
 	modelRegistry.RegisterClient("native-auth", "native-provider", []*registry.ModelInfo{{ID: "shared-model"}})
 	manager := newFakeExecutorManager()
@@ -545,11 +545,15 @@ func TestRegisterExecutorsSkipsPluginModelWhenModelAlreadyHasNativeExecutor(t *t
 
 	host.RegisterExecutors(manager, modelRegistry)
 
-	if _, okPlugin := manager.executors["plugin-provider"]; okPlugin {
-		t.Fatal("plugin executor was registered for a model that already has a native executor")
+	if _, okPlugin := manager.executors["plugin-provider"]; !okPlugin {
+		t.Fatal("plugin executor was not registered beside native provider for shared-model")
 	}
-	if got := host.ModelsForProvider("plugin-provider"); len(got) != 0 {
-		t.Fatalf("plugin provider models = %#v, want none", got)
+	if got := host.ModelsForProvider("plugin-provider"); len(got) != 1 || got[0].ID != "shared-model" {
+		t.Fatalf("plugin provider models = %#v, want shared-model", got)
+	}
+	providers := modelRegistry.GetModelProviders("shared-model")
+	if len(providers) != 2 {
+		t.Fatalf("shared model providers = %#v, want native and plugin providers", providers)
 	}
 }
 

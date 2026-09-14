@@ -266,6 +266,43 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 	return auth.Clone(), nil
 }
 
+// ObserveQuota replaces one credential's normalized quota observation and
+// updates the scheduler snapshot. Signals must contain provider-issued values;
+// callers are responsible for validating and bounding their input.
+func (m *Manager) ObserveQuota(ctx context.Context, id string, observedAt time.Time, signals map[string]string) (*Auth, error) {
+	if m == nil || strings.TrimSpace(id) == "" || observedAt.IsZero() || len(signals) == 0 {
+		return nil, nil
+	}
+	id = strings.TrimSpace(id)
+	m.mu.Lock()
+	current := m.auths[id]
+	if current == nil {
+		m.mu.Unlock()
+		return nil, nil
+	}
+	if !current.Quota.ObservedAt.IsZero() && observedAt.Before(current.Quota.ObservedAt) {
+		result := current.Clone()
+		m.mu.Unlock()
+		return result, nil
+	}
+	updated := current.Clone()
+	updated.Quota.ObservedAt = observedAt
+	updated.Quota.Signals = make(map[string]string, len(signals))
+	for key, value := range signals {
+		updated.Quota.Signals[key] = value
+	}
+	updated.Generation++
+	updated.UpdatedAt = time.Now()
+	m.auths[id] = updated
+	m.mu.Unlock()
+	if m.scheduler != nil {
+		m.scheduler.upsertAuth(updated.Clone())
+	}
+	_ = m.persist(ctx, updated)
+	m.hook.OnAuthUpdated(ctx, updated.Clone())
+	return updated.Clone(), nil
+}
+
 // Remove deletes an auth from runtime state without persisting.
 // Disk and token-store deletion must be handled by the caller.
 func (m *Manager) Remove(ctx context.Context, id string) {
