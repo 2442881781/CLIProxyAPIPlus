@@ -3,6 +3,7 @@ package auth
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestMergeExistingAuthMetadataPreservesDisabledState(t *testing.T) {
@@ -396,6 +397,68 @@ func TestMergeRefreshedAuth(t *testing.T) {
 		}
 		if merged.StatusMessage != "upstream 503" {
 			t.Fatalf("StatusMessage = %q, want upstream 503", merged.StatusMessage)
+		}
+	})
+
+	t.Run("merges refreshed quota observation and preserves concurrent cooldown", func(t *testing.T) {
+		base := &Auth{
+			ID: "auth-quota",
+			Quota: QuotaState{
+				ObservedAt: time.Unix(10, 0),
+				Signals:    map[string]string{"daily_quota_remaining_percent": "80%"},
+			},
+		}
+		recoverAt := time.Now().Add(time.Hour)
+		current := base.Clone()
+		current.Unavailable = true
+		current.Quota.Exceeded = true
+		current.Quota.Reason = "credential_quota"
+		current.Quota.NextRecoverAt = recoverAt
+		current.Quota.BackoffLevel = 2
+		updated := base.Clone()
+		updated.Quota.ObservedAt = time.Unix(20, 0)
+		updated.Quota.Signals = map[string]string{
+			"daily_quota_remaining_percent":  "75%",
+			"weekly_quota_remaining_percent": "40%",
+		}
+
+		merged := MergeRefreshedAuth(base, current, updated)
+		if !merged.Quota.ObservedAt.Equal(time.Unix(20, 0)) {
+			t.Fatalf("Quota.ObservedAt = %v, want refreshed observation", merged.Quota.ObservedAt)
+		}
+		if got := merged.Quota.Signals["daily_quota_remaining_percent"]; got != "75%" {
+			t.Fatalf("daily quota signal = %q, want 75%%", got)
+		}
+		if got := merged.Quota.Signals["weekly_quota_remaining_percent"]; got != "40%" {
+			t.Fatalf("weekly quota signal = %q, want 40%%", got)
+		}
+		if !merged.Unavailable || !merged.Quota.Exceeded || merged.Quota.Reason != "credential_quota" {
+			t.Fatalf("concurrent cooldown was not preserved: %+v", merged.Quota)
+		}
+		if !merged.Quota.NextRecoverAt.Equal(recoverAt) || merged.Quota.BackoffLevel != 2 {
+			t.Fatalf("concurrent cooldown timing was not preserved: %+v", merged.Quota)
+		}
+	})
+
+	t.Run("keeps newer concurrent quota observation", func(t *testing.T) {
+		base := &Auth{ID: "auth-quota-newer"}
+		current := base.Clone()
+		current.Quota = QuotaState{
+			ObservedAt: time.Unix(30, 0),
+			Signals:    map[string]string{"daily_quota_remaining_percent": "70%"},
+		}
+		updated := base.Clone()
+		updated.Quota = QuotaState{
+			ObservedAt: time.Unix(20, 0),
+			Signals:    map[string]string{"daily_quota_remaining_percent": "80%"},
+		}
+
+		merged := MergeRefreshedAuth(base, current, updated)
+		if !merged.Quota.ObservedAt.Equal(time.Unix(30, 0)) {
+			t.Fatalf("Quota.ObservedAt = %v, want concurrent observation", merged.Quota.ObservedAt)
+		}
+		if got := merged.Quota.Signals["daily_quota_remaining_percent"]; got != "70%" {
+			t.Fatalf("daily quota signal = %q, want 70%%", got)
 		}
 	})
 

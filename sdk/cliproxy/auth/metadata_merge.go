@@ -132,6 +132,10 @@ func MergeRefreshedAuth(base, current, updated *Auth) *Auth {
 		}
 	}
 
+	// Refreshers may report a newer quota observation without changing scheduler
+	// cooldown fields. Keep the newest snapshot while preserving concurrent cooldowns.
+	merged.Quota = mergeQuotaObservation(merged.Quota, updated.Quota)
+
 	// 3. ModelStates: three-way merge to preserve concurrent cooldown/quota
 	var baseModels map[string]*ModelState
 	if base != nil {
