@@ -75,3 +75,34 @@ func TestApplyManagerConfigStopsReplacedServiceAffinitySelector(t *testing.T) {
 		t.Fatal("expected replaced selector to be stopped during routing config apply")
 	}
 }
+
+func TestQuotaAwareRoutingSelector(t *testing.T) {
+	state := normalizedRoutingRuntimeState(&internalconfig.Config{
+		Routing: internalconfig.RoutingConfig{Strategy: "round-robin", QuotaAware: true},
+	})
+	if !state.quotaAware {
+		t.Fatal("quotaAware = false, want true")
+	}
+	selector, ok := newRoutingSelector(state).(*coreauth.QuotaAwareSelector)
+	if !ok {
+		t.Fatalf("selector type = %T, want *auth.QuotaAwareSelector", newRoutingSelector(state))
+	}
+	if _, okRoundRobin := selector.Fallback.(*coreauth.RoundRobinSelector); !okRoundRobin {
+		t.Fatalf("fallback type = %T, want *auth.RoundRobinSelector", selector.Fallback)
+	}
+}
+
+func TestQuotaAwareSessionAffinityRoutingSelector(t *testing.T) {
+	state := normalizedRoutingRuntimeState(&internalconfig.Config{
+		Routing: internalconfig.RoutingConfig{
+			Strategy:        "fill-first",
+			QuotaAware:      true,
+			SessionAffinity: true,
+		},
+	})
+	selector, ok := newRoutingSelector(state).(*coreauth.SessionAffinitySelector)
+	if !ok {
+		t.Fatalf("selector type = %T, want *auth.SessionAffinitySelector", newRoutingSelector(state))
+	}
+	defer selector.Stop()
+}

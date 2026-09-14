@@ -165,6 +165,9 @@ func newAuthScheduler(selector Selector) *authScheduler {
 
 // selectorStrategy maps a selector implementation to the scheduler semantics it should emulate.
 func selectorStrategy(selector Selector) schedulerStrategy {
+	if quotaAware, ok := selector.(*QuotaAwareSelector); ok && quotaAware != nil {
+		return selectorStrategy(quotaAware.Fallback)
+	}
 	switch selector.(type) {
 	case *FillFirstSelector:
 		return schedulerStrategyFillFirst

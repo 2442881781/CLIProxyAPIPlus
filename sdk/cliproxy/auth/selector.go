@@ -669,6 +669,21 @@ func positiveWeightAuths(auths []*Auth) []*Auth {
 	return weightedCandidates
 }
 
+func unwrapWeightedSelector(selector Selector) (*WeightedRoundRobinSelector, bool) {
+	switch typed := selector.(type) {
+	case *WeightedRoundRobinSelector:
+		return typed, typed != nil
+	case *QuotaAwareSelector:
+		if typed == nil {
+			return nil, false
+		}
+		weighted, ok := typed.Fallback.(*WeightedRoundRobinSelector)
+		return weighted, ok && weighted != nil
+	default:
+		return nil, false
+	}
+}
+
 // Pick selects the next available auth using smooth weighted round-robin.
 func (s *WeightedRoundRobinSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	_ = opts
@@ -906,6 +921,48 @@ func availabilityBlock(unavailable, quotaExceeded bool, nextRetryAfter, nextReco
 	return true, blockReasonOther, time.Time{}
 }
 
+// QuotaAwareSelector prefers the highest fresh remaining-quota cohort and then
+// delegates ties, unknown observations, and stale observations to Fallback.
+type QuotaAwareSelector struct {
+	Fallback Selector
+}
+
+// NewQuotaAwareSelector wraps fallback with quota-aware selection.
+func NewQuotaAwareSelector(fallback Selector) *QuotaAwareSelector {
+	if fallback == nil {
+		fallback = &RoundRobinSelector{}
+	}
+	return &QuotaAwareSelector{Fallback: fallback}
+}
+
+// Stop releases resources held by a wrapped selector.
+func (s *QuotaAwareSelector) Stop() {
+	if s == nil || s.Fallback == nil {
+		return
+	}
+	if stoppable, ok := s.Fallback.(StoppableSelector); ok {
+		stoppable.Stop()
+	}
+}
+
+// Pick selects from the highest priority and quota cohort, preserving fallback semantics for ties.
+func (s *QuotaAwareSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	fallback := Selector(&RoundRobinSelector{})
+	if s != nil && s.Fallback != nil {
+		fallback = s.Fallback
+	}
+	availabilityCandidates := auths
+	if _, weighted := unwrapWeightedSelector(fallback); weighted {
+		availabilityCandidates = positiveWeightAuths(auths)
+	}
+	available, errAvailable := getSelectorAvailableAuths(ctx, availabilityCandidates, provider, model, time.Now())
+	if errAvailable != nil {
+		return nil, errAvailable
+	}
+	preferred := quotaPreferredAuths(available, model, time.Now())
+	return fallback.Pick(ctx, provider, model, opts, preferred)
+}
+
 // SessionAffinitySelector wraps another selector with session-sticky behavior.
 // It extracts session ID from multiple sources and maintains session-to-auth
 // mappings with automatic failover when the bound auth becomes unavailable.
@@ -914,6 +971,7 @@ type SessionAffinitySelector struct {
 	cache            *SessionCache
 	matcher          *cliproxysession.MerklePrefixMatcher
 	subagentAffinity bool
+	quotaAware       bool
 }
 
 // SessionAffinityConfig configures the session affinity selector.
@@ -921,6 +979,7 @@ type SessionAffinityConfig struct {
 	Fallback         Selector
 	TTL              time.Duration
 	SubagentAffinity *bool
+	QuotaAware       bool
 }
 
 // NewSessionAffinitySelector creates a new session-aware selector.
@@ -948,6 +1007,7 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 		cache:            NewSessionCache(cfg.TTL),
 		matcher:          cliproxysession.NewMerklePrefixMatcher(cfg.TTL),
 		subagentAffinity: subagentAffinity,
+		quotaAware:       cfg.QuotaAware,
 	}
 }
 
@@ -1013,13 +1073,16 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	}
 	now := time.Now()
 	availabilityCandidates := auths
-	if _, weighted := s.fallback.(*WeightedRoundRobinSelector); weighted {
+	if _, weighted := unwrapWeightedSelector(s.fallback); weighted {
 		availabilityCandidates = positiveWeightAuths(auths)
 	}
 	if primaryID == "" {
 		fallbackAuths, errAvailable := getSelectorAvailableAuths(ctx, availabilityCandidates, provider, model, now)
 		if errAvailable != nil {
 			return nil, errAvailable
+		}
+		if s.quotaAware {
+			fallbackAuths = quotaPreferredAuths(fallbackAuths, model, now)
 		}
 		entry.Debugf("session-affinity: no session ID extracted, falling back to default selector | provider=%s model=%s", provider, model)
 		return s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
@@ -1032,6 +1095,9 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		return nil, err
 	}
 	fallbackAuths := highestPriorityAuths(available)
+	if s.quotaAware {
+		fallbackAuths = quotaPreferredAuths(fallbackAuths, model, now)
+	}
 
 	modelKey := canonicalModelKey(model)
 	cacheKey := provider + "::" + primaryID + "::" + modelKey
@@ -1057,6 +1123,20 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
+				if s.quotaAware && authQuotaBelowMigrationThreshold(auth, model, now) {
+					migrationAuths := preferredQuotaMigrationAuths(available, auth, model, now)
+					if len(migrationAuths) > 0 {
+						migrated, errMigrate := s.fallback.Pick(ctx, provider, model, opts, migrationAuths)
+						if errMigrate != nil {
+							return nil, errMigrate
+						}
+						if migrated != nil {
+							bind(migrated.ID)
+							entry.Infof("session-affinity: bound auth below quota threshold, migrated | session=%s from_auth=%s to_auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, migrated.ID, provider, model)
+							return migrated, nil
+						}
+					}
+				}
 				bind(auth.ID)
 				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 				return auth, nil
@@ -1080,6 +1160,20 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 			for _, auth := range available {
 				if auth.ID == cachedAuthID {
 					if !isSubagent || s.subagentAffinity {
+						if s.quotaAware && authQuotaBelowMigrationThreshold(auth, model, now) {
+							migrationAuths := preferredQuotaMigrationAuths(available, auth, model, now)
+							if len(migrationAuths) > 0 {
+								migrated, errMigrate := s.fallback.Pick(ctx, provider, model, opts, migrationAuths)
+								if errMigrate != nil {
+									return nil, errMigrate
+								}
+								if migrated != nil {
+									bind(migrated.ID)
+									entry.Infof("session-affinity: inherited auth below quota threshold, migrated | session=%s from_auth=%s to_auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, migrated.ID, provider, model)
+									return migrated, nil
+								}
+							}
+						}
 						bind(auth.ID)
 						if isFork {
 							entry.Infof("session-affinity: fork cache hit | session=%s parent=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
@@ -1131,10 +1225,11 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 	}
 
 	availabilityCandidates := auths
-	if _, weighted := s.fallback.(*WeightedRoundRobinSelector); weighted {
+	if _, weighted := unwrapWeightedSelector(s.fallback); weighted {
 		availabilityCandidates = positiveWeightAuths(auths)
 	}
-	available, errAvailable := getSelectorAvailableAuthsAcrossPriorities(ctx, availabilityCandidates, provider, model, time.Now())
+	now := time.Now()
+	available, errAvailable := getSelectorAvailableAuthsAcrossPriorities(ctx, availabilityCandidates, provider, model, now)
 	if errAvailable != nil {
 		return nil, true, errAvailable
 	}
@@ -1143,6 +1238,25 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 		for _, auth := range available {
 			if auth == nil || auth.ID != match.AuthID {
 				continue
+			}
+			if s.quotaAware && authQuotaBelowMigrationThreshold(auth, model, now) {
+				migrationAuths := preferredQuotaMigrationAuths(available, auth, model, now)
+				if len(migrationAuths) > 0 {
+					migrated, errMigrate := s.fallback.Pick(ctx, provider, model, opts, migrationAuths)
+					if errMigrate != nil {
+						return nil, true, errMigrate
+					}
+					if migrated != nil {
+						s.matcher.RemoveFingerprints(namespace, fingerprints, auth.ID)
+						bindRes := s.matcher.BindFingerprintsWithResult(namespace, fingerprints, minPrefixLength, migrated.ID)
+						if bindRes.SessionID != "" {
+							opts.Metadata[cliproxyexecutor.LCPAffinitySessionIDMetadataKey] = bindRes.SessionID
+							opts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey] = bindRes.SessionID
+						}
+						entry.Infof("session-affinity: LCP auth below quota threshold, migrated | session=%s from_auth=%s to_auth=%s provider=%s model=%s", truncateSessionID(match.SessionID), auth.ID, migrated.ID, provider, model)
+						return migrated, true, nil
+					}
+				}
 			}
 			if match.SessionID != "" {
 				opts.Metadata[cliproxyexecutor.LCPAffinitySessionIDMetadataKey] = match.SessionID
@@ -1172,6 +1286,9 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 	}
 
 	fallbackAuths := highestPriorityAuths(available)
+	if s.quotaAware {
+		fallbackAuths = quotaPreferredAuths(fallbackAuths, model, time.Now())
+	}
 	auth, errPick := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
 	if errPick != nil {
 		return nil, true, errPick

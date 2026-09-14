@@ -26,6 +26,7 @@ type configCommit struct {
 
 type routingRuntimeState struct {
 	strategy                 string
+	quotaAware               bool
 	sessionAffinity          bool
 	sessionAffinityTTL       time.Duration
 	sessionAffinitySubagents bool
@@ -48,6 +49,7 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "fill-first"
 	}
 	state.sessionAffinity = cfg.Routing.SessionAffinity
+	state.quotaAware = cfg.Routing.QuotaAware
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
 		if parsed, errParse := time.ParseDuration(ttl); errParse == nil && parsed > 0 {
 			if parsed < time.Second {
@@ -78,7 +80,10 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 			Fallback:         selector,
 			TTL:              state.sessionAffinityTTL,
 			SubagentAffinity: &subagents,
+			QuotaAware:       state.quotaAware,
 		})
+	} else if state.quotaAware {
+		selector = coreauth.NewQuotaAwareSelector(selector)
 	}
 	return selector
 }
