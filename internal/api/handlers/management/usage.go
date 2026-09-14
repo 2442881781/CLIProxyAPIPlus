@@ -63,7 +63,7 @@ func (h *Handler) GetUsageMonitor(c *gin.Context) {
 	c.JSON(http.StatusOK, redisqueue.GetUsageMonitorSnapshot())
 }
 
-// ResetUsageMonitor clears all in-memory token usage aggregates.
+// ResetUsageMonitor clears all token usage aggregates, including the persisted snapshot.
 func (h *Handler) ResetUsageMonitor(c *gin.Context) {
 	if h == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler unavailable"})

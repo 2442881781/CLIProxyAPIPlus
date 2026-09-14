@@ -69,6 +69,9 @@ func (s *Service) Run(ctx context.Context) error {
 			return errEnsureAuthDir
 		}
 	}
+	if errUsagePersistence := redisqueue.ConfigureUsageMonitorPersistence(s.cfg.AuthDir); errUsagePersistence != nil {
+		log.Warnf("failed to configure usage monitor persistence: %v", errUsagePersistence)
+	}
 
 	s.applyRetryConfig(s.cfg)
 	s.configureCooldownStateStore(s.cfg)
@@ -345,6 +348,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 
+		if errUsagePersistence := redisqueue.FlushUsageMonitorPersistence(); errUsagePersistence != nil {
+			log.WithError(errUsagePersistence).Warn("failed to flush usage monitor persistence during shutdown")
+		}
 		usage.StopDefault()
 	})
 	return shutdownErr

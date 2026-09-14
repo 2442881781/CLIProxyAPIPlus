@@ -2,13 +2,32 @@ package redisqueue
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
+func isolateUsageMonitorPersistence(t *testing.T) string {
+	t.Helper()
+	if errConfigure := ConfigureUsageMonitorPersistence(""); errConfigure != nil {
+		t.Fatalf("ConfigureUsageMonitorPersistence() error = %v", errConfigure)
+	}
+	dir := t.TempDir()
+	if errConfigure := ConfigureUsageMonitorPersistence(dir); errConfigure != nil {
+		t.Fatalf("ConfigureUsageMonitorPersistence() error = %v", errConfigure)
+	}
+	t.Cleanup(func() {
+		_ = ConfigureUsageMonitorPersistence("")
+		resetUsageMonitorInMemory(time.Now())
+	})
+	return dir
+}
+
 func TestUsageMonitorAggregatesProviderModelTokens(t *testing.T) {
+	isolateUsageMonitorPersistence(t)
 	ResetUsageMonitor()
 	t.Cleanup(ResetUsageMonitor)
 
@@ -77,6 +96,7 @@ func TestUsageMonitorAggregatesProviderModelTokens(t *testing.T) {
 }
 
 func TestResetUsageMonitorStartsNewPeriod(t *testing.T) {
+	isolateUsageMonitorPersistence(t)
 	ResetUsageMonitor()
 	before := time.Now()
 	ResetUsageMonitor()
@@ -90,6 +110,7 @@ func TestResetUsageMonitorStartsNewPeriod(t *testing.T) {
 }
 
 func TestUsageMonitorDoesNotRequireRedisQueue(t *testing.T) {
+	isolateUsageMonitorPersistence(t)
 	previousQueueEnabled := Enabled()
 	previousUsageEnabled := UsageStatisticsEnabled()
 	SetEnabled(false)
@@ -118,5 +139,91 @@ func TestUsageMonitorDoesNotRequireRedisQueue(t *testing.T) {
 	}
 	if items := PopOldest(10); len(items) != 0 {
 		t.Fatalf("queue received %d items while disabled", len(items))
+	}
+}
+
+func TestUsageMonitorPersistsAndRestoresSnapshot(t *testing.T) {
+	dir := isolateUsageMonitorPersistence(t)
+	ResetUsageMonitor()
+
+	timestamp := time.Date(2026, time.September, 14, 17, 0, 0, 0, time.UTC)
+	expectedSince := GetUsageMonitorSnapshot().Since
+	record := coreusage.Record{
+		Provider:    "codex",
+		Model:       "gpt-5.4",
+		RequestedAt: timestamp,
+		Latency:     750 * time.Millisecond,
+		Detail: coreusage.Detail{
+			TokenBreakdown: coreusage.NewSubsetTokenBreakdown(90, 30, 5, 20, 7, 120),
+		},
+	}
+	observeUsageRecord(record, record.Detail, false, timestamp)
+	if errFlush := FlushUsageMonitorPersistence(); errFlush != nil {
+		t.Fatalf("FlushUsageMonitorPersistence() error = %v", errFlush)
+	}
+
+	path := filepath.Join(dir, usageMonitorPersistenceDir, usageMonitorPersistenceFile)
+	info, errStat := os.Stat(path)
+	if errStat != nil {
+		t.Fatalf("stat persisted snapshot: %v", errStat)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("snapshot mode = %o, want 600", info.Mode().Perm())
+	}
+
+	resetUsageMonitorInMemory(time.Now())
+	if errConfigure := ConfigureUsageMonitorPersistence(""); errConfigure != nil {
+		t.Fatalf("disable persistence: %v", errConfigure)
+	}
+	if errConfigure := ConfigureUsageMonitorPersistence(dir); errConfigure != nil {
+		t.Fatalf("reload persistence: %v", errConfigure)
+	}
+
+	snapshot := GetUsageMonitorSnapshot()
+	if snapshot.Requests != 1 || snapshot.Tokens.TotalTokens != 120 {
+		t.Fatalf("restored snapshot = %+v", snapshot)
+	}
+	if !snapshot.Since.Equal(expectedSince) || snapshot.UpdatedAt == nil || !snapshot.UpdatedAt.Equal(timestamp) {
+		t.Fatalf("restored timestamps since=%v updated_at=%v", snapshot.Since, snapshot.UpdatedAt)
+	}
+	if len(snapshot.Providers) != 1 || snapshot.Providers[0].Models[0].AverageLatencyMS != 750 {
+		t.Fatalf("restored providers = %+v", snapshot.Providers)
+	}
+}
+
+func TestResetUsageMonitorPersistsEmptySnapshot(t *testing.T) {
+	dir := isolateUsageMonitorPersistence(t)
+	timestamp := time.Date(2026, time.September, 14, 18, 0, 0, 0, time.UTC)
+	record := coreusage.Record{Provider: "devin", Model: "devin/swe-2", RequestedAt: timestamp}
+	observeUsageRecord(record, record.Detail, false, timestamp)
+	ResetUsageMonitor()
+
+	resetUsageMonitorInMemory(time.Now())
+	if errConfigure := ConfigureUsageMonitorPersistence(""); errConfigure != nil {
+		t.Fatalf("disable persistence: %v", errConfigure)
+	}
+	if errConfigure := ConfigureUsageMonitorPersistence(dir); errConfigure != nil {
+		t.Fatalf("reload persistence: %v", errConfigure)
+	}
+	snapshot := GetUsageMonitorSnapshot()
+	if snapshot.Requests != 0 || len(snapshot.Providers) != 0 {
+		t.Fatalf("restored reset snapshot = %+v", snapshot)
+	}
+}
+
+func TestUsageStatisticsTogglePreservesHistory(t *testing.T) {
+	isolateUsageMonitorPersistence(t)
+	previous := UsageStatisticsEnabled()
+	SetUsageStatisticsEnabled(true)
+	ResetUsageMonitor()
+	t.Cleanup(func() { SetUsageStatisticsEnabled(previous) })
+
+	record := coreusage.Record{Provider: "codex", Model: "gpt-5.4"}
+	observeUsageRecord(record, record.Detail, false, time.Now())
+	SetUsageStatisticsEnabled(false)
+
+	snapshot := GetUsageMonitorSnapshot()
+	if snapshot.Enabled || snapshot.Requests != 1 {
+		t.Fatalf("disabled snapshot = %+v, want disabled with retained history", snapshot)
 	}
 }

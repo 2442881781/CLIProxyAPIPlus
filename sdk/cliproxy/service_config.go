@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/synthesizer"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
@@ -170,6 +171,10 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 	}
 	if errContext := ctx.Err(); errContext != nil {
 		return false
+	}
+
+	if errUsagePersistence := redisqueue.ConfigureUsageMonitorPersistence(cfg.AuthDir); errUsagePersistence != nil {
+		log.Warnf("failed to update usage monitor persistence: %v", errUsagePersistence)
 	}
 
 	registrationCtx := coreauth.WithSkipPersist(ctx)

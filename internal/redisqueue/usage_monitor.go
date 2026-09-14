@@ -47,7 +47,7 @@ type UsageProviderStats struct {
 	latencyTotalMS   int64
 }
 
-// UsageMonitorSnapshot is a non-destructive view of usage accumulated in memory.
+// UsageMonitorSnapshot is a non-destructive view of accumulated usage.
 type UsageMonitorSnapshot struct {
 	Enabled   bool                 `json:"enabled"`
 	Since     time.Time            `json:"since"`
@@ -119,7 +119,6 @@ func observeUsageRecord(record coreusage.Record, detail coreusage.Detail, failed
 	}
 
 	usageMonitor.mu.Lock()
-	defer usageMonitor.mu.Unlock()
 	if usageMonitor.since.IsZero() {
 		usageMonitor.since = timestamp
 	}
@@ -136,6 +135,8 @@ func observeUsageRecord(record coreusage.Record, detail coreusage.Detail, failed
 	if row == nil {
 		if len(usageMonitor.rows) >= maxUsageMonitorRows {
 			usageMonitor.truncated = true
+			usageMonitor.mu.Unlock()
+			scheduleUsageMonitorPersistence()
 			return
 		}
 		if usageMonitor.rows == nil {
@@ -156,20 +157,14 @@ func observeUsageRecord(record coreusage.Record, detail coreusage.Detail, failed
 		row.LastUsedAt = timestamp
 	}
 	addUsageTokens(&row.Tokens, tokens)
+	usageMonitor.mu.Unlock()
+	scheduleUsageMonitorPersistence()
 }
 
 // ResetUsageMonitor clears accumulated usage and starts a new monitoring period.
 func ResetUsageMonitor() {
-	usageMonitor.mu.Lock()
-	usageMonitor.since = time.Now()
-	usageMonitor.updatedAt = time.Time{}
-	usageMonitor.truncated = false
-	usageMonitor.requests = 0
-	usageMonitor.success = 0
-	usageMonitor.failed = 0
-	usageMonitor.tokens = UsageTokenTotals{}
-	usageMonitor.rows = make(map[string]*UsageModelStats)
-	usageMonitor.mu.Unlock()
+	resetUsageMonitorInMemory(time.Now())
+	persistUsageMonitorImmediately()
 }
 
 // GetUsageMonitorSnapshot returns a non-destructive aggregate sorted by token usage.
