@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v7/internal/api/handlers/management"
 	claudemodels "github.com/router-for-me/CLIProxyAPI/v7/internal/client/claude/models"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v7/internal/client/codex/live"
@@ -37,6 +39,12 @@ const oauthCallbackSuccessHTML = `<html><head><meta charset="utf-8"><title>Authe
 
 const codexAlphaSearchSourceFormat = "codex-alpha-search"
 
+//go:embed access_keys_page.html
+var accessKeysPageHTML []byte
+
+//go:embed my_usage_page.html
+var myUsagePageHTML []byte
+
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
@@ -52,15 +60,55 @@ func (s *Server) setupRoutes() {
 	s.engine.HEAD("/healthz", healthzHandler)
 
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
+	s.engine.GET("/access-keys.html", func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", accessKeysPageHTML)
+	})
+	s.engine.GET("/my-usage.html", func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", myUsagePageHTML)
+	})
+	// Self-service usage lookup: the employee's own access key is the credential.
+	s.engine.GET("/v0/usage/me", func(c *gin.Context) {
+		store := storeaccess.DefaultStore()
+		entry := store.LookupRequest(c.Request)
+		if entry == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid access key"})
+			return
+		}
+		resp := gin.H{
+			"name":                 entry.Name,
+			"key_prefix":           entry.KeyPrefix,
+			"disabled":             entry.Disabled,
+			"expired":              entry.Expired(time.Now()),
+			"expires_at":           entry.ExpiresAt,
+			"allowed_models":       entry.AllowedModels,
+			"quota":                entry.Quota,
+			"rate_limit":           entry.RateLimit,
+			"effective_rate_limit": store.EffectiveRateLimit(entry),
+			"usage":                entry.Usage,
+		}
+		if grp := store.GroupFor(entry); grp != nil {
+			resp["group"] = gin.H{
+				"name":            grp.Name,
+				"max_concurrency": grp.MaxConcurrency,
+				"rate_limit_rpm":  grp.RateLimitRPM,
+				"per_key_limits":  grp.PerKeyLimits,
+				"usage":           grp.Usage,
+			}
+		}
+		c.JSON(http.StatusOK, resp)
+	})
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
 	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
 	openaiResponsesHandlers := openai.NewOpenAIResponsesAPIHandler(s.handlers)
 	s.codexLiveHandler = codexlive.NewHandler(s.handlers.AuthManager, s.cfg)
 
+	groupAccess := storeaccess.GroupAccessMiddleware(storeaccess.DefaultStore())
+
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
 	v1.Use(AuthMiddleware(s.accessManager))
+	v1.Use(groupAccess)
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
@@ -84,23 +132,24 @@ func (s *Server) setupRoutes() {
 
 	realtimeAuth := realtimeAuthMiddleware(s.accessManager, s.codexLiveHandler)
 	standardAuth := realtimeStandardAuthMiddleware(s.accessManager)
-	s.engine.GET("/v1/realtime", realtimeAuth, s.codexLiveHandler.HandleRealtimeWebsocket)
-	s.engine.POST("/v1/realtime", realtimeAuth, s.codexLiveHandler.Handle)
-	s.engine.POST("/v1/realtime/calls", realtimeAuth, s.codexLiveHandler.Handle)
-	s.engine.GET("/v1/realtime/calls/:call_id", realtimeAuth, s.codexLiveHandler.HandleSideband)
-	s.engine.POST("/v1/realtime/client_secrets", standardAuth, s.codexLiveHandler.CreateClientSecret)
-	s.engine.POST("/v1/realtime/sessions", standardAuth, s.codexLiveHandler.CreateLegacySession)
-	s.engine.POST("/v1/realtime/transcription_sessions", standardAuth, s.codexLiveHandler.HandleTranscriptionSession)
-	s.engine.GET("/v1/realtime/translations", realtimeAuth, s.codexLiveHandler.HandleTranslation)
-	s.engine.POST("/v1/realtime/translations", realtimeAuth, s.codexLiveHandler.HandleTranslation)
-	s.engine.POST("/v1/realtime/translations/client_secrets", standardAuth, s.codexLiveHandler.HandleTranslation)
-	s.engine.POST("/v1/realtime/calls/:call_id/hangup", standardAuth, s.codexLiveHandler.HandleHangup)
-	s.engine.POST("/v1/realtime/calls/:call_id/accept", standardAuth, s.codexLiveHandler.HandleSIPControl)
-	s.engine.POST("/v1/realtime/calls/:call_id/reject", standardAuth, s.codexLiveHandler.HandleSIPControl)
-	s.engine.POST("/v1/realtime/calls/:call_id/refer", standardAuth, s.codexLiveHandler.HandleSIPControl)
+	s.engine.GET("/v1/realtime", realtimeAuth, groupAccess, s.codexLiveHandler.HandleRealtimeWebsocket)
+	s.engine.POST("/v1/realtime", realtimeAuth, groupAccess, s.codexLiveHandler.Handle)
+	s.engine.POST("/v1/realtime/calls", realtimeAuth, groupAccess, s.codexLiveHandler.Handle)
+	s.engine.GET("/v1/realtime/calls/:call_id", realtimeAuth, groupAccess, s.codexLiveHandler.HandleSideband)
+	s.engine.POST("/v1/realtime/client_secrets", standardAuth, groupAccess, s.codexLiveHandler.CreateClientSecret)
+	s.engine.POST("/v1/realtime/sessions", standardAuth, groupAccess, s.codexLiveHandler.CreateLegacySession)
+	s.engine.POST("/v1/realtime/transcription_sessions", standardAuth, groupAccess, s.codexLiveHandler.HandleTranscriptionSession)
+	s.engine.GET("/v1/realtime/translations", realtimeAuth, groupAccess, s.codexLiveHandler.HandleTranslation)
+	s.engine.POST("/v1/realtime/translations", realtimeAuth, groupAccess, s.codexLiveHandler.HandleTranslation)
+	s.engine.POST("/v1/realtime/translations/client_secrets", standardAuth, groupAccess, s.codexLiveHandler.HandleTranslation)
+	s.engine.POST("/v1/realtime/calls/:call_id/hangup", standardAuth, groupAccess, s.codexLiveHandler.HandleHangup)
+	s.engine.POST("/v1/realtime/calls/:call_id/accept", standardAuth, groupAccess, s.codexLiveHandler.HandleSIPControl)
+	s.engine.POST("/v1/realtime/calls/:call_id/reject", standardAuth, groupAccess, s.codexLiveHandler.HandleSIPControl)
+	s.engine.POST("/v1/realtime/calls/:call_id/refer", standardAuth, groupAccess, s.codexLiveHandler.HandleSIPControl)
 
 	openaiV1 := s.engine.Group("/openai/v1")
 	openaiV1.Use(AuthMiddleware(s.accessManager))
+	openaiV1.Use(groupAccess)
 	{
 		openaiV1.POST("/videos", openaiHandlers.VideosCreate)
 		openaiV1.GET("/videos/:video_id/content", openaiHandlers.VideosContent)
@@ -110,6 +159,7 @@ func (s *Server) setupRoutes() {
 	// Codex CLI direct route aliases (chatgpt_base_url compatible)
 	codexDirect := s.engine.Group("/backend-api/codex")
 	codexDirect.Use(AuthMiddleware(s.accessManager))
+	codexDirect.Use(groupAccess)
 	{
 		codexDirect.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
 		codexDirect.POST("/responses", openaiResponsesHandlers.Responses)
@@ -120,6 +170,7 @@ func (s *Server) setupRoutes() {
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.accessManager))
+	v1beta.Use(groupAccess)
 	{
 		v1beta.GET("/models", s.geminiModelsHandler(geminiHandlers))
 		v1beta.POST("/interactions", geminiHandlers.Interactions)
@@ -566,12 +617,13 @@ func (s *Server) AttachWebsocketRoute(path string, handler http.Handler) {
 		}
 		authMiddleware(c)
 	}
+	groupAccess := storeaccess.GroupAccessMiddleware(storeaccess.DefaultStore())
 	finalHandler := func(c *gin.Context) {
 		handler.ServeHTTP(c.Writer, c.Request)
 		c.Abort()
 	}
 
-	s.engine.GET(trimmed, conditionalAuth, finalHandler)
+	s.engine.GET(trimmed, conditionalAuth, groupAccess, finalHandler)
 }
 
 // isAnthropicModelsRequest reports whether a /v1/models request should be served in

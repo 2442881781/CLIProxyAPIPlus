@@ -76,6 +76,10 @@ const (
 	SessionAffinityProviderMetadataKey = "session_affinity_provider"
 	// SessionAffinityModelMetadataKey carries the model used during session affinity selection.
 	SessionAffinityModelMetadataKey = "session_affinity_model"
+	// AllowedAuthsMetadataKey carries the set of upstream auth identifiers (auth
+	// ID, label, or file name) the request is permitted to consume. When present,
+	// auth selection must filter candidates to this set.
+	AllowedAuthsMetadataKey = "allowed_auths"
 )
 
 // Request encapsulates the translated payload that will be sent to a provider executor.

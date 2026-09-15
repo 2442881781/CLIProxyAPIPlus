@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>API Key 管理</title>
+<style>
+  /* Same design tokens as the management panel bundle (static/management.html). */
+  :root[data-theme=white]{
+    --bg-secondary:#fff;--bg-primary:#fff;--bg-tertiary:#f6f6f6;--bg-hover:#f6f6f6;
+    --floating-surface:#fff;--floating-shadow:0 12px 26px #0000001f;
+    --text-primary:#2d2a26;--text-secondary:#6d6760;--text-tertiary:#a29c95;
+    --border-color:#e5e5e5;--border-hover:#ccc;
+    --primary-color:#8b8680;--primary-hover:#7f7a74;--primary-contrast:#fff;
+    --success-color:#10b981;--error-color:#c65746;
+    --success-badge-bg:#d1fae5;--success-badge-text:#065f46;
+    --failure-badge-bg:#c6574624;--failure-badge-text:#8a3a30;
+  }
+  :root[data-theme=dark]{
+    --bg-secondary:#151412;--bg-primary:#1d1b18;--bg-tertiary:#262320;--bg-hover:#2e2a26;
+    --floating-surface:#2a2723;--floating-shadow:0 14px 30px #0006;
+    --text-primary:#f6f4f1;--text-secondary:#c9c3bb;--text-tertiary:#9c958d;
+    --border-color:#3a3530;--border-hover:#5a544d;
+    --primary-color:#8b8680;--primary-hover:#9a948e;--primary-contrast:#fff;
+    --success-color:#10b981;--error-color:#c65746;
+    --success-badge-bg:#064e3b4d;--success-badge-text:#6ee7b7;
+    --failure-badge-bg:#c657463d;--failure-badge-text:#f1b0a6;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { background:var(--bg-secondary); }
+  body { font-family:-apple-system,"SF Pro SC","PingFang SC",sans-serif; background:var(--bg-secondary); color:var(--text-primary); min-height:100vh; }
+  body.embedded { background:var(--bg-secondary); }
+  .wrap { max-width:1080px; margin:0 auto; padding:32px 20px; }
+  body.embedded .wrap { padding:12px 8px; }
+  h1 { font-size:24px; font-weight:600; margin-bottom:4px; }
+  .sub { color:var(--text-tertiary); font-size:13px; margin-bottom:24px; }
+  body.embedded .back-link { display:none; }
+  a { color:var(--primary-color); }
+  .card { background:var(--bg-primary); border:1px solid var(--border-color); border-radius:12px; padding:20px; margin-bottom:16px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+  .field { display:flex; flex-direction:column; gap:4px; }
+  label { font-size:12px; color:var(--text-secondary); }
+  input,select { padding:8px 10px; border:1px solid var(--border-color); border-radius:8px; font-size:13px; min-width:160px; background:var(--bg-tertiary); color:var(--text-primary); }
+  input:focus,select:focus { outline:none; border-color:var(--border-hover); }
+  button { padding:8px 16px; border:none; border-radius:8px; font-size:13px; cursor:pointer; background:var(--primary-color); color:var(--primary-contrast); }
+  button:hover { background:var(--primary-hover); }
+  button.ghost { background:var(--bg-tertiary); color:var(--text-primary); }
+  button.ghost:hover { background:var(--bg-hover); }
+  button.danger { background:var(--error-color); }
+  button:disabled { opacity:.5; cursor:default; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--border-color); vertical-align:top; }
+  th { color:var(--text-tertiary); font-weight:500; font-size:12px; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; }
+  .tag.on { background:var(--success-badge-bg); color:var(--success-badge-text); }
+  .tag.off { background:var(--failure-badge-bg); color:var(--failure-badge-text); }
+  .mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .muted { color:var(--text-tertiary); }
+  .authgrid { display:flex; flex-wrap:wrap; gap:8px 18px; max-height:140px; overflow:auto; font-size:12px; }
+  .authgrid label { display:flex; align-items:center; gap:6px; cursor:pointer; color:var(--text-primary); font-size:12px; }
+  .authgrid input { min-width:0; }
+  .actions button { margin-right:6px; }
+  #toast { position:fixed; top:20px; right:20px; padding:12px 18px; border-radius:10px; color:#fff; font-size:13px; display:none; z-index:99; box-shadow:var(--floating-shadow); }
+  #toast.ok { background:var(--success-color); } #toast.err { background:var(--error-color); }
+  #keyModal { position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; align-items:center; justify-content:center; z-index:50; }
+  #keyModal .box { background:var(--floating-surface); border-radius:14px; padding:28px; max-width:520px; width:92%; box-shadow:var(--floating-shadow); }
+  #keyModal .k { word-break:break-all; background:var(--bg-tertiary); padding:14px; border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:13px; margin:14px 0; }
+  #login { max-width:360px; margin:15vh auto; }
+</style>
+</head>
+<body>
+<div id="toast"></div>
+
+<div id="login" class="card">
+  <h1>API Key 管理</h1>
+  <p class="sub">输入管理密钥登录</p>
+  <div class="row">
+    <div class="field" style="flex:1"><label>管理密钥</label><input id="mgmtKey" type="password" placeholder="Management key"></div>
+    <button onclick="login()">登录</button>
+  </div>
+</div>
+
+<div id="main" class="wrap" style="display:none">
+  <h1>API Key 管理</h1>
+  <p class="sub">为员工签发、限额和吊销访问密钥<a class="back-link" href="/management.html"> · 返回管理面板</a></p>
+
+  <div class="card">
+    <div class="row">
+      <div class="field"><label>名称</label><input id="f_name" placeholder="张三"></div>
+      <div class="field"><label>分组</label><select id="f_group"><option value="">（无分组）</option></select></div>
+      <div class="field"><label>Token 限额</label><input id="f_quota" type="number" placeholder="0 = 不限"></div>
+      <div class="field"><label>周期</label><select id="f_period"><option value="">总量</option><option value="daily">每日</option><option value="monthly">每月</option></select></div>
+      <div class="field"><label>模型白名单</label><input id="f_models" placeholder="空=全部,逗号分隔,支持 * 前缀" style="min-width:220px"></div>
+      <div class="field"><label>过期时间</label><input id="f_exp" type="datetime-local"></div>
+      <button onclick="createKey()">签发 Key</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr><th>名称</th><th>Key</th><th>分组</th><th>状态</th><th>用量 / 限额</th><th>模型</th><th>过期</th><th class="actions">操作</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <h1 style="font-size:18px;margin-top:28px">分组管理</h1>
+  <p class="sub">分组绑定上游账号池（可多选），并统一限制模型、并发与速率；组内 key 的用量会汇总到组。</p>
+
+  <div class="card">
+    <div class="row">
+      <div class="field"><label>分组名</label><input id="g_name" placeholder="infra组"></div>
+      <div class="field"><label>模型白名单</label><input id="g_models" placeholder="空=全部" style="min-width:180px"></div>
+      <div class="field"><label>并发上限</label><input id="g_conc" type="number" placeholder="0 = 不限" style="min-width:110px"></div>
+      <div class="field"><label>限流 (请求/分)</label><input id="g_rpm" type="number" placeholder="0 = 不限" style="min-width:120px"></div>
+      <button onclick="saveGroup()">保存分组</button>
+    </div>
+    <div class="row" style="margin-top:12px;align-items:flex-start">
+      <div class="field" style="flex:1"><label>关联上游账号（不选=全部）</label>
+        <div id="g_auths" class="authgrid muted">加载中…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr><th>分组</th><th>账号池</th><th>模型</th><th>并发/限流</th><th>组用量</th><th class="actions">操作</th></tr></thead>
+      <tbody id="gbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="keyModal"><div class="box">
+  <h1 style="font-size:18px">Key 已创建 — 只显示这一次</h1>
+  <div class="k" id="newKey"></div>
+  <button onclick="copyKey()">复制 Key</button>
+  <button class="ghost" onclick="copyUsageLink()">复制用量链接</button>
+  <button class="ghost" onclick="closeModal()">关闭</button>
+</div></div>
+
+<script>
+// Reuse the management key the parent panel persisted under the obfuscated
+// localStorage key `cli-proxy-auth` (XOR + base64, "enc::v1::" prefix). The key
+// is only persisted when the user checked "记住密码" at panel login.
+function decStored(name) {
+  try {
+    let v = localStorage.getItem(name);
+    if (!v) return null;
+    if (v.startsWith('enc::v1::')) {
+      const k = new TextEncoder().encode('cli-proxy-api-webui::secure-storage|' + location.host + '|' + navigator.userAgent);
+      const bin = atob(v.slice(9));
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i) ^ k[i % k.length];
+      v = new TextDecoder().decode(out);
+    }
+    return JSON.parse(v);
+  } catch (e) { return null; }
+}
+function readPanelKey() {
+  const auth = decStored('cli-proxy-auth');
+  const k = auth && auth.state && auth.state.managementKey;
+  return typeof k === 'string' ? k : '';
+}
+
+let MGMT = sessionStorage.getItem('akmgmt') || readPanelKey() || '';
+const api = (m, p, body) => fetch('/v0/management' + p, {
+  method: m,
+  headers: { 'Authorization': 'Bearer ' + MGMT, 'Content-Type': 'application/json' },
+  body: body ? JSON.stringify(body) : undefined
+}).then(async r => { const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(j.error || r.status); return j; });
+
+function toast(msg, ok) { const t = document.getElementById('toast'); t.textContent = msg; t.className = ok ? 'ok' : 'err'; t.style.display = 'block'; setTimeout(()=>t.style.display='none', 3000); }
+function fmt(n) { return (n||0).toLocaleString(); }
+function esc(s) { return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function login() {
+  MGMT = document.getElementById('mgmtKey').value.trim();
+  api('GET','/access-keys').then(() => {
+    sessionStorage.setItem('akmgmt', MGMT);
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('main').style.display = '';
+    load();
+  }).catch(e => toast('登录失败: ' + e.message));
+}
+
+function load() {
+  api('GET','/access-keys').then(d => {
+    const keys = d['access-keys'] || [];
+    document.getElementById('tbody').innerHTML = keys.map(k => {
+      const q = k.quota || {}, u = k.usage || {};
+      const limit = q.token_limit > 0 ? fmt(q.token_limit) + (q.period ? ' / ' + ({daily:'日',monthly:'月'}[q.period]||q.period) : '') : '不限';
+      const used = fmt(u.period_key ? u.period_tokens : u.total_tokens);
+      const over = q.token_limit > 0 && (u.period_key ? u.period_tokens : u.total_tokens) >= q.token_limit;
+      const models = (k.allowed_models||[]).length ? k.allowed_models.join(', ') : '<span class="muted">全部</span>';
+      const exp = k.expires_at ? k.expires_at.slice(0,10) : '<span class="muted">—</span>';
+      return `<tr>
+        <td>${esc(k.name)||'<span class="muted">(未命名)</span>'}<br><span class="muted mono">${esc(k.id)}</span></td>
+        <td class="mono">${esc(k.key_prefix)}…</td>
+        <td>${k.group ? esc(k.group) : '<span class="muted">—</span>'}</td>
+        <td>${k.disabled ? '<span class="tag off">已禁用</span>' : over ? '<span class="tag off">超额</span>' : '<span class="tag on">启用</span>'}</td>
+        <td>${used} / ${limit}<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
+        <td class="mono" style="font-size:11px">${esc(models==='<span class="muted">全部</span>'?'':models)}${models.startsWith('<')?models:''}</td>
+        <td>${exp}</td>
+        <td class="actions">
+          <button class="ghost" onclick="toggleKey('${k.id}',${!k.disabled})">${k.disabled?'启用':'禁用'}</button>
+          <button class="ghost" onclick="resetUsage('${k.id}')">清零</button>
+          <button class="ghost" onclick="rotateKey('${k.id}')">轮换</button>
+          <button class="danger" onclick="delKey('${k.id}')">删除</button>
+        </td></tr>`;
+    }).join('') || '<tr><td colspan="8" class="muted" style="text-align:center;padding:30px">暂无 key</td></tr>';
+  }).catch(e => toast('加载失败: ' + e.message));
+  loadGroups();
+}
+
+let AUTHS = [];
+function loadGroups() {
+  api('GET','/access-groups').then(d => {
+    const groups = d.groups || [];
+    const sel = document.getElementById('f_group');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">（无分组）</option>' + groups.map(g => `<option value="${esc(g.name)}">${esc(g.name)}</option>`).join('');
+    sel.value = cur;
+    document.getElementById('gbody').innerHTML = groups.map(g => {
+      const u = g.usage || {};
+      const auths = (g.allowed_auths||[]).length ? g.allowed_auths.join(', ') : '<span class="muted">全部</span>';
+      const models = (g.allowed_models||[]).length ? g.allowed_models.join(', ') : '<span class="muted">全部</span>';
+      const limits = [(g.max_concurrency>0?`并发 ${g.max_concurrency}`:''), (g.rate_limit_rpm>0?`${g.rate_limit_rpm} rpm`:'')].filter(Boolean).join(' · ') || '<span class="muted">不限</span>';
+      return `<tr>
+        <td>${esc(g.name)}</td>
+        <td class="mono" style="font-size:11px">${auths.startsWith('<')?auths:esc(auths)}</td>
+        <td class="mono" style="font-size:11px">${models.startsWith('<')?models:esc(models)}</td>
+        <td>${limits.startsWith('<')?limits:esc(limits)}</td>
+        <td>${fmt(u.total_tokens)} tok<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
+        <td class="actions">
+          <button class="ghost" data-g="${esc(g.name)}" onclick="editGroup(this.dataset.g)">编辑</button>
+          <button class="danger" data-g="${esc(g.name)}" onclick="delGroup(this.dataset.g)">删除</button>
+        </td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="muted" style="text-align:center;padding:30px">暂无分组</td></tr>';
+  }).catch(e => toast('分组加载失败: ' + e.message));
+  api('GET','/access-auths').then(d => {
+    AUTHS = d.auths || [];
+    renderAuthPicker([]);
+  }).catch(() => { document.getElementById('g_auths').textContent = '账号列表加载失败'; });
+}
+
+function renderAuthPicker(checked) {
+  const el = document.getElementById('g_auths');
+  if (!AUTHS.length) { el.innerHTML = '<span class="muted">无可用账号</span>'; return; }
+  el.classList.remove('muted');
+  el.innerHTML = AUTHS.map(a => {
+    const label = a.label || a.file || a.id;
+    const tag = a.prefix ? a.prefix : (a.provider || '');
+    return `<label title="${esc(a.id)}"><input type="checkbox" value="${esc(a.id)}" ${checked.includes(a.id)?'checked':''}>${esc(label)}${tag?` <span class="muted">(${esc(tag)})</span>`:''}${a.disabled?' <span class="tag off">停用</span>':''}</label>`;
+  }).join('');
+}
+
+function saveGroup() {
+  const auths = [...document.querySelectorAll('#g_auths input:checked')].map(i => i.value);
+  const models = document.getElementById('g_models').value.split(',').map(s=>s.trim()).filter(Boolean);
+  api('PUT','/access-groups', {
+    name: document.getElementById('g_name').value.trim(),
+    allowed_auths: auths.length ? auths : undefined,
+    allowed_models: models.length ? models : undefined,
+    max_concurrency: parseInt(document.getElementById('g_conc').value)||0,
+    rate_limit_rpm: parseInt(document.getElementById('g_rpm').value)||0
+  }).then(() => { toast('分组已保存',1); clearGroupForm(); loadGroups(); }).catch(e => toast('保存失败: ' + e.message));
+}
+function editGroup(name) {
+  api('GET','/access-groups').then(d => {
+    const g = (d.groups||[]).find(x => x.name === name);
+    if (!g) return;
+    document.getElementById('g_name').value = g.name;
+    document.getElementById('g_models').value = (g.allowed_models||[]).join(', ');
+    document.getElementById('g_conc').value = g.max_concurrency || '';
+    document.getElementById('g_rpm').value = g.rate_limit_rpm || '';
+    renderAuthPicker(g.allowed_auths || []);
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+}
+function clearGroupForm() { ['g_name','g_models','g_conc','g_rpm'].forEach(id => document.getElementById(id).value=''); renderAuthPicker([]); }
+function delGroup(name) { if(confirm(`删除分组「${name}」？组内 key 将变为无限制。`)) api('DELETE','/access-groups?name='+encodeURIComponent(name)).then(()=>{toast('已删除',1);loadGroups();}).catch(e=>toast(e.message)); }
+
+function createKey() {
+  const models = document.getElementById('f_models').value.split(',').map(s=>s.trim()).filter(Boolean);
+  api('POST','/access-keys', {
+    name: document.getElementById('f_name').value.trim(),
+    group: document.getElementById('f_group').value,
+    expires_at: (() => { const v = document.getElementById('f_exp').value; return v ? new Date(v).toISOString() : ''; })(),
+    allowed_models: models.length ? models : undefined,
+    quota: { token_limit: parseInt(document.getElementById('f_quota').value)||0, period: document.getElementById('f_period').value }
+  }).then(d => {
+    document.getElementById('newKey').textContent = d.key;
+    document.getElementById('keyModal').style.display = 'flex';
+    load();
+  }).catch(e => toast('创建失败: ' + e.message));
+}
+function toggleKey(id, en) { api('PATCH','/access-keys?id='+id,{disabled:!en}).then(load).catch(e=>toast(e.message)); }
+function resetUsage(id) { if(confirm('清零该 key 的用量计数？')) api('PATCH','/access-keys?id='+id,{reset_usage:true}).then(()=>{toast('已清零',1);load();}).catch(e=>toast(e.message)); }
+function rotateKey(id) { if(confirm('轮换后旧 key 立即失效，继续？')) api('POST','/access-keys/rotate?id='+id,{}).then(d=>{document.getElementById('newKey').textContent=d.key;document.getElementById('keyModal').style.display='flex';load();}).catch(e=>toast(e.message)); }
+function delKey(id) { if(confirm('删除后该 key 立即失效且不可恢复，继续？')) api('DELETE','/access-keys?id='+id).then(()=>{toast('已删除',1);load();}).catch(e=>toast(e.message)); }
+function copyKey() { navigator.clipboard.writeText(document.getElementById('newKey').textContent).then(()=>toast('已复制',1)); }
+function copyUsageLink() {
+  const link = location.origin + '/my-usage.html#' + document.getElementById('newKey').textContent;
+  navigator.clipboard.writeText(link).then(()=>toast('用量链接已复制，发给员工即可',1));
+}
+function closeModal() { document.getElementById('keyModal').style.display='none'; }
+
+// Sync theme with the parent panel (it sets data-theme on <html>), else follow OS.
+const EMBEDDED = window.self !== window.top;
+function syncTheme() {
+  let t = '';
+  if (EMBEDDED) {
+    try { t = window.top.document.documentElement.dataset.theme || ''; } catch (e) {}
+  }
+  if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'white';
+  document.documentElement.dataset.theme = t;
+}
+if (EMBEDDED) {
+  document.body.classList.add('embedded');
+  document.title = 'API Keys';
+  try {
+    new MutationObserver(syncTheme)
+      .observe(window.top.document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  } catch (e) {}
+}
+syncTheme();
+if (MGMT) { document.getElementById('login').style.display='none'; document.getElementById('main').style.display=''; load(); }
+document.getElementById('mgmtKey').addEventListener('keydown', e => { if (e.key==='Enter') login(); });
+</script>
+</body>
+</html>

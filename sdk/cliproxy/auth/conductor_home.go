@@ -937,6 +937,10 @@ func (m *Manager) pickNextViaHome(ctx context.Context, model string, opts clipro
 		selection.End("repeated_auth")
 		return nil, nil, "", repeatedHomeAuthError()
 	}
+	if !authInAllowedSet(selectionAuth, allowedAuthsFromMetadata(opts.Metadata)) {
+		selection.End("not_in_allowed_auths")
+		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
+	}
 	auth := selection.CloneAuthForRoute(model)
 	executor := selection.Executor
 	provider := selection.Provider

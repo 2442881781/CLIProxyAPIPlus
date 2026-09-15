@@ -98,6 +98,62 @@ func (e authSelectionEligibility) allows(auth *Auth) bool {
 	return !e.disallowFreeAuth || !isFreeCodexAuth(auth)
 }
 
+// allowedAuthsFromMetadata extracts the optional auth allowlist injected by
+// access middleware (group scoping). Returns nil when unrestricted.
+func allowedAuthsFromMetadata(metadata map[string]any) map[string]struct{} {
+	if len(metadata) == 0 {
+		return nil
+	}
+	raw, ok := metadata[cliproxyexecutor.AllowedAuthsMetadataKey]
+	if !ok || raw == nil {
+		return nil
+	}
+	var values []string
+	switch list := raw.(type) {
+	case []string:
+		values = list
+	case []any:
+		for _, item := range list {
+			if s, okItem := item.(string); okItem {
+				values = append(values, s)
+			}
+		}
+	case string:
+		values = []string{list}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			set[trimmed] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+// authInAllowedSet reports whether the auth is covered by the allowlist,
+// matching by ID, label, or file name.
+func authInAllowedSet(auth *Auth, allowed map[string]struct{}) bool {
+	if len(allowed) == 0 || auth == nil {
+		return true
+	}
+	if _, ok := allowed[auth.ID]; ok {
+		return true
+	}
+	if _, ok := allowed[auth.Label]; ok && auth.Label != "" {
+		return true
+	}
+	if _, ok := allowed[auth.FileName]; ok && auth.FileName != "" {
+		return true
+	}
+	return false
+}
+
 func (m *Manager) syncSchedulerFromSnapshot(auths []*Auth) {
 	if m == nil || m.scheduler == nil {
 		return
@@ -1593,6 +1649,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
+	allowedAuths := allowedAuthsFromMetadata(opts.Metadata)
 
 	m.mu.RLock()
 	selector := m.selector
@@ -1621,6 +1678,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 			continue
 		}
 		if !eligibility.allows(candidate) {
+			continue
+		}
+		if !authInAllowedSet(candidate, allowedAuths) {
 			continue
 		}
 		if _, used := tried[candidate.ID]; used {
@@ -1755,6 +1815,7 @@ func (m *Manager) SelectHomeAuthWithCredentialPolicy(ctx context.Context, provid
 	}
 	selectionCtx := withCredentialPolicy(ctx, policy)
 	homeAuthCount := homeAuthCountFromMetadata(opts.Metadata)
+	allowedAuths := allowedAuthsFromMetadata(opts.Metadata)
 	tried := make(map[string]struct{})
 	for {
 		selectionOpts := withHomeAuthCount(opts, homeAuthCount)
@@ -1765,7 +1826,8 @@ func (m *Manager) SelectHomeAuthWithCredentialPolicy(ctx context.Context, provid
 		}
 		providerMatches := strings.TrimSpace(provider) == "" || strings.EqualFold(strings.TrimSpace(selection.Provider), strings.TrimSpace(provider))
 		policyMatches := credentialPolicyAllows(policy, selection.Auth)
-		if providerMatches && policyMatches {
+		allowlistMatches := authInAllowedSet(selection.Auth, allowedAuths)
+		if providerMatches && policyMatches && allowlistMatches {
 			return selection, nil
 		}
 
@@ -1776,6 +1838,8 @@ func (m *Manager) SelectHomeAuthWithCredentialPolicy(ctx context.Context, provid
 		reason := "credential_policy_mismatch"
 		if !providerMatches {
 			reason = "provider_mismatch"
+		} else if !allowlistMatches {
+			reason = "not_in_allowed_auths"
 		}
 		if errEnd := m.endHomeSelectionBeforeRedispatch(selectionCtx, selection, reason); errEnd != nil {
 			return nil, errEnd
@@ -1802,6 +1866,7 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 	}
 
 	homeAuthCount := homeAuthCountFromMetadata(opts.Metadata)
+	allowedAuths := allowedAuthsFromMetadata(opts.Metadata)
 	tried := make(map[string]struct{})
 	for {
 		selectionOpts := withHomeAuthCount(opts, homeAuthCount)
@@ -1813,7 +1878,8 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 		providerMatches := strings.TrimSpace(provider) == "" || strings.EqualFold(strings.TrimSpace(selection.Provider), strings.TrimSpace(provider))
 		selectionAuth := selection.CloneAuth()
 		kindMatches := selectionAuth != nil && selectionAuth.AuthKind() == requiredKind
-		if providerMatches && kindMatches {
+		allowlistMatches := authInAllowedSet(selectionAuth, allowedAuths)
+		if providerMatches && kindMatches && allowlistMatches {
 			return selection, nil
 		}
 
@@ -1824,6 +1890,8 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 		reason := "auth_kind_mismatch"
 		if !providerMatches {
 			reason = "provider_mismatch"
+		} else if !allowlistMatches {
+			reason = "not_in_allowed_auths"
 		}
 		if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, reason); errEnd != nil {
 			return nil, errEnd
@@ -1848,7 +1916,7 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 	opts.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey] = provider
 	opts.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey] = model
 
-	if m.hasPluginScheduler() || !m.useSchedulerFastPath() {
+	if m.hasPluginScheduler() || !m.useSchedulerFastPath() || allowedAuthsFromMetadata(opts.Metadata) != nil {
 		return m.pickNextLegacy(ctx, provider, model, opts, tried)
 	}
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
@@ -1909,6 +1977,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
+	allowedAuths := allowedAuthsFromMetadata(opts.Metadata)
 
 	providerSet := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
@@ -1944,6 +2013,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 			continue
 		}
 		if !eligibility.allows(candidate) {
+			continue
+		}
+		if !authInAllowedSet(candidate, allowedAuths) {
 			continue
 		}
 		providerKey := executorKeyFromAuth(candidate)
@@ -2020,7 +2092,7 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 	opts.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey] = "mixed"
 	opts.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey] = model
 
-	if m.hasPluginScheduler() || !m.useSchedulerFastPath() {
+	if m.hasPluginScheduler() || !m.useSchedulerFastPath() || allowedAuthsFromMetadata(opts.Metadata) != nil {
 		return m.pickNextMixedLegacy(ctx, providers, model, opts, tried)
 	}
 

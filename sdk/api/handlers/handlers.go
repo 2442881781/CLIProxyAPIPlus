@@ -234,6 +234,11 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	if callerScope := requestCallerScope(ginCtx); callerScope != "" {
 		meta[coreexecutor.CallerScopeMetadataKey] = callerScope
 	}
+	if ginCtx != nil {
+		if rawAllowed, okAllowed := ginCtx.Get("accessAllowedAuths"); okAllowed {
+			meta[coreexecutor.AllowedAuthsMetadataKey] = rawAllowed
+		}
+	}
 	if disallowFreeAuthFromContext(ctx) {
 		meta[coreexecutor.DisallowFreeAuthMetadataKey] = true
 	}

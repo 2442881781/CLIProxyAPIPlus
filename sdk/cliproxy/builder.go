@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	configaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/config_access"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher"
@@ -15,6 +16,7 @@ import (
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	log "github.com/sirupsen/logrus"
 )
 
 // Builder constructs a Service instance with customizable providers.
@@ -237,6 +239,11 @@ func (b *Builder) Build() (*Service, error) {
 	}
 
 	configaccess.Register(&b.cfg.SDKConfig)
+	if b.cfg != nil {
+		if _, errAccessKeys := storeaccess.Register(b.cfg.AuthDir); errAccessKeys != nil {
+			log.Warnf("failed to initialize access key store: %v", errAccessKeys)
+		}
+	}
 	pluginHost := b.pluginHost
 	if pluginHost == nil {
 		pluginHost = pluginhost.New()
@@ -246,6 +253,9 @@ func (b *Builder) Build() (*Service, error) {
 		pluginHost.RegisterFrontendAuthProviders()
 	}
 	accessManager.SetProviders(sdkaccess.RegisteredProviders())
+	storeaccess.SetProvidersRefresher(func() {
+		accessManager.SetProviders(sdkaccess.RegisteredProviders())
+	})
 
 	coreManager := b.coreManager
 	cooldownStateStore := b.cooldownStateStore
