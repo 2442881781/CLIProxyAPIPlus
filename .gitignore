@@ -59,6 +59,10 @@ AGENTS.override.md
 _bmad/*
 _bmad-output/*
 .gocache/
+.deploy/
+browser-outputs/
+access-keys-groups.png
+my-usage.png
 .gitnexus/
 
 # macOS
