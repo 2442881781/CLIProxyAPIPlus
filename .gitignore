@@ -7,6 +7,10 @@ config.yaml
 .env
 
 # Generated content
+# Frontend dependencies and generated output
+web/management-center/node_modules/
+web/management-center/dist/
+
 bin/*
 /logs
 conv/*
@@ -31,6 +35,7 @@ auths/*
 # Documentation
 docs/*
 AGENTS.md
+!web/management-center/AGENTS.md
 CLAUDE.md
 GEMINI.md
 AGENTS.override.md

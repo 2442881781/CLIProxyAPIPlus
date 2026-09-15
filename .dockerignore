@@ -22,6 +22,10 @@ conv
 config.yaml
 
 # Development/editor
+# Embedded management frontend dependencies and generated output
+web/management-center/node_modules
+web/management-center/dist
+
 bin
 .vscode
 .claude
