@@ -1,0 +1,131 @@
+.panel {
+  min-width: 0;
+  padding: 24px;
+}
+
+.header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.logo {
+  width: 46px;
+  height: 46px;
+  padding: 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-tertiary);
+  object-fit: contain;
+}
+
+.heading {
+  min-width: 0;
+
+  p {
+    margin: 6px 0 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+}
+
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+
+  h2 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 22px;
+  }
+}
+
+.badge {
+  display: inline-flex;
+  padding: 3px 9px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.ready {
+  border-color: color-mix(in srgb, var(--success-color) 45%, var(--border-color));
+  color: var(--success-color);
+}
+
+.attention {
+  border-color: color-mix(in srgb, var(--warning-color) 45%, var(--border-color));
+  color: var(--warning-color);
+}
+
+.available,
+.checking {
+  color: var(--text-tertiary);
+}
+
+.details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 24px 0 0;
+}
+
+.detailRow {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-secondary) 72%, transparent);
+
+  dt {
+    color: var(--text-tertiary);
+    font-size: 11px;
+  }
+
+  dd {
+    margin: 6px 0 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-family: var(--font-mono, monospace);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.command {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+
+  code {
+    overflow-x: auto;
+    color: var(--text-primary);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .header {
+    grid-template-columns: auto minmax(0, 1fr);
+
+    > button {
+      grid-column: 1 / -1;
+    }
+  }
+
+  .details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
