@@ -2,31 +2,110 @@
 package thinking
 
 import (
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
+	"strings"
+	"sync"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
 
-// providerAppliers maps provider names to their ProviderApplier implementations.
-var providerAppliers = map[string]ProviderApplier{
+type pluginProviderApplier struct {
+	owner    string
+	priority int
+	applier  ProviderApplier
+}
+
+var providerAppliersMu sync.RWMutex
+
+// nativeProviderAppliers maps built-in provider names to their implementations.
+var nativeProviderAppliers = map[string]ProviderApplier{
 	"gemini":      nil,
-	"gemini-cli":  nil,
 	"claude":      nil,
 	"openai":      nil,
 	"codex":       nil,
-	"iflow":       nil,
 	"antigravity": nil,
+	"kimi":        nil,
+	"xai":         nil,
 }
+
+// pluginProviderAppliers maps plugin-owned provider names to their implementations.
+var pluginProviderAppliers = map[string]pluginProviderApplier{}
 
 // GetProviderApplier returns the ProviderApplier for the given provider name.
 // Returns nil if the provider is not registered.
 func GetProviderApplier(provider string) ProviderApplier {
-	return providerAppliers[provider]
+	provider = normalizedProviderName(provider)
+	if provider == "" {
+		return nil
+	}
+	providerAppliersMu.RLock()
+	defer providerAppliersMu.RUnlock()
+	if nativeApplier, okNative := nativeProviderAppliers[provider]; okNative {
+		return nativeApplier
+	}
+	return pluginProviderAppliers[provider].applier
 }
 
 // RegisterProvider registers a provider applier by name.
 func RegisterProvider(name string, applier ProviderApplier) {
-	providerAppliers[name] = applier
+	name = normalizedProviderName(name)
+	if name == "" {
+		return
+	}
+	providerAppliersMu.Lock()
+	defer providerAppliersMu.Unlock()
+	nativeProviderAppliers[name] = applier
+}
+
+// RegisterPluginProvider registers a plugin-owned provider applier.
+func RegisterPluginProvider(owner string, name string, priority int, applier ProviderApplier) bool {
+	owner = strings.TrimSpace(owner)
+	name = normalizedProviderName(name)
+	if owner == "" || name == "" || applier == nil {
+		return false
+	}
+	providerAppliersMu.Lock()
+	defer providerAppliersMu.Unlock()
+	if _, native := nativeProviderAppliers[name]; native {
+		return false
+	}
+	current, exists := pluginProviderAppliers[name]
+	if exists && (current.priority > priority || (current.priority == priority && current.owner <= owner)) {
+		return false
+	}
+	pluginProviderAppliers[name] = pluginProviderApplier{
+		owner:    owner,
+		priority: priority,
+		applier:  applier,
+	}
+	return true
+}
+
+// UnregisterPluginProviders removes all provider appliers owned by one plugin.
+func UnregisterPluginProviders(owner string) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return
+	}
+	providerAppliersMu.Lock()
+	defer providerAppliersMu.Unlock()
+	for provider, record := range pluginProviderAppliers {
+		if record.owner == owner {
+			delete(pluginProviderAppliers, provider)
+		}
+	}
+}
+
+// ClearPluginProviders removes all plugin-owned provider appliers.
+func ClearPluginProviders() {
+	providerAppliersMu.Lock()
+	defer providerAppliersMu.Unlock()
+	pluginProviderAppliers = map[string]pluginProviderApplier{}
+}
+
+func normalizedProviderName(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
 }
 
 // IsUserDefinedModel reports whether the model is a user-defined model that should
@@ -59,7 +138,9 @@ func IsUserDefinedModel(modelInfo *registry.ModelInfo) bool {
 // Parameters:
 //   - body: Original request body JSON
 //   - model: Model name, optionally with thinking suffix (e.g., "claude-sonnet-4-5(16384)")
-//   - provider: Provider name (gemini, gemini-cli, antigravity, claude, openai, codex, iflow)
+//   - fromFormat: Source request format (e.g., openai, codex, gemini)
+//   - toFormat: Target provider format for the request body (gemini, antigravity, claude, openai, codex, kimi, xai)
+//   - providerKey: Provider identifier used for registry model lookups (may differ from toFormat, e.g., openrouter -> openai)
 //
 // Returns:
 //   - Modified request body JSON with thinking configuration applied
@@ -76,16 +157,63 @@ func IsUserDefinedModel(modelInfo *registry.ModelInfo) bool {
 // Example:
 //
 //	// With suffix - suffix config takes priority
-//	result, err := thinking.ApplyThinking(body, "gemini-2.5-pro(8192)", "gemini")
+//	result, err := thinking.ApplyThinking(body, "gemini-2.5-pro(8192)", "gemini", "gemini", "gemini")
 //
 //	// Without suffix - uses body config
-//	result, err := thinking.ApplyThinking(body, "gemini-2.5-pro", "gemini")
-func ApplyThinking(body []byte, model string, provider string) ([]byte, error) {
+//	result, err := thinking.ApplyThinking(body, "gemini-2.5-pro", "gemini", "gemini", "gemini")
+func ApplyThinking(body []byte, model string, fromFormat string, toFormat string, providerKey string) ([]byte, error) {
+	summaryConfig := ExtractSummaryConfig(body, toFormat)
+	return applyThinking(body, nil, model, fromFormat, toFormat, providerKey, nil, false, summaryConfig)
+}
+
+// ApplyThinkingWithSummary applies canonical thinking effort while preserving
+// summary visibility extracted from the original source request. Callers that
+// translate before applying thinking must pass the source config explicitly:
+// a target Claude body can temporarily lack display while disabled thinking is
+// being rewritten by a model suffix.
+func ApplyThinkingWithSummary(body []byte, model string, fromFormat string, toFormat string, providerKey string, summaryConfig SummaryConfig) ([]byte, error) {
+	return applyThinking(body, nil, model, fromFormat, toFormat, providerKey, nil, false, summaryConfig)
+}
+
+// ApplyThinkingWithModelInfo applies thinking with the exact configured model
+// definition selected for an API-key execution attempt while preserving summary
+// visibility from the original source body.
+func ApplyThinkingWithModelInfo(body, sourceBody []byte, model string, fromFormat string, toFormat string, providerKey string, modelInfo *registry.ModelInfo) ([]byte, error) {
+	summaryConfig := ExtractSummaryConfig(sourceBody, fromFormat)
+	if len(sourceBody) == 0 {
+		summaryConfig = ExtractSummaryConfig(body, toFormat)
+	}
+	return ApplyThinkingWithModelInfoAndSummary(body, sourceBody, model, fromFormat, toFormat, providerKey, modelInfo, summaryConfig)
+}
+
+// ApplyThinkingWithModelInfoAndSummary applies the exact configured model
+// definition with a summary intent already resolved across source translation
+// and plugin normalization.
+func ApplyThinkingWithModelInfoAndSummary(body, sourceBody []byte, model string, fromFormat string, toFormat string, providerKey string, modelInfo *registry.ModelInfo, summaryConfig SummaryConfig) ([]byte, error) {
+	return applyThinking(body, sourceBody, model, fromFormat, toFormat, providerKey, modelInfo, true, summaryConfig)
+}
+
+func applyThinking(body, sourceBody []byte, model string, fromFormat string, toFormat string, providerKey string, resolvedModelInfo *registry.ModelInfo, modelInfoResolved bool, summaryConfig SummaryConfig) ([]byte, error) {
+	providerFormat := strings.ToLower(strings.TrimSpace(toFormat))
+	if providerFormat == "openai-response" {
+		providerFormat = "codex"
+	}
+	providerKey = strings.ToLower(strings.TrimSpace(providerKey))
+	if providerKey == "" {
+		providerKey = providerFormat
+	}
+	fromFormat = strings.ToLower(strings.TrimSpace(fromFormat))
+	if fromFormat == "" {
+		fromFormat = providerFormat
+	}
+	// Summary visibility is orthogonal to thinking effort. Keep the original
+	// source intent before a suffix-specific applier rewrites provider fields,
+	// then restore it after the canonical effort has been applied.
 	// 1. Route check: Get provider applier
-	applier := GetProviderApplier(provider)
+	applier := GetProviderApplier(providerFormat)
 	if applier == nil {
 		log.WithFields(log.Fields{
-			"provider": provider,
+			"provider": providerFormat,
 			"model":    model,
 		}).Debug("thinking: unknown provider, passthrough |")
 		return body, nil
@@ -94,25 +222,29 @@ func ApplyThinking(body []byte, model string, provider string) ([]byte, error) {
 	// 2. Parse suffix and get modelInfo
 	suffixResult := ParseSuffix(model)
 	baseModel := suffixResult.ModelName
-	modelInfo := registry.LookupModelInfo(baseModel)
+	// Use provider-specific lookup to handle capability differences across providers.
+	modelInfo := resolvedModelInfo
+	if !modelInfoResolved {
+		modelInfo = registry.LookupModelInfo(baseModel, providerKey)
+	}
 
 	// 3. Model capability check
 	// Unknown models are treated as user-defined so thinking config can still be applied.
 	// The upstream service is responsible for validating the configuration.
 	if IsUserDefinedModel(modelInfo) {
-		return applyUserDefinedModel(body, modelInfo, provider, suffixResult)
+		return applyUserDefinedModel(body, modelInfo, fromFormat, providerFormat, providerKey, suffixResult, summaryConfig)
 	}
 	if modelInfo.Thinking == nil {
-		config := extractThinkingConfig(body, provider)
-		if hasThinkingConfig(config) {
+		config := extractThinkingConfig(body, providerFormat)
+		if hasThinkingConfig(config) || summaryConfig.Mode != SummaryUnspecified {
 			log.WithFields(log.Fields{
 				"model":    baseModel,
-				"provider": provider,
+				"provider": providerFormat,
 			}).Debug("thinking: model does not support thinking, stripping config |")
-			return StripThinkingConfig(body, provider), nil
+			return StripThinkingConfig(body, providerFormat), nil
 		}
 		log.WithFields(log.Fields{
-			"provider": provider,
+			"provider": providerFormat,
 			"model":    baseModel,
 		}).Debug("thinking: model does not support thinking, passthrough |")
 		return body, nil
@@ -121,19 +253,24 @@ func ApplyThinking(body []byte, model string, provider string) ([]byte, error) {
 	// 4. Get config: suffix priority over body
 	var config ThinkingConfig
 	if suffixResult.HasSuffix {
-		config = parseSuffixToConfig(suffixResult.RawSuffix, provider, model)
+		config = parseSuffixToConfig(suffixResult.RawSuffix, providerFormat, model)
 		log.WithFields(log.Fields{
-			"provider": provider,
+			"provider": providerFormat,
 			"model":    model,
 			"mode":     config.Mode,
 			"budget":   config.Budget,
 			"level":    config.Level,
 		}).Debug("thinking: config from model suffix |")
 	} else {
-		config = extractThinkingConfig(body, provider)
+		if modelInfoResolved && len(sourceBody) > 0 {
+			config = extractSourceThinkingConfig(sourceBody, fromFormat)
+		}
+		if !hasThinkingConfig(config) {
+			config = extractThinkingConfig(body, providerFormat)
+		}
 		if hasThinkingConfig(config) {
 			log.WithFields(log.Fields{
-				"provider": provider,
+				"provider": providerFormat,
 				"model":    modelInfo.ID,
 				"mode":     config.Mode,
 				"budget":   config.Budget,
@@ -144,17 +281,31 @@ func ApplyThinking(body []byte, model string, provider string) ([]byte, error) {
 
 	if !hasThinkingConfig(config) {
 		log.WithFields(log.Fields{
-			"provider": provider,
+			"provider": providerFormat,
 			"model":    modelInfo.ID,
 		}).Debug("thinking: no config found, passthrough |")
-		return body, nil
+		if modelInfoResolved && providerFormat == "claude" && fromFormat != providerFormat && ExtractSummaryConfig(sourceBody, fromFormat).Mode == SummaryEnabled {
+			// Registry translation can only see aggregate model capabilities. For a
+			// cross-protocol summary-only request it may have activated adaptive
+			// thinking solely to make display valid. The selected API-key model is
+			// authoritative at execution time, so discard that inferred activation
+			// when the exact model supports only manual extended thinking. Use the
+			// source intent here even if a target normalizer removed display; in that
+			// case the inferred amount must disappear with it. Explicit native Claude
+			// thinking never reaches this cross-protocol branch.
+			body = stripInferredClaudeSummaryActivation(body, modelInfo)
+		}
+		return applySummaryConfigForProvider(body, providerFormat, baseModel, providerKey, modelInfo, summaryConfig), nil
+	}
+	if modelInfoResolved && config.Mode == ModeLevel && modelInfo != nil && modelInfo.Thinking != nil && shouldMapConfiguredHighIntent(fromFormat, providerFormat, modelInfo) {
+		config.Level = mapConfiguredHighIntent(config.Level, modelInfo)
 	}
 
 	// 5. Validate and normalize configuration
-	validated, err := ValidateConfig(config, modelInfo, provider)
+	validated, err := ValidateConfig(config, modelInfo, fromFormat, providerFormat, suffixResult.HasSuffix)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"provider": provider,
+			"provider": providerFormat,
 			"model":    modelInfo.ID,
 			"error":    err.Error(),
 		}).Warn("thinking: validation failed |")
@@ -167,22 +318,80 @@ func ApplyThinking(body []byte, model string, provider string) ([]byte, error) {
 	// Defensive check: ValidateConfig should never return (nil, nil)
 	if validated == nil {
 		log.WithFields(log.Fields{
-			"provider": provider,
+			"provider": providerFormat,
 			"model":    modelInfo.ID,
 		}).Warn("thinking: ValidateConfig returned nil config without error, passthrough |")
 		return body, nil
 	}
 
 	log.WithFields(log.Fields{
-		"provider": provider,
+		"provider": providerFormat,
 		"model":    modelInfo.ID,
 		"mode":     validated.Mode,
 		"budget":   validated.Budget,
 		"level":    validated.Level,
 	}).Debug("thinking: processed config to apply |")
 
-	// 6. Apply configuration using provider-specific applier
-	return applier.Apply(body, *validated, modelInfo)
+	// 6. Apply configuration using provider-specific applier, then restore the
+	// target summary intent that was explicit before suffix processing.
+	applied, err := applier.Apply(body, *validated, modelInfo)
+	if err != nil {
+		return applied, err
+	}
+	// A fully disabled amount takes precedence over visibility. Re-applying a
+	// summary-only field can recreate an otherwise removed provider config and
+	// make a default-on model think again.
+	if thinkingIsFullyDisabled(*validated) {
+		return applied, nil
+	}
+	return applySummaryConfigForProvider(applied, providerFormat, baseModel, providerKey, modelInfo, summaryConfig), nil
+}
+
+func thinkingIsFullyDisabled(config ThinkingConfig) bool {
+	return config.Mode == ModeNone && config.Budget == 0 && config.Level == ""
+}
+
+func shouldMapConfiguredHighIntent(fromFormat, toFormat string, modelInfo *registry.ModelInfo) bool {
+	fromFormat = strings.ToLower(strings.TrimSpace(fromFormat))
+	toFormat = strings.ToLower(strings.TrimSpace(toFormat))
+	if fromFormat != toFormat {
+		return true
+	}
+	if modelInfo == nil {
+		return false
+	}
+	modelType := strings.ToLower(strings.TrimSpace(modelInfo.Type))
+	return modelType != "" && !isSameProviderFamily(toFormat, modelType)
+}
+
+func mapConfiguredHighIntent(level ThinkingLevel, modelInfo *registry.ModelInfo) ThinkingLevel {
+	if modelInfo == nil || modelInfo.Thinking == nil || len(modelInfo.Thinking.Levels) == 0 {
+		return level
+	}
+	level = ThinkingLevel(strings.ToLower(strings.TrimSpace(string(level))))
+	var candidates []ThinkingLevel
+	switch level {
+	case LevelXHigh:
+		candidates = []ThinkingLevel{LevelXHigh, LevelMax, LevelHigh}
+	case LevelMax:
+		candidates = []ThinkingLevel{LevelMax, LevelXHigh, LevelHigh}
+	default:
+		return level
+	}
+	for _, candidate := range candidates {
+		if isLevelSupported(string(candidate), modelInfo.Thinking.Levels) {
+			return candidate
+		}
+	}
+	return level
+}
+
+func extractSourceThinkingConfig(body []byte, provider string) ThinkingConfig {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "openai-response" {
+		return extractCodexConfig(body)
+	}
+	return extractThinkingConfig(body, provider)
 }
 
 // parseSuffixToConfig converts a raw suffix string to ThinkingConfig.
@@ -228,7 +437,7 @@ func parseSuffixToConfig(rawSuffix, provider, model string) ThinkingConfig {
 
 // applyUserDefinedModel applies thinking configuration for user-defined models
 // without ThinkingSupport validation.
-func applyUserDefinedModel(body []byte, modelInfo *registry.ModelInfo, provider string, suffixResult SuffixResult) ([]byte, error) {
+func applyUserDefinedModel(body []byte, modelInfo *registry.ModelInfo, fromFormat, toFormat, providerKey string, suffixResult SuffixResult, summaryConfig SummaryConfig) ([]byte, error) {
 	// Get model ID for logging
 	modelID := ""
 	if modelInfo != nil {
@@ -240,37 +449,83 @@ func applyUserDefinedModel(body []byte, modelInfo *registry.ModelInfo, provider 
 	// Get config: suffix priority over body
 	var config ThinkingConfig
 	if suffixResult.HasSuffix {
-		config = parseSuffixToConfig(suffixResult.RawSuffix, provider, modelID)
+		config = parseSuffixToConfig(suffixResult.RawSuffix, toFormat, modelID)
+		log.WithFields(log.Fields{
+			"provider": toFormat,
+			"model":    modelID,
+			"mode":     config.Mode,
+			"budget":   config.Budget,
+			"level":    config.Level,
+		}).Debug("thinking: config from model suffix |")
 	} else {
-		config = extractThinkingConfig(body, provider)
+		config = extractThinkingConfig(body, fromFormat)
+		if !hasThinkingConfig(config) && fromFormat != toFormat {
+			config = extractThinkingConfig(body, toFormat)
+		}
+		if hasThinkingConfig(config) {
+			log.WithFields(log.Fields{
+				"provider": toFormat,
+				"model":    modelID,
+				"mode":     config.Mode,
+				"budget":   config.Budget,
+				"level":    config.Level,
+			}).Debug("thinking: original config from request |")
+		}
 	}
 
 	if !hasThinkingConfig(config) {
 		log.WithFields(log.Fields{
 			"model":    modelID,
-			"provider": provider,
+			"provider": toFormat,
 		}).Debug("thinking: user-defined model, passthrough (no config) |")
-		return body, nil
+		return applySummaryConfigForProvider(body, toFormat, modelID, providerKey, modelInfo, summaryConfig), nil
 	}
 
-	applier := GetProviderApplier(provider)
+	applier := GetProviderApplier(toFormat)
 	if applier == nil {
 		log.WithFields(log.Fields{
 			"model":    modelID,
-			"provider": provider,
+			"provider": toFormat,
 		}).Debug("thinking: user-defined model, passthrough (unknown provider) |")
 		return body, nil
 	}
 
+	config = normalizeUserDefinedConfig(config, fromFormat, toFormat)
 	log.WithFields(log.Fields{
-		"provider": provider,
+		"provider": toFormat,
 		"model":    modelID,
 		"mode":     config.Mode,
 		"budget":   config.Budget,
 		"level":    config.Level,
-	}).Debug("thinking: applying config for user-defined model (skip validation)")
+	}).Debug("thinking: processed config to apply |")
+	applied, err := applier.Apply(body, config, modelInfo)
+	if err != nil {
+		return applied, err
+	}
+	if thinkingIsFullyDisabled(config) {
+		return applied, nil
+	}
+	return applySummaryConfigForProvider(applied, toFormat, modelID, providerKey, modelInfo, summaryConfig), nil
+}
 
-	return applier.Apply(body, config, modelInfo)
+func normalizeUserDefinedConfig(config ThinkingConfig, fromFormat, toFormat string) ThinkingConfig {
+	if config.Mode != ModeLevel {
+		return config
+	}
+	if toFormat == "claude" {
+		return config
+	}
+	if !isBudgetCapableProvider(toFormat) {
+		return config
+	}
+	budget, ok := ConvertLevelToBudget(string(config.Level))
+	if !ok {
+		return config
+	}
+	config.Mode = ModeBudget
+	config.Budget = budget
+	config.Level = ""
+	return config
 }
 
 // extractThinkingConfig extracts provider-specific thinking config from request body.
@@ -282,14 +537,16 @@ func extractThinkingConfig(body []byte, provider string) ThinkingConfig {
 	switch provider {
 	case "claude":
 		return extractClaudeConfig(body)
-	case "gemini", "gemini-cli", "antigravity":
+	case "gemini", "antigravity":
 		return extractGeminiConfig(body, provider)
+	case "interactions":
+		return extractInteractionsConfig(body)
 	case "openai":
 		return extractOpenAIConfig(body)
-	case "codex":
+	case "codex", "xai":
 		return extractCodexConfig(body)
-	case "iflow":
-		return extractIFlowConfig(body)
+	case "kimi":
+		return extractKimiConfig(body)
 	default:
 		return ThinkingConfig{}
 	}
@@ -297,6 +554,82 @@ func extractThinkingConfig(body []byte, provider string) ThinkingConfig {
 
 func hasThinkingConfig(config ThinkingConfig) bool {
 	return config.Mode != ModeBudget || config.Budget != 0 || config.Level != ""
+}
+
+// ExtractReasoningEffort returns the request's thinking setting as a canonical
+// reasoning_effort label for usage logging. Model suffixes have the same
+// priority as ApplyThinking: a valid suffix overrides body fields.
+func ExtractReasoningEffort(body []byte, provider, model string) string {
+	if effort := reasoningEffortFromSuffix(ParseSuffix(model)); effort != "" {
+		return effort
+	}
+
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	config := extractThinkingConfigForUsage(body, provider)
+	if !hasThinkingConfig(config) {
+		switch provider {
+		case "openai-response":
+			config = extractCodexUsageConfig(body)
+		case "openai":
+			config = extractCodexUsageConfig(body)
+		}
+	}
+	return reasoningEffortFromConfig(config)
+}
+
+// ExtractTranslatedReasoningEffort returns the final provider payload's thinking
+// setting as a canonical reasoning_effort label for usage logging.
+func ExtractTranslatedReasoningEffort(body []byte, provider string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	config := extractThinkingConfigForUsage(body, provider)
+	if !hasThinkingConfig(config) {
+		switch provider {
+		case "openai", "openai-response":
+			config = extractCodexUsageConfig(body)
+			if !hasThinkingConfig(config) {
+				config = extractOpenAIConfig(body)
+			}
+		}
+	}
+	return reasoningEffortFromConfig(config)
+}
+
+func extractThinkingConfigForUsage(body []byte, provider string) ThinkingConfig {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "codex", "xai", "openai-response":
+		return extractCodexUsageConfig(body)
+	default:
+		return extractThinkingConfig(body, provider)
+	}
+}
+
+func reasoningEffortFromSuffix(suffix SuffixResult) string {
+	if !suffix.HasSuffix {
+		return ""
+	}
+	return reasoningEffortFromConfig(parseSuffixToConfig(suffix.RawSuffix, "", suffix.ModelName))
+}
+
+func reasoningEffortFromConfig(config ThinkingConfig) string {
+	if !hasThinkingConfig(config) {
+		return ""
+	}
+	switch config.Mode {
+	case ModeNone:
+		return string(LevelNone)
+	case ModeAuto:
+		return string(LevelAuto)
+	case ModeLevel:
+		return strings.ToLower(strings.TrimSpace(string(config.Level)))
+	case ModeBudget:
+		level, ok := ConvertBudgetToLevel(config.Budget)
+		if !ok {
+			return ""
+		}
+		return level
+	default:
+		return ""
+	}
 }
 
 // extractClaudeConfig extracts thinking configuration from Claude format request body.
@@ -312,6 +645,26 @@ func extractClaudeConfig(body []byte) ThinkingConfig {
 	thinkingType := gjson.GetBytes(body, "thinking.type").String()
 	if thinkingType == "disabled" {
 		return ThinkingConfig{Mode: ModeNone, Budget: 0}
+	}
+	if thinkingType == "adaptive" || thinkingType == "auto" {
+		// Claude adaptive thinking uses output_config.effort (low/medium/high/max).
+		// We only treat it as a thinking config when effort is explicitly present;
+		// otherwise we passthrough and let upstream defaults apply.
+		if effort := gjson.GetBytes(body, "output_config.effort"); effort.Exists() && effort.Type == gjson.String {
+			value := strings.ToLower(strings.TrimSpace(effort.String()))
+			if value == "" {
+				return ThinkingConfig{}
+			}
+			switch value {
+			case "none":
+				return ThinkingConfig{Mode: ModeNone, Budget: 0}
+			case "auto":
+				return ThinkingConfig{Mode: ModeAuto, Budget: -1}
+			default:
+				return ThinkingConfig{Mode: ModeLevel, Level: ThinkingLevel(value)}
+			}
+		}
+		return ThinkingConfig{}
 	}
 
 	// Check budget_tokens
@@ -341,18 +694,23 @@ func extractClaudeConfig(body []byte) ThinkingConfig {
 //   - generationConfig.thinkingConfig.thinkingLevel: "none", "auto", or level name (Gemini 3)
 //   - generationConfig.thinkingConfig.thinkingBudget: integer (Gemini 2.5)
 //
-// For gemini-cli and antigravity providers, the path is prefixed with "request.".
+// For antigravity providers, the path is prefixed with "request.".
 //
 // Priority: thinkingLevel is checked first (Gemini 3 format), then thinkingBudget (Gemini 2.5 format).
 // This allows newer Gemini 3 level-based configs to take precedence.
 func extractGeminiConfig(body []byte, provider string) ThinkingConfig {
 	prefix := "generationConfig.thinkingConfig"
-	if provider == "gemini-cli" || provider == "antigravity" {
+	if provider == "antigravity" {
 		prefix = "request.generationConfig.thinkingConfig"
 	}
 
 	// Check thinkingLevel first (Gemini 3 format takes precedence)
-	if level := gjson.GetBytes(body, prefix+".thinkingLevel"); level.Exists() {
+	level := gjson.GetBytes(body, prefix+".thinkingLevel")
+	if !level.Exists() {
+		// Google official Gemini Python SDK sends snake_case field names
+		level = gjson.GetBytes(body, prefix+".thinking_level")
+	}
+	if level.Exists() {
 		value := level.String()
 		switch value {
 		case "none":
@@ -365,7 +723,62 @@ func extractGeminiConfig(body []byte, provider string) ThinkingConfig {
 	}
 
 	// Check thinkingBudget (Gemini 2.5 format)
-	if budget := gjson.GetBytes(body, prefix+".thinkingBudget"); budget.Exists() {
+	budget := gjson.GetBytes(body, prefix+".thinkingBudget")
+	if !budget.Exists() {
+		// Google official Gemini Python SDK sends snake_case field names
+		budget = gjson.GetBytes(body, prefix+".thinking_budget")
+	}
+	if budget.Exists() {
+		value := int(budget.Int())
+		switch value {
+		case 0:
+			return ThinkingConfig{Mode: ModeNone, Budget: 0}
+		case -1:
+			return ThinkingConfig{Mode: ModeAuto, Budget: -1}
+		default:
+			return ThinkingConfig{Mode: ModeBudget, Budget: value}
+		}
+	}
+
+	return ThinkingConfig{}
+}
+
+func extractInteractionsConfig(body []byte) ThinkingConfig {
+	for _, path := range []string{
+		"generation_config.thinking_level",
+		"generation_config.thinkingLevel",
+		"generation_config.thinking_config.thinking_level",
+		"generation_config.thinking_config.thinkingLevel",
+		"generation_config.thinkingConfig.thinking_level",
+		"generation_config.thinkingConfig.thinkingLevel",
+	} {
+		level := gjson.GetBytes(body, path)
+		if !level.Exists() {
+			continue
+		}
+		value := strings.ToLower(strings.TrimSpace(level.String()))
+		switch value {
+		case "none":
+			return ThinkingConfig{Mode: ModeNone, Budget: 0}
+		case "auto":
+			return ThinkingConfig{Mode: ModeAuto, Budget: -1}
+		default:
+			return ThinkingConfig{Mode: ModeLevel, Level: ThinkingLevel(value)}
+		}
+	}
+
+	for _, path := range []string{
+		"generation_config.thinking_budget",
+		"generation_config.thinkingBudget",
+		"generation_config.thinking_config.thinking_budget",
+		"generation_config.thinking_config.thinkingBudget",
+		"generation_config.thinkingConfig.thinking_budget",
+		"generation_config.thinkingConfig.thinkingBudget",
+	} {
+		budget := gjson.GetBytes(body, path)
+		if !budget.Exists() {
+			continue
+		}
 		value := int(budget.Int())
 		switch value {
 		case 0:
@@ -400,6 +813,50 @@ func extractOpenAIConfig(body []byte) ThinkingConfig {
 	return ThinkingConfig{}
 }
 
+// extractKimiConfig extracts Kimi's native thinking object while retaining
+// reasoning_effort as a legacy input fallback.
+//
+// Native fields take precedence over reasoning_effort. In particular,
+// thinking.type="enabled" without an explicit effort means "use the upstream
+// default" and therefore returns an empty config so ApplyThinking preserves the
+// request unchanged instead of interpreting it as CPA's ModeAuto.
+func extractKimiConfig(body []byte) ThinkingConfig {
+	thinkingType := gjson.GetBytes(body, "thinking.type")
+	if thinkingType.Exists() {
+		switch strings.ToLower(strings.TrimSpace(thinkingType.String())) {
+		case "disabled":
+			return ThinkingConfig{Mode: ModeNone, Budget: 0}
+		case "enabled":
+			if !gjson.GetBytes(body, "thinking.effort").Exists() {
+				return ThinkingConfig{}
+			}
+		}
+	}
+
+	if effort := gjson.GetBytes(body, "thinking.effort"); effort.Exists() {
+		value := strings.ToLower(strings.TrimSpace(effort.String()))
+		switch value {
+		case "":
+			return ThinkingConfig{}
+		case "none":
+			return ThinkingConfig{Mode: ModeNone, Budget: 0}
+		case "auto":
+			return ThinkingConfig{Mode: ModeAuto, Budget: -1}
+		default:
+			return ThinkingConfig{Mode: ModeLevel, Level: ThinkingLevel(value)}
+		}
+	}
+
+	// An explicit native thinking object without an effort should be left for
+	// the Kimi upstream to interpret and must not be overridden by the legacy
+	// field.
+	if thinkingType.Exists() {
+		return ThinkingConfig{}
+	}
+
+	return extractOpenAIConfig(body)
+}
+
 // extractCodexConfig extracts thinking configuration from Codex format request body.
 //
 // Codex API format (OpenAI Responses API):
@@ -419,33 +876,42 @@ func extractCodexConfig(body []byte) ThinkingConfig {
 	return ThinkingConfig{}
 }
 
-// extractIFlowConfig extracts thinking configuration from iFlow format request body.
-//
-// iFlow API format (supports multiple model families):
-//   - GLM format: chat_template_kwargs.enable_thinking (boolean)
-//   - MiniMax format: reasoning_split (boolean)
-//
-// Returns ModeBudget with Budget=1 as a sentinel value indicating "enabled".
-// The actual budget/configuration is determined by the iFlow applier based on model capabilities.
-// Budget=1 is used because iFlow models don't use numeric budgets; they only support on/off.
-func extractIFlowConfig(body []byte) ThinkingConfig {
-	// GLM format: chat_template_kwargs.enable_thinking
-	if enabled := gjson.GetBytes(body, "chat_template_kwargs.enable_thinking"); enabled.Exists() {
-		if enabled.Bool() {
-			// Budget=1 is a sentinel meaning "enabled" (iFlow doesn't use numeric budgets)
-			return ThinkingConfig{Mode: ModeBudget, Budget: 1}
-		}
-		return ThinkingConfig{Mode: ModeNone, Budget: 0}
+// extractCodexUsageConfig extracts thinking configuration from a Codex format request
+// body for usage reporting. It inspects the input array for the latest applicable
+// configuration_update item with a reasoning.effort setting, falling back to top-level
+// reasoning.effort when no update applies.
+func extractCodexUsageConfig(body []byte) ThinkingConfig {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return ThinkingConfig{}
 	}
 
-	// MiniMax format: reasoning_split
-	if split := gjson.GetBytes(body, "reasoning_split"); split.Exists() {
-		if split.Bool() {
-			// Budget=1 is a sentinel meaning "enabled" (iFlow doesn't use numeric budgets)
-			return ThinkingConfig{Mode: ModeBudget, Budget: 1}
+	if input := gjson.GetBytes(body, "input"); input.IsArray() {
+		var latestEffort string
+		var found bool
+		input.ForEach(func(_, item gjson.Result) bool {
+			if item.Get("type").String() == "configuration_update" {
+				effort := item.Get("reasoning.effort")
+				if effort.Exists() {
+					val := strings.ToLower(strings.TrimSpace(effort.String()))
+					if val != "" {
+						latestEffort = val
+						found = true
+					}
+				}
+			}
+			return true
+		})
+		if found {
+			switch latestEffort {
+			case "none":
+				return ThinkingConfig{Mode: ModeNone, Budget: 0}
+			case "auto":
+				return ThinkingConfig{Mode: ModeAuto, Budget: -1}
+			default:
+				return ThinkingConfig{Mode: ModeLevel, Level: ThinkingLevel(latestEffort)}
+			}
 		}
-		return ThinkingConfig{Mode: ModeNone, Budget: 0}
 	}
 
-	return ThinkingConfig{}
+	return extractCodexConfig(body)
 }

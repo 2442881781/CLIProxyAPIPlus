@@ -3,9 +3,8 @@ package responses
 import (
 	"bytes"
 	"context"
-	"fmt"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
+	translatorcommon "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/common"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -13,44 +12,51 @@ import (
 // ConvertCodexResponseToOpenAIResponses converts OpenAI Chat Completions streaming chunks
 // to OpenAI Responses SSE events (response.*).
 
-func ConvertCodexResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+func ConvertCodexResponseToOpenAIResponses(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) [][]byte {
 	if bytes.HasPrefix(rawJSON, []byte("data:")) {
 		rawJSON = bytes.TrimSpace(rawJSON[5:])
-		if typeResult := gjson.GetBytes(rawJSON, "type"); typeResult.Exists() {
-			typeStr := typeResult.String()
-			if typeStr == "response.created" || typeStr == "response.in_progress" || typeStr == "response.completed" {
-				if gjson.GetBytes(rawJSON, "response.instructions").Exists() {
-					instructions := selectInstructions(originalRequestRawJSON, requestRawJSON)
-					rawJSON, _ = sjson.SetBytes(rawJSON, "response.instructions", instructions)
-				}
-			}
-		}
-		out := fmt.Sprintf("data: %s", string(rawJSON))
-		return []string{out}
+		rawJSON = setResponsesModel(rawJSON, modelName, originalRequestRawJSON, requestRawJSON)
+		out := make([]byte, 0, len(rawJSON)+len("data: "))
+		out = append(out, []byte("data: ")...)
+		out = append(out, rawJSON...)
+		return [][]byte{out}
 	}
-	return []string{string(rawJSON)}
+	return [][]byte{setResponsesModel(rawJSON, modelName, originalRequestRawJSON, requestRawJSON)}
+}
+
+func setResponsesModel(rawJSON []byte, modelName string, originalRequestRawJSON, requestRawJSON []byte) []byte {
+	eventType := gjson.GetBytes(rawJSON, "type").String()
+	if eventType != "response.created" && eventType != "response.in_progress" {
+		return rawJSON
+	}
+	if gjson.GetBytes(rawJSON, "response.model").Exists() {
+		return rawJSON
+	}
+
+	requestModelName := translatorcommon.RequestModelName(originalRequestRawJSON, requestRawJSON)
+	if requestModelName == "" {
+		requestModelName = modelName
+	}
+	if requestModelName == "" {
+		return rawJSON
+	}
+
+	updated, errSet := sjson.SetBytes(rawJSON, "response.model", requestModelName)
+	if errSet != nil {
+		return rawJSON
+	}
+	return updated
 }
 
 // ConvertCodexResponseToOpenAIResponsesNonStream builds a single Responses JSON
 // from a non-streaming OpenAI Chat Completions response.
-func ConvertCodexResponseToOpenAIResponsesNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+func ConvertCodexResponseToOpenAIResponsesNonStream(_ context.Context, _ string, _, _, rawJSON []byte, _ *any) []byte {
 	rootResult := gjson.ParseBytes(rawJSON)
-	// Verify this is a response.completed event
-	if rootResult.Get("type").String() != "response.completed" {
-		return ""
+	// Verify this is a terminal response event.
+	responseType := rootResult.Get("type").String()
+	if responseType != "response.completed" && responseType != "response.incomplete" {
+		return []byte{}
 	}
 	responseResult := rootResult.Get("response")
-	template := responseResult.Raw
-	if responseResult.Get("instructions").Exists() {
-		template, _ = sjson.Set(template, "instructions", selectInstructions(originalRequestRawJSON, requestRawJSON))
-	}
-	return template
-}
-
-func selectInstructions(originalRequestRawJSON, requestRawJSON []byte) string {
-	userAgent := misc.ExtractCodexUserAgent(originalRequestRawJSON)
-	if misc.IsOpenCodeUserAgent(userAgent) {
-		return gjson.GetBytes(requestRawJSON, "instructions").String()
-	}
-	return gjson.GetBytes(originalRequestRawJSON, "instructions").String()
+	return []byte(responseResult.Raw)
 }

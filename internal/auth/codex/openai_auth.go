@@ -14,16 +14,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 )
 
+// OAuth configuration constants for OpenAI Codex
 const (
-	openaiAuthURL  = "https://auth.openai.com/oauth/authorize"
-	openaiTokenURL = "https://auth.openai.com/oauth/token"
-	openaiClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
-	redirectURI    = "http://localhost:1455/auth/callback"
+	AuthURL             = "https://auth.openai.com/oauth/authorize"
+	TokenURL            = "https://auth.openai.com/oauth/token"
+	ClientID            = "app_EMoamEEZ73f0CkXaXp7hrann"
+	RedirectURI         = "http://localhost:1455/auth/callback"
+	codexRefreshTimeout = 30 * time.Second
 )
 
 // CodexAuth handles the OpenAI OAuth2 authentication flow.
@@ -33,11 +36,28 @@ type CodexAuth struct {
 	httpClient *http.Client
 }
 
+var codexRefreshGroup singleflight.Group
+
 // NewCodexAuth creates a new CodexAuth service instance.
 // It initializes an HTTP client with proxy settings from the provided configuration.
 func NewCodexAuth(cfg *config.Config) *CodexAuth {
+	return NewCodexAuthWithProxyURL(cfg, "")
+}
+
+// NewCodexAuthWithProxyURL creates a new CodexAuth service instance.
+// proxyURL takes precedence over cfg.ProxyURL when non-empty.
+func NewCodexAuthWithProxyURL(cfg *config.Config, proxyURL string) *CodexAuth {
+	effectiveProxyURL := strings.TrimSpace(proxyURL)
+	var sdkCfg config.SDKConfig
+	if cfg != nil {
+		sdkCfg = cfg.SDKConfig
+		if effectiveProxyURL == "" {
+			effectiveProxyURL = strings.TrimSpace(cfg.ProxyURL)
+		}
+	}
+	sdkCfg.ProxyURL = effectiveProxyURL
 	return &CodexAuth{
-		httpClient: util.SetProxy(&cfg.SDKConfig, &http.Client{}),
+		httpClient: util.SetProxy(&sdkCfg, &http.Client{}),
 	}
 }
 
@@ -50,9 +70,9 @@ func (o *CodexAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string,
 	}
 
 	params := url.Values{
-		"client_id":                  {openaiClientID},
+		"client_id":                  {ClientID},
 		"response_type":              {"code"},
-		"redirect_uri":               {redirectURI},
+		"redirect_uri":               {RedirectURI},
 		"scope":                      {"openid email profile offline_access"},
 		"state":                      {state},
 		"code_challenge":             {pkceCodes.CodeChallenge},
@@ -62,7 +82,7 @@ func (o *CodexAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string,
 		"codex_cli_simplified_flow":  {"true"},
 	}
 
-	authURL := fmt.Sprintf("%s?%s", openaiAuthURL, params.Encode())
+	authURL := fmt.Sprintf("%s?%s", AuthURL, params.Encode())
 	return authURL, nil
 }
 
@@ -70,20 +90,30 @@ func (o *CodexAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string,
 // It performs an HTTP POST request to the OpenAI token endpoint with the provided
 // authorization code and PKCE verifier.
 func (o *CodexAuth) ExchangeCodeForTokens(ctx context.Context, code string, pkceCodes *PKCECodes) (*CodexAuthBundle, error) {
+	return o.ExchangeCodeForTokensWithRedirect(ctx, code, RedirectURI, pkceCodes)
+}
+
+// ExchangeCodeForTokensWithRedirect exchanges an authorization code for tokens using
+// a caller-provided redirect URI. This supports alternate auth flows such as device
+// login while preserving the existing token parsing and storage behavior.
+func (o *CodexAuth) ExchangeCodeForTokensWithRedirect(ctx context.Context, code, redirectURI string, pkceCodes *PKCECodes) (*CodexAuthBundle, error) {
 	if pkceCodes == nil {
 		return nil, fmt.Errorf("PKCE codes are required for token exchange")
+	}
+	if strings.TrimSpace(redirectURI) == "" {
+		return nil, fmt.Errorf("redirect URI is required for token exchange")
 	}
 
 	// Prepare token exchange request
 	data := url.Values{
 		"grant_type":    {"authorization_code"},
-		"client_id":     {openaiClientID},
+		"client_id":     {ClientID},
 		"code":          {code},
-		"redirect_uri":  {redirectURI},
+		"redirect_uri":  {strings.TrimSpace(redirectURI)},
 		"code_verifier": {pkceCodes.CodeVerifier},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", openaiTokenURL, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, "POST", TokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
@@ -161,33 +191,54 @@ func (o *CodexAuth) RefreshTokens(ctx context.Context, refreshToken string) (*Co
 	if refreshToken == "" {
 		return nil, fmt.Errorf("refresh token is required")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
+	result, err, _ := codexRefreshGroup.Do(refreshToken, func() (interface{}, error) {
+		refreshCtx, cancelRefresh := context.WithTimeout(context.WithoutCancel(ctx), codexRefreshTimeout)
+		defer cancelRefresh()
+		return o.refreshTokensSingleFlight(refreshCtx, refreshToken)
+	})
+	if err != nil {
+		return nil, err
+	}
+	tokenData, ok := result.(*CodexTokenData)
+	if !ok || tokenData == nil {
+		return nil, fmt.Errorf("token refresh failed: invalid single-flight result")
+	}
+	return tokenData, nil
+}
+
+func (o *CodexAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken string) (*CodexTokenData, error) {
 	data := url.Values{
-		"client_id":     {openaiClientID},
+		"client_id":     {ClientID},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
 		"scope":         {"openid profile email"},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", openaiTokenURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create refresh request: %w", err)
+	req, errReq := http.NewRequestWithContext(ctx, "POST", TokenURL, strings.NewReader(data.Encode()))
+	if errReq != nil {
+		return nil, fmt.Errorf("failed to create refresh request: %w", errReq)
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("token refresh request failed: %w", err)
+	resp, errDo := o.httpClient.Do(req)
+	if errDo != nil {
+		return nil, fmt.Errorf("token refresh request failed: %w", errDo)
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("token refresh response body close error: %v", errClose)
+		}
 	}()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read refresh response: %w", err)
+	body, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		return nil, fmt.Errorf("failed to read refresh response: %w", errRead)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -202,14 +253,14 @@ func (o *CodexAuth) RefreshTokens(ctx context.Context, refreshToken string) (*Co
 		ExpiresIn    int    `json:"expires_in"`
 	}
 
-	if err = json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("failed to parse refresh response: %w", err)
+	if errUnmarshal := json.Unmarshal(body, &tokenResp); errUnmarshal != nil {
+		return nil, fmt.Errorf("failed to parse refresh response: %w", errUnmarshal)
 	}
 
 	// Extract account ID from ID token
-	claims, err := ParseJWTToken(tokenResp.IDToken)
-	if err != nil {
-		log.Warnf("Failed to parse refreshed ID token: %v", err)
+	claims, errParseJWT := ParseJWTToken(tokenResp.IDToken)
+	if errParseJWT != nil {
+		log.Warnf("Failed to parse refreshed ID token: %v", errParseJWT)
 	}
 
 	accountID := ""
@@ -265,12 +316,24 @@ func (o *CodexAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken str
 		if err == nil {
 			return tokenData, nil
 		}
+		if isNonRetryableRefreshErr(err) {
+			log.Warnf("Token refresh attempt %d failed with non-retryable error: %v", attempt+1, err)
+			return nil, err
+		}
 
 		lastErr = err
 		log.Warnf("Token refresh attempt %d failed: %v", attempt+1, err)
 	}
 
 	return nil, fmt.Errorf("token refresh failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+func isNonRetryableRefreshErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	raw := strings.ToLower(err.Error())
+	return strings.Contains(raw, "refresh_token_reused")
 }
 
 // UpdateTokenStorage updates an existing CodexTokenStorage with new token data.

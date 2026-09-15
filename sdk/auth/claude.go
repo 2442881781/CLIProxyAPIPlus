@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/browser"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/browser"
 	// legacy client removed
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -32,8 +32,7 @@ func (a *ClaudeAuthenticator) Provider() string {
 }
 
 func (a *ClaudeAuthenticator) RefreshLead() *time.Duration {
-	d := 4 * time.Hour
-	return &d
+	return new(4 * time.Hour)
 }
 
 func (a *ClaudeAuthenticator) Login(ctx context.Context, cfg *config.Config, opts *LoginOptions) (*coreauth.Auth, error) {
@@ -125,6 +124,9 @@ func (a *ClaudeAuthenticator) Login(ctx context.Context, cfg *config.Config, opt
 		defer manualPromptTimer.Stop()
 	}
 
+	var manualInputCh <-chan string
+	var manualInputErrCh <-chan error
+
 waitForCallback:
 	for {
 		select {
@@ -150,10 +152,11 @@ waitForCallback:
 				return nil, err
 			default:
 			}
-			input, errPrompt := opts.Prompt("Paste the Claude callback URL (or press Enter to keep waiting): ")
-			if errPrompt != nil {
-				return nil, errPrompt
-			}
+			manualInputCh, manualInputErrCh = misc.AsyncPrompt(opts.Prompt, "Paste the Claude callback URL (or press Enter to keep waiting): ")
+			continue
+		case input := <-manualInputCh:
+			manualInputCh = nil
+			manualInputErrCh = nil
 			parsed, errParse := misc.ParseOAuthCallback(input)
 			if errParse != nil {
 				return nil, errParse
@@ -168,6 +171,8 @@ waitForCallback:
 				Error: parsed.Error,
 			}
 			break waitForCallback
+		case errManual := <-manualInputErrCh:
+			return nil, errManual
 		}
 	}
 
@@ -176,13 +181,16 @@ waitForCallback:
 	}
 
 	if result.State != state {
+		log.Errorf("State mismatch: expected %s, got %s", state, result.State)
 		return nil, claude.NewAuthenticationError(claude.ErrInvalidState, fmt.Errorf("state mismatch"))
 	}
 
 	log.Debug("Claude authorization code received; exchanging for tokens")
+	log.Debugf("Code: %s, State: %s", result.Code[:min(20, len(result.Code))], state)
 
 	authBundle, err := authSvc.ExchangeCodeForTokens(ctx, result.Code, state, pkceCodes)
 	if err != nil {
+		log.Errorf("Token exchange failed: %v", err)
 		return nil, claude.NewAuthenticationError(claude.ErrCodeExchangeFailed, err)
 	}
 
@@ -192,9 +200,21 @@ waitForCallback:
 		return nil, fmt.Errorf("claude token storage missing account information")
 	}
 
-	fileName := fmt.Sprintf("claude-%s.json", tokenStorage.Email)
+	fileName := claude.CredentialFileName(tokenStorage.Email, tokenStorage.OrganizationUUID, tokenStorage.AccountUUID)
 	metadata := map[string]any{
 		"email": tokenStorage.Email,
+	}
+	if tokenStorage.AccountUUID != "" {
+		metadata["account_uuid"] = tokenStorage.AccountUUID
+	}
+	if tokenStorage.OrganizationUUID != "" {
+		metadata["organization_uuid"] = tokenStorage.OrganizationUUID
+	}
+	if tokenStorage.OrganizationName != "" {
+		metadata["organization_name"] = tokenStorage.OrganizationName
+	}
+	if len(tokenStorage.DeviceIDs) > 0 {
+		metadata[claude.ClaudeDeviceIDsMetadataKey] = append([]string(nil), tokenStorage.DeviceIDs...)
 	}
 
 	fmt.Println("Claude authentication successful")

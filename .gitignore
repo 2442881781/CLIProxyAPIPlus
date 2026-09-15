@@ -1,6 +1,5 @@
 # Binaries
 cli-proxy-api
-cliproxy
 *.exe
 
 # Configuration
@@ -8,11 +7,17 @@ config.yaml
 .env
 
 # Generated content
+# Frontend dependencies and generated output
+web/management-center/node_modules/
+web/management-center/dist/
+
 bin/*
-logs/*
+/logs
 conv/*
 temp/*
 refs/*
+plugins/*
+examples/plugin/bin/*
 
 # Storage backends
 pgstore/*
@@ -24,29 +29,45 @@ static/*
 
 # Authentication data
 auths/*
+/auths
 !auths/.gitkeep
 
 # Documentation
 docs/*
 AGENTS.md
+!web/management-center/AGENTS.md
 CLAUDE.md
 GEMINI.md
+AGENTS.override.md
 
 # Tooling metadata
 .vscode/*
+.worktrees/
 .codex/*
 .claude/*
+.claude
 .gemini/*
 .serena/*
 .agent/*
-.agents/*
+.agents
+.pi
 .agents/*
 .opencode/*
+.idea/*
+.beads/*
 .bmad/*
 _bmad/*
 _bmad-output/*
-.mcp/cache/
+.gocache/
+.gitnexus/
 
 # macOS
 .DS_Store
 ._*
+
+# docker
+docker-compose.override.yml
+
+
+# Local LLM Wiki vault
+.llm-wiki

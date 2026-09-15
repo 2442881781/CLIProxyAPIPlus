@@ -1,786 +1,522 @@
-// Package registry provides model definitions for various AI service providers.
-// This file contains static model definitions that can be used by clients
-// when registering their supported models.
+// Package registry provides model definitions and lookup helpers for various AI providers.
+// Static model metadata is loaded from the embedded models.json file and can be refreshed from network.
 package registry
 
-// GetClaudeModels returns the standard Claude model definitions
+import (
+	"strings"
+)
+
+const (
+	codexBuiltinImage15ModelID         = "gpt-image-1.5"
+	codexBuiltinImageModelID           = "gpt-image-2"
+	codexBuiltinImage25FlareModelID    = "gpt-image-2.5-flare"
+	codexBuiltinImage25SunburstModelID = "gpt-image-2.5-sunburst"
+	codexBuiltinImage25ModelID         = "gpt-image-2.5"
+	xaiBuiltinImageModelID             = "grok-imagine-image"
+	xaiBuiltinImageQualityModelID      = "grok-imagine-image-quality"
+	xaiBuiltinImage20ModelID           = "grok-imagine-image-2.0"
+	xaiBuiltinVideoModelID             = "grok-imagine-video"
+	xaiBuiltinVideo15ModelID           = "grok-imagine-video-1.5"
+	xaiBuiltinVideo15PreviewID         = "grok-imagine-video-1.5-preview"
+)
+
+// staticModelsJSON mirrors the top-level structure of models.json.
+type staticModelsJSON struct {
+	Claude      []*ModelInfo `json:"claude"`
+	Gemini      []*ModelInfo `json:"gemini"`
+	Vertex      []*ModelInfo `json:"vertex"`
+	AIStudio    []*ModelInfo `json:"aistudio"`
+	CodexFree   []*ModelInfo `json:"codex-free"`
+	CodexTeam   []*ModelInfo `json:"codex-team"`
+	CodexPlus   []*ModelInfo `json:"codex-plus"`
+	CodexPro    []*ModelInfo `json:"codex-pro"`
+	Kimi        []*ModelInfo `json:"kimi"`
+	Antigravity []*ModelInfo `json:"antigravity"`
+	XAI         []*ModelInfo `json:"xai"`
+	Devin       []*ModelInfo `json:"devin"`
+}
+
+// GetClaudeModels returns the standard Claude model definitions.
 func GetClaudeModels() []*ModelInfo {
-	return []*ModelInfo{
-
-		{
-			ID:                  "claude-haiku-4-5-20251001",
-			Object:              "model",
-			Created:             1759276800, // 2025-10-01
-			OwnedBy:             "anthropic",
-			Type:                "claude",
-			DisplayName:         "Claude 4.5 Haiku",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			// Thinking: not supported for Haiku models
-		},
-		{
-			ID:                  "claude-sonnet-4-5-20250929",
-			Object:              "model",
-			Created:             1759104000, // 2025-09-29
-			OwnedBy:             "anthropic",
-			Type:                "claude",
-			DisplayName:         "Claude 4.5 Sonnet",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: true, DynamicAllowed: false},
-		},
-		{
-			ID:                  "claude-opus-4-5-20251101",
-			Object:              "model",
-			Created:             1761955200, // 2025-11-01
-			OwnedBy:             "anthropic",
-			Type:                "claude",
-			DisplayName:         "Claude 4.5 Opus",
-			Description:         "Premium model combining maximum intelligence with practical performance",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: true, DynamicAllowed: false},
-		},
-		{
-			ID:                  "claude-opus-4-1-20250805",
-			Object:              "model",
-			Created:             1722945600, // 2025-08-05
-			OwnedBy:             "anthropic",
-			Type:                "claude",
-			DisplayName:         "Claude 4.1 Opus",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: false, DynamicAllowed: false},
-		},
-		{
-			ID:                  "claude-opus-4-20250514",
-			Object:              "model",
-			Created:             1715644800, // 2025-05-14
-			OwnedBy:             "anthropic",
-			Type:                "claude",
-			DisplayName:         "Claude 4 Opus",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: false, DynamicAllowed: false},
-		},
-		{
-			ID:                  "claude-sonnet-4-20250514",
-			Object:              "model",
-			Created:             1715644800, // 2025-05-14
-			OwnedBy:             "anthropic",
-			Type:                "claude",
-			DisplayName:         "Claude 4 Sonnet",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: false, DynamicAllowed: false},
-		},
-		{
-			ID:                  "claude-3-7-sonnet-20250219",
-			Object:              "model",
-			Created:             1708300800, // 2025-02-19
-			OwnedBy:             "anthropic",
-			Type:                "claude",
-			DisplayName:         "Claude 3.7 Sonnet",
-			ContextLength:       128000,
-			MaxCompletionTokens: 8192,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: false, DynamicAllowed: false},
-		},
-		{
-			ID:                  "claude-3-5-haiku-20241022",
-			Object:              "model",
-			Created:             1729555200, // 2024-10-22
-			OwnedBy:             "anthropic",
-			Type:                "claude",
-			DisplayName:         "Claude 3.5 Haiku",
-			ContextLength:       128000,
-			MaxCompletionTokens: 8192,
-			// Thinking: not supported for Haiku models
-		},
-	}
+	return cloneModelInfos(getModels().Claude)
 }
 
-// GetGeminiModels returns the standard Gemini model definitions
+// GetGeminiModels returns the standard Gemini model definitions.
 func GetGeminiModels() []*ModelInfo {
-	return []*ModelInfo{
-		{
-			ID:                         "gemini-2.5-pro",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-pro",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Pro",
-			Description:                "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true},
-		},
-		{
-			ID:                         "gemini-2.5-flash",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash",
-			Version:                    "001",
-			DisplayName:                "Gemini 2.5 Flash",
-			Description:                "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                         "gemini-2.5-flash-lite",
-			Object:                     "model",
-			Created:                    1753142400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash-lite",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Flash Lite",
-			Description:                "Our smallest and most cost effective model, built for at scale usage.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                         "gemini-3-pro-preview",
-			Object:                     "model",
-			Created:                    1737158400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-pro-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Pro Preview",
-			Description:                "Gemini 3 Pro Preview",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"low", "high"}},
-		},
-		{
-			ID:                         "gemini-3-flash-preview",
-			Object:                     "model",
-			Created:                    1765929600,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-flash-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Flash Preview",
-			Description:                "Gemini 3 Flash Preview",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"minimal", "low", "medium", "high"}},
-		},
-		{
-			ID:                         "gemini-3-pro-image-preview",
-			Object:                     "model",
-			Created:                    1737158400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-pro-image-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Pro Image Preview",
-			Description:                "Gemini 3 Pro Image Preview",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"low", "high"}},
-		},
-	}
+	return cloneModelInfos(getModels().Gemini)
 }
 
+// GetGeminiVertexModels returns Gemini model definitions for Vertex AI.
 func GetGeminiVertexModels() []*ModelInfo {
-	return []*ModelInfo{
-		{
-			ID:                         "gemini-2.5-pro",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-pro",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Pro",
-			Description:                "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true},
-		},
-		{
-			ID:                         "gemini-2.5-flash",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash",
-			Version:                    "001",
-			DisplayName:                "Gemini 2.5 Flash",
-			Description:                "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                         "gemini-2.5-flash-lite",
-			Object:                     "model",
-			Created:                    1753142400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash-lite",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Flash Lite",
-			Description:                "Our smallest and most cost effective model, built for at scale usage.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                         "gemini-3-pro-preview",
-			Object:                     "model",
-			Created:                    1737158400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-pro-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Pro Preview",
-			Description:                "Gemini 3 Pro Preview",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"low", "high"}},
-		},
-		{
-			ID:                         "gemini-3-flash-preview",
-			Object:                     "model",
-			Created:                    1765929600,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-flash-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Flash Preview",
-			Description:                "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"minimal", "low", "medium", "high"}},
-		},
-		{
-			ID:                         "gemini-3-pro-image-preview",
-			Object:                     "model",
-			Created:                    1737158400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-pro-image-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Pro Image Preview",
-			Description:                "Gemini 3 Pro Image Preview",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"low", "high"}},
-		},
-	}
+	return cloneModelInfos(getModels().Vertex)
 }
 
-// GetGeminiCLIModels returns the standard Gemini model definitions
-func GetGeminiCLIModels() []*ModelInfo {
-	return []*ModelInfo{
-		{
-			ID:                         "gemini-2.5-pro",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-pro",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Pro",
-			Description:                "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true},
-		},
-		{
-			ID:                         "gemini-2.5-flash",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash",
-			Version:                    "001",
-			DisplayName:                "Gemini 2.5 Flash",
-			Description:                "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                         "gemini-2.5-flash-lite",
-			Object:                     "model",
-			Created:                    1753142400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash-lite",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Flash Lite",
-			Description:                "Our smallest and most cost effective model, built for at scale usage.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                         "gemini-3-pro-preview",
-			Object:                     "model",
-			Created:                    1737158400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-pro-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Pro Preview",
-			Description:                "Our most intelligent model with SOTA reasoning and multimodal understanding, and powerful agentic and vibe coding capabilities",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"low", "high"}},
-		},
-		{
-			ID:                         "gemini-3-flash-preview",
-			Object:                     "model",
-			Created:                    1765929600,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-flash-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Flash Preview",
-			Description:                "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"minimal", "low", "medium", "high"}},
-		},
-	}
-}
-
-// GetAIStudioModels returns the Gemini model definitions for AI Studio integrations
+// GetAIStudioModels returns model definitions for AI Studio.
 func GetAIStudioModels() []*ModelInfo {
-	return []*ModelInfo{
-		{
-			ID:                         "gemini-2.5-pro",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-pro",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Pro",
-			Description:                "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true},
+	return cloneModelInfos(getModels().AIStudio)
+}
+
+// GetCodexFreeModels returns model definitions for the Codex free plan tier.
+func GetCodexFreeModels() []*ModelInfo {
+	return WithCodexBuiltins(cloneModelInfos(getModels().CodexFree))
+}
+
+// GetCodexTeamModels returns model definitions for the Codex team plan tier.
+func GetCodexTeamModels() []*ModelInfo {
+	return WithCodexBuiltins(cloneModelInfos(getModels().CodexTeam))
+}
+
+// GetCodexPlusModels returns model definitions for the Codex plus plan tier.
+func GetCodexPlusModels() []*ModelInfo {
+	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPlus))
+}
+
+// GetCodexProModels returns model definitions for the Codex pro plan tier.
+func GetCodexProModels() []*ModelInfo {
+	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPro))
+}
+
+// GetKimiModels returns the standard Kimi (Moonshot AI) model definitions.
+func GetKimiModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Kimi)
+}
+
+// GetAntigravityModels returns the standard Antigravity model definitions.
+func GetAntigravityModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Antigravity)
+}
+
+var staticDevinModels = []*ModelInfo{
+	{
+		ID:                  "devin/swe-2",
+		Type:                "devin",
+		OwnedBy:             "cognition",
+		DisplayName:         "SWE-2",
+		ContextLength:       262000,
+		MaxCompletionTokens: 128000,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"medium", "high", "max"},
 		},
-		{
-			ID:                         "gemini-2.5-flash",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash",
-			Version:                    "001",
-			DisplayName:                "Gemini 2.5 Flash",
-			Description:                "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
+	},
+	{
+		ID:                  "devin/claude-fable-5-1",
+		Type:                "devin",
+		OwnedBy:             "anthropic",
+		DisplayName:         "Claude Fable 5.1",
+		ContextLength:       1000000,
+		MaxCompletionTokens: 64000,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "medium", "high", "xhigh", "max"},
 		},
-		{
-			ID:                         "gemini-2.5-flash-lite",
-			Object:                     "model",
-			Created:                    1753142400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash-lite",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Flash Lite",
-			Description:                "Our smallest and most cost effective model, built for at scale usage.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
+	},
+	{
+		ID:                  "devin/gpt-6-astra",
+		Type:                "devin",
+		OwnedBy:             "openai",
+		DisplayName:         "GPT-6 Astra",
+		ContextLength:       1000000,
+		MaxCompletionTokens: 64000,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "medium", "high", "xhigh", "max"},
 		},
-		{
-			ID:                         "gemini-3-pro-preview",
-			Object:                     "model",
-			Created:                    1737158400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-pro-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Pro Preview",
-			Description:                "Gemini 3 Pro Preview",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true},
+	},
+	{
+		ID:                  "devin/glm-5-2",
+		Type:                "devin",
+		OwnedBy:             "zhipu",
+		DisplayName:         "GLM-5.2",
+		ContextLength:       200000,
+		MaxCompletionTokens: 64000,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"none", "high"},
 		},
-		{
-			ID:                         "gemini-3-flash-preview",
-			Object:                     "model",
-			Created:                    1765929600,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-3-flash-preview",
-			Version:                    "3.0",
-			DisplayName:                "Gemini 3 Flash Preview",
-			Description:                "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true},
+	},
+	{
+		ID:                  "devin/glm-5-3",
+		Type:                "devin",
+		OwnedBy:             "zhipu",
+		DisplayName:         "GLM-5.3",
+		ContextLength:       1048576,
+		MaxCompletionTokens: 128000,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "high", "max"},
 		},
-		{
-			ID:                         "gemini-pro-latest",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-pro-latest",
-			Version:                    "2.5",
-			DisplayName:                "Gemini Pro Latest",
-			Description:                "Latest release of Gemini Pro",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true},
+	},
+	{
+		ID:                  "devin/glm-5-3-flash",
+		Type:                "devin",
+		OwnedBy:             "zhipu",
+		DisplayName:         "GLM-5.3 Flash",
+		ContextLength:       1000000,
+		MaxCompletionTokens: 128000,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "high", "max"},
 		},
-		{
-			ID:                         "gemini-flash-latest",
-			Object:                     "model",
-			Created:                    1750118400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-flash-latest",
-			Version:                    "2.5",
-			DisplayName:                "Gemini Flash Latest",
-			Description:                "Latest release of Gemini Flash",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
+	},
+	{
+		ID:                  "devin/gpt-5-6-sol",
+		Type:                "devin",
+		OwnedBy:             "openai",
+		DisplayName:         "GPT-5.6 Sol",
+		ContextLength:       1000000,
+		MaxCompletionTokens: 128000,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"none", "low", "medium", "high", "xhigh", "max"},
 		},
-		{
-			ID:                         "gemini-flash-lite-latest",
-			Object:                     "model",
-			Created:                    1753142400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-flash-lite-latest",
-			Version:                    "2.5",
-			DisplayName:                "Gemini Flash-Lite Latest",
-			Description:                "Latest release of Gemini Flash-Lite",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           65536,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			Thinking:                   &ThinkingSupport{Min: 512, Max: 24576, ZeroAllowed: true, DynamicAllowed: true},
+	},
+	{
+		ID:                  "devin/gemini-3-8-flash",
+		Type:                "devin",
+		OwnedBy:             "google",
+		DisplayName:         "Gemini 3.8 Flash",
+		ContextLength:       1048576,
+		MaxCompletionTokens: 65536,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "medium", "high"},
 		},
-		{
-			ID:                         "gemini-2.5-flash-image-preview",
-			Object:                     "model",
-			Created:                    1756166400,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash-image-preview",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Flash Image Preview",
-			Description:                "State-of-the-art image generation and editing model.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           8192,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			// image models don't support thinkingConfig; leave Thinking nil
+	},
+	{
+		ID:                  "devin/grok-4-6",
+		Type:                "devin",
+		OwnedBy:             "xai",
+		DisplayName:         "Grok 4.6",
+		ContextLength:       500000,
+		MaxCompletionTokens: 131072,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "medium", "high", "xhigh"},
 		},
-		{
-			ID:                         "gemini-2.5-flash-image",
-			Object:                     "model",
-			Created:                    1759363200,
-			OwnedBy:                    "google",
-			Type:                       "gemini",
-			Name:                       "models/gemini-2.5-flash-image",
-			Version:                    "2.5",
-			DisplayName:                "Gemini 2.5 Flash Image",
-			Description:                "State-of-the-art image generation and editing model.",
-			InputTokenLimit:            1048576,
-			OutputTokenLimit:           8192,
-			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
-			// image models don't support thinkingConfig; leave Thinking nil
+	},
+	{
+		ID:                  "devin/deepseek-v4-flash",
+		Type:                "devin",
+		OwnedBy:             "deepseek",
+		DisplayName:         "DeepSeek V4 Flash",
+		ContextLength:       1048576,
+		MaxCompletionTokens: 64000,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"high", "max"},
 		},
+	},
+	{
+		ID:                  "devin/deepseek-v4-1-flash",
+		Type:                "devin",
+		OwnedBy:             "deepseek",
+		DisplayName:         "DeepSeek V4.1 Flash",
+		ContextLength:       1048576,
+		MaxCompletionTokens: 64000,
+		Thinking: &ThinkingSupport{
+			Levels: []string{"high", "max"},
+		},
+	},
+}
+
+// AntigravityWebSearchModelFor returns the Antigravity model that should run a
+// native web search request for modelID.
+func AntigravityWebSearchModelFor(modelID string) string {
+	modelID = normalizeAntigravityCapabilityModelID(modelID)
+	if modelID == "" {
+		return ""
+	}
+	for _, model := range GetGlobalRegistry().GetAvailableModelsByProvider("antigravity") {
+		if model == nil {
+			continue
+		}
+		currentModelID := normalizeAntigravityCapabilityModelID(model.ID)
+		if currentModelID == "" {
+			continue
+		}
+		if currentModelID == modelID {
+			if model.SupportsWebSearch {
+				return currentModelID
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// GetXAIModels returns the standard xAI Grok model definitions.
+func GetXAIModels() []*ModelInfo {
+	return WithXAIBuiltins(cloneModelInfos(getModels().XAI))
+}
+
+// WithCodexBuiltins injects hard-coded Codex-only model definitions that should
+// not depend on remote models.json updates. Built-ins replace any matching IDs
+// already present in the provided slice.
+func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
+	return upsertModelInfos(models,
+		codexBuiltinImage15ModelInfo(),
+		codexBuiltinImageModelInfo(),
+		codexBuiltinImage25FlareModelInfo(),
+		codexBuiltinImage25SunburstModelInfo(),
+		codexBuiltinImage25ModelInfo(),
+	)
+}
+
+// WithXAIBuiltins injects hard-coded xAI image/video model definitions that should
+// not depend on remote models.json updates.
+func WithXAIBuiltins(models []*ModelInfo) []*ModelInfo {
+	return upsertModelInfos(models, xaiBuiltinImageModelInfo(), xaiBuiltinImageQualityModelInfo(), xaiBuiltinImage20ModelInfo(), xaiBuiltinVideoModelInfo(), xaiBuiltinVideo15ModelInfo(), xaiBuiltinVideo15PreviewModelInfo())
+}
+
+func normalizeAntigravityCapabilityModelID(modelID string) string {
+	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	if open := strings.LastIndex(modelID, "("); open >= 0 && strings.HasSuffix(modelID, ")") {
+		modelID = strings.TrimSpace(modelID[:open])
+	}
+	return modelID
+}
+
+func codexBuiltinImage15ModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage15ModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 1.5",
+		Version:     codexBuiltinImage15ModelID,
 	}
 }
 
-// GetOpenAIModels returns the standard OpenAI model definitions
-func GetOpenAIModels() []*ModelInfo {
-	return []*ModelInfo{
-		{
-			ID:                  "gpt-5",
-			Object:              "model",
-			Created:             1754524800,
-			OwnedBy:             "openai",
-			Type:                "openai",
-			Version:             "gpt-5-2025-08-07",
-			DisplayName:         "GPT 5",
-			Description:         "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
-			ContextLength:       400000,
-			MaxCompletionTokens: 128000,
-			SupportedParameters: []string{"tools"},
-			Thinking:            &ThinkingSupport{Levels: []string{"minimal", "low", "medium", "high"}},
-		},
-		{
-			ID:                  "gpt-5-codex",
-			Object:              "model",
-			Created:             1757894400,
-			OwnedBy:             "openai",
-			Type:                "openai",
-			Version:             "gpt-5-2025-09-15",
-			DisplayName:         "GPT 5 Codex",
-			Description:         "Stable version of GPT 5 Codex, The best model for coding and agentic tasks across domains.",
-			ContextLength:       400000,
-			MaxCompletionTokens: 128000,
-			SupportedParameters: []string{"tools"},
-			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high"}},
-		},
-		{
-			ID:                  "gpt-5-codex-mini",
-			Object:              "model",
-			Created:             1762473600,
-			OwnedBy:             "openai",
-			Type:                "openai",
-			Version:             "gpt-5-2025-11-07",
-			DisplayName:         "GPT 5 Codex Mini",
-			Description:         "Stable version of GPT 5 Codex Mini: cheaper, faster, but less capable version of GPT 5 Codex.",
-			ContextLength:       400000,
-			MaxCompletionTokens: 128000,
-			SupportedParameters: []string{"tools"},
-			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high"}},
-		},
-		{
-			ID:                  "gpt-5.1",
-			Object:              "model",
-			Created:             1762905600,
-			OwnedBy:             "openai",
-			Type:                "openai",
-			Version:             "gpt-5.1-2025-11-12",
-			DisplayName:         "GPT 5",
-			Description:         "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
-			ContextLength:       400000,
-			MaxCompletionTokens: 128000,
-			SupportedParameters: []string{"tools"},
-			Thinking:            &ThinkingSupport{Levels: []string{"none", "low", "medium", "high"}},
-		},
-		{
-			ID:                  "gpt-5.1-codex",
-			Object:              "model",
-			Created:             1762905600,
-			OwnedBy:             "openai",
-			Type:                "openai",
-			Version:             "gpt-5.1-2025-11-12",
-			DisplayName:         "GPT 5.1 Codex",
-			Description:         "Stable version of GPT 5.1 Codex, The best model for coding and agentic tasks across domains.",
-			ContextLength:       400000,
-			MaxCompletionTokens: 128000,
-			SupportedParameters: []string{"tools"},
-			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high"}},
-		},
-		{
-			ID:                  "gpt-5.1-codex-mini",
-			Object:              "model",
-			Created:             1762905600,
-			OwnedBy:             "openai",
-			Type:                "openai",
-			Version:             "gpt-5.1-2025-11-12",
-			DisplayName:         "GPT 5.1 Codex Mini",
-			Description:         "Stable version of GPT 5.1 Codex Mini: cheaper, faster, but less capable version of GPT 5.1 Codex.",
-			ContextLength:       400000,
-			MaxCompletionTokens: 128000,
-			SupportedParameters: []string{"tools"},
-			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high"}},
-		},
-		{
-			ID:                  "gpt-5.1-codex-max",
-			Object:              "model",
-			Created:             1763424000,
-			OwnedBy:             "openai",
-			Type:                "openai",
-			Version:             "gpt-5.1-max",
-			DisplayName:         "GPT 5.1 Codex Max",
-			Description:         "Stable version of GPT 5.1 Codex Max",
-			ContextLength:       400000,
-			MaxCompletionTokens: 128000,
-			SupportedParameters: []string{"tools"},
-			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh"}},
-		},
-		{
-			ID:                  "gpt-5.2",
-			Object:              "model",
-			Created:             1765440000,
-			OwnedBy:             "openai",
-			Type:                "openai",
-			Version:             "gpt-5.2",
-			DisplayName:         "GPT 5.2",
-			Description:         "Stable version of GPT 5.2",
-			ContextLength:       400000,
-			MaxCompletionTokens: 128000,
-			SupportedParameters: []string{"tools"},
-			Thinking:            &ThinkingSupport{Levels: []string{"none", "low", "medium", "high", "xhigh"}},
-		},
-		{
-			ID:                  "gpt-5.2-codex",
-			Object:              "model",
-			Created:             1765440000,
-			OwnedBy:             "openai",
-			Type:                "openai",
-			Version:             "gpt-5.2",
-			DisplayName:         "GPT 5.2 Codex",
-			Description:         "Stable version of GPT 5.2 Codex, The best model for coding and agentic tasks across domains.",
-			ContextLength:       400000,
-			MaxCompletionTokens: 128000,
-			SupportedParameters: []string{"tools"},
-			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh"}},
-		},
+func codexBuiltinImageModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImageModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2",
+		Version:     codexBuiltinImageModelID,
 	}
 }
 
-// GetQwenModels returns the standard Qwen model definitions
-func GetQwenModels() []*ModelInfo {
-	return []*ModelInfo{
-		{
-			ID:                  "qwen3-coder-plus",
-			Object:              "model",
-			Created:             1753228800,
-			OwnedBy:             "qwen",
-			Type:                "qwen",
-			Version:             "3.0",
-			DisplayName:         "Qwen3 Coder Plus",
-			Description:         "Advanced code generation and understanding model",
-			ContextLength:       32768,
-			MaxCompletionTokens: 8192,
-			SupportedParameters: []string{"temperature", "top_p", "max_tokens", "stream", "stop"},
-		},
-		{
-			ID:                  "qwen3-coder-flash",
-			Object:              "model",
-			Created:             1753228800,
-			OwnedBy:             "qwen",
-			Type:                "qwen",
-			Version:             "3.0",
-			DisplayName:         "Qwen3 Coder Flash",
-			Description:         "Fast code generation model",
-			ContextLength:       8192,
-			MaxCompletionTokens: 2048,
-			SupportedParameters: []string{"temperature", "top_p", "max_tokens", "stream", "stop"},
-		},
-		{
-			ID:                  "vision-model",
-			Object:              "model",
-			Created:             1758672000,
-			OwnedBy:             "qwen",
-			Type:                "qwen",
-			Version:             "3.0",
-			DisplayName:         "Qwen3 Vision Model",
-			Description:         "Vision model model",
-			ContextLength:       32768,
-			MaxCompletionTokens: 2048,
-			SupportedParameters: []string{"temperature", "top_p", "max_tokens", "stream", "stop"},
-		},
+func codexBuiltinImage25FlareModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage25FlareModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2.5 Flare",
+		Version:     codexBuiltinImage25FlareModelID,
 	}
 }
 
-// iFlowThinkingSupport is a shared ThinkingSupport configuration for iFlow models
-// that support thinking mode via chat_template_kwargs.enable_thinking (boolean toggle).
-// Uses level-based configuration so standard normalization flows apply before conversion.
-var iFlowThinkingSupport = &ThinkingSupport{
-	Levels: []string{"none", "auto", "minimal", "low", "medium", "high", "xhigh"},
+func codexBuiltinImage25SunburstModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage25SunburstModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2.5 Sunburst",
+		Version:     codexBuiltinImage25SunburstModelID,
+	}
 }
 
-// GetIFlowModels returns supported models for iFlow OAuth accounts.
-func GetIFlowModels() []*ModelInfo {
-	entries := []struct {
-		ID          string
-		DisplayName string
-		Description string
-		Created     int64
-		Thinking    *ThinkingSupport
-	}{
-		{ID: "tstars2.0", DisplayName: "TStars-2.0", Description: "iFlow TStars-2.0 multimodal assistant", Created: 1746489600},
-		{ID: "qwen3-coder-plus", DisplayName: "Qwen3-Coder-Plus", Description: "Qwen3 Coder Plus code generation", Created: 1753228800},
-		{ID: "qwen3-max", DisplayName: "Qwen3-Max", Description: "Qwen3 flagship model", Created: 1758672000},
-		{ID: "qwen3-vl-plus", DisplayName: "Qwen3-VL-Plus", Description: "Qwen3 multimodal vision-language", Created: 1758672000},
-		{ID: "qwen3-max-preview", DisplayName: "Qwen3-Max-Preview", Description: "Qwen3 Max preview build", Created: 1757030400},
-		{ID: "kimi-k2-0905", DisplayName: "Kimi-K2-Instruct-0905", Description: "Moonshot Kimi K2 instruct 0905", Created: 1757030400},
-		{ID: "glm-4.6", DisplayName: "GLM-4.6", Description: "Zhipu GLM 4.6 general model", Created: 1759190400, Thinking: iFlowThinkingSupport},
-		{ID: "glm-4.7", DisplayName: "GLM-4.7", Description: "Zhipu GLM 4.7 general model", Created: 1766448000, Thinking: iFlowThinkingSupport},
-		{ID: "kimi-k2", DisplayName: "Kimi-K2", Description: "Moonshot Kimi K2 general model", Created: 1752192000},
-		{ID: "kimi-k2-thinking", DisplayName: "Kimi-K2-Thinking", Description: "Moonshot Kimi K2 thinking model", Created: 1762387200},
-		{ID: "deepseek-v3.2-chat", DisplayName: "DeepSeek-V3.2", Description: "DeepSeek V3.2 Chat", Created: 1764576000},
-		{ID: "deepseek-v3.2-reasoner", DisplayName: "DeepSeek-V3.2", Description: "DeepSeek V3.2 Reasoner", Created: 1764576000},
-		{ID: "deepseek-v3.2", DisplayName: "DeepSeek-V3.2-Exp", Description: "DeepSeek V3.2 experimental", Created: 1759104000},
-		{ID: "deepseek-v3.1", DisplayName: "DeepSeek-V3.1-Terminus", Description: "DeepSeek V3.1 Terminus", Created: 1756339200},
-		{ID: "deepseek-r1", DisplayName: "DeepSeek-R1", Description: "DeepSeek reasoning model R1", Created: 1737331200},
-		{ID: "deepseek-v3", DisplayName: "DeepSeek-V3-671B", Description: "DeepSeek V3 671B", Created: 1734307200},
-		{ID: "qwen3-32b", DisplayName: "Qwen3-32B", Description: "Qwen3 32B", Created: 1747094400},
-		{ID: "qwen3-235b-a22b-thinking-2507", DisplayName: "Qwen3-235B-A22B-Thinking", Description: "Qwen3 235B A22B Thinking (2507)", Created: 1753401600},
-		{ID: "qwen3-235b-a22b-instruct", DisplayName: "Qwen3-235B-A22B-Instruct", Description: "Qwen3 235B A22B Instruct", Created: 1753401600},
-		{ID: "qwen3-235b", DisplayName: "Qwen3-235B-A22B", Description: "Qwen3 235B A22B", Created: 1753401600},
-		{ID: "minimax-m2", DisplayName: "MiniMax-M2", Description: "MiniMax M2", Created: 1758672000, Thinking: iFlowThinkingSupport},
-		{ID: "minimax-m2.1", DisplayName: "MiniMax-M2.1", Description: "MiniMax M2.1", Created: 1766448000, Thinking: iFlowThinkingSupport},
-		{ID: "iflow-rome-30ba3b", DisplayName: "iFlow-ROME", Description: "iFlow Rome 30BA3B model", Created: 1736899200},
+func codexBuiltinImage25ModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage25ModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2.5",
+		Version:     codexBuiltinImage25ModelID,
 	}
-	models := make([]*ModelInfo, 0, len(entries))
-	for _, entry := range entries {
-		models = append(models, &ModelInfo{
-			ID:          entry.ID,
-			Object:      "model",
-			Created:     entry.Created,
-			OwnedBy:     "iflow",
-			Type:        "iflow",
-			DisplayName: entry.DisplayName,
-			Description: entry.Description,
-			Thinking:    entry.Thinking,
-		})
-	}
-	return models
 }
 
-// AntigravityModelConfig captures static antigravity model overrides, including
-// Thinking budget limits and provider max completion tokens.
-type AntigravityModelConfig struct {
-	Thinking            *ThinkingSupport
-	MaxCompletionTokens int
-	Name                string
+func xaiBuiltinImageModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          xaiBuiltinImageModelID,
+		Object:      "model",
+		Created:     1735689600, // 2025-01-01
+		OwnedBy:     "xai",
+		Type:        "xai",
+		DisplayName: "Grok Imagine Image",
+		Name:        xaiBuiltinImageModelID,
+		Description: "xAI Grok image generation model.",
+	}
 }
 
-// GetAntigravityModelConfig returns static configuration for antigravity models.
-// Keys use upstream model names returned by the Antigravity models endpoint.
-func GetAntigravityModelConfig() map[string]*AntigravityModelConfig {
-	return map[string]*AntigravityModelConfig{
-		"gemini-2.5-flash":           {Thinking: &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true}, Name: "models/gemini-2.5-flash"},
-		"gemini-2.5-flash-lite":      {Thinking: &ThinkingSupport{Min: 0, Max: 24576, ZeroAllowed: true, DynamicAllowed: true}, Name: "models/gemini-2.5-flash-lite"},
-		"rev19-uic3-1p":              {Thinking: &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true}, Name: "models/rev19-uic3-1p"},
-		"gemini-3-pro-high":          {Thinking: &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"low", "high"}}, Name: "models/gemini-3-pro-high"},
-		"gemini-3-pro-image":         {Thinking: &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"low", "high"}}, Name: "models/gemini-3-pro-image"},
-		"gemini-3-flash":             {Thinking: &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true, Levels: []string{"minimal", "low", "medium", "high"}}, Name: "models/gemini-3-flash"},
-		"claude-sonnet-4-5-thinking": {Thinking: &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: true, DynamicAllowed: true}, MaxCompletionTokens: 64000},
-		"claude-opus-4-5-thinking":   {Thinking: &ThinkingSupport{Min: 1024, Max: 128000, ZeroAllowed: true, DynamicAllowed: true}, MaxCompletionTokens: 64000},
+func xaiBuiltinImageQualityModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          xaiBuiltinImageQualityModelID,
+		Object:      "model",
+		Created:     1735689600, // 2025-01-01
+		OwnedBy:     "xai",
+		Type:        "xai",
+		DisplayName: "Grok Imagine Image Quality",
+		Name:        xaiBuiltinImageQualityModelID,
+		Description: "xAI Grok higher-fidelity image generation model.",
 	}
+}
+
+func xaiBuiltinImage20ModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          xaiBuiltinImage20ModelID,
+		Object:      "model",
+		Created:     1786060800, // 2026-08-07
+		OwnedBy:     "xai",
+		Type:        "xai",
+		DisplayName: "Grok Imagine Image 2.0",
+		Name:        xaiBuiltinImage20ModelID,
+		Description: "xAI Grok image generation model.",
+	}
+}
+
+func xaiBuiltinVideoModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          xaiBuiltinVideoModelID,
+		Object:      "model",
+		Created:     1735689600, // 2025-01-01
+		OwnedBy:     "xai",
+		Type:        "xai",
+		DisplayName: "Grok Imagine Video",
+		Name:        xaiBuiltinVideoModelID,
+		Description: "xAI Grok video generation model.",
+	}
+}
+
+func xaiBuiltinVideo15ModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          xaiBuiltinVideo15ModelID,
+		Object:      "model",
+		Created:     1735689600, // 2025-01-01
+		OwnedBy:     "xai",
+		Type:        "xai",
+		DisplayName: "Grok Imagine Video 1.5",
+		Name:        xaiBuiltinVideo15ModelID,
+		Description: "xAI Grok video generation model.",
+	}
+}
+
+func xaiBuiltinVideo15PreviewModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          xaiBuiltinVideo15PreviewID,
+		Object:      "model",
+		Created:     1735689600, // 2025-01-01
+		OwnedBy:     "xai",
+		Type:        "xai",
+		DisplayName: "Grok Imagine Video 1.5 Preview",
+		Name:        xaiBuiltinVideo15PreviewID,
+		Description: "Compatibility alias for the xAI Grok video generation model.",
+	}
+}
+
+func upsertModelInfos(models []*ModelInfo, extras ...*ModelInfo) []*ModelInfo {
+	if len(extras) == 0 {
+		return models
+	}
+
+	extraIDs := make(map[string]struct{}, len(extras))
+	extraList := make([]*ModelInfo, 0, len(extras))
+	for _, extra := range extras {
+		if extra == nil {
+			continue
+		}
+		id := strings.TrimSpace(extra.ID)
+		if id == "" {
+			continue
+		}
+		key := strings.ToLower(id)
+		if _, exists := extraIDs[key]; exists {
+			continue
+		}
+		extraIDs[key] = struct{}{}
+		extraList = append(extraList, cloneModelInfo(extra))
+	}
+
+	if len(extraList) == 0 {
+		return models
+	}
+
+	filtered := make([]*ModelInfo, 0, len(models)+len(extraList))
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := extraIDs[strings.ToLower(id)]; exists {
+			continue
+		}
+		filtered = append(filtered, model)
+	}
+
+	filtered = append(filtered, extraList...)
+	return filtered
+}
+
+// cloneModelInfos returns a shallow copy of the slice with each element deep-cloned.
+func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]*ModelInfo, len(models))
+	for i, m := range models {
+		out[i] = cloneModelInfo(m)
+	}
+	return out
+}
+
+// GetStaticModelDefinitionsByChannel returns static model definitions for a given channel/provider.
+// It returns nil when the channel is unknown.
+//
+// Supported channels:
+//   - claude
+//   - gemini
+//   - gemini-interactions
+//   - vertex
+//   - aistudio
+//   - codex
+//   - kimi
+//   - antigravity
+//   - xai
+func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
+	key := strings.ToLower(strings.TrimSpace(channel))
+	switch key {
+	case "claude":
+		return GetClaudeModels()
+	case "gemini":
+		return GetGeminiModels()
+	case "gemini-interactions":
+		return GetGeminiModels()
+	case "vertex":
+		return GetGeminiVertexModels()
+	case "aistudio":
+		return GetAIStudioModels()
+	case "codex":
+		return GetCodexProModels()
+	case "kimi":
+		return GetKimiModels()
+	case "antigravity":
+		return GetAntigravityModels()
+	case "xai", "x-ai", "grok":
+		return GetXAIModels()
+	case "devin":
+		return GetDevinModels()
+	default:
+		return nil
+	}
+}
+
+// LookupStaticModelInfoByChannel searches one provider-specific static section.
+// It does not fall back across providers, so callers can preserve provenance.
+func LookupStaticModelInfoByChannel(modelID, channel string) *ModelInfo {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return nil
+	}
+	for _, model := range GetStaticModelDefinitionsByChannel(channel) {
+		if model != nil && model.ID == modelID {
+			return cloneModelInfo(model)
+		}
+	}
+	return nil
 }
 
 // LookupStaticModelInfo searches all static model definitions for a model by ID.
@@ -790,454 +526,26 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		return nil
 	}
 
+	data := getModels()
 	allModels := [][]*ModelInfo{
-		GetClaudeModels(),
-		GetGeminiModels(),
-		GetGeminiVertexModels(),
-		GetGeminiCLIModels(),
-		GetAIStudioModels(),
-		GetOpenAIModels(),
-		GetQwenModels(),
-		GetIFlowModels(),
+		data.Claude,
+		data.Gemini,
+		data.Vertex,
+		data.AIStudio,
+		data.CodexPro,
+		data.Kimi,
+		data.Antigravity,
+		data.XAI,
+		data.Devin,
+		staticDevinModels,
 	}
 	for _, models := range allModels {
 		for _, m := range models {
 			if m != nil && m.ID == modelID {
-				return m
+				return cloneModelInfo(m)
 			}
 		}
 	}
 
-	// Check Antigravity static config
-	if cfg := GetAntigravityModelConfig()[modelID]; cfg != nil && cfg.Thinking != nil {
-		return &ModelInfo{
-			ID:                  modelID,
-			Name:                cfg.Name,
-			Thinking:            cfg.Thinking,
-			MaxCompletionTokens: cfg.MaxCompletionTokens,
-		}
-	}
-
 	return nil
-}
-
-// GetGitHubCopilotModels returns the available models for GitHub Copilot.
-// These models are available through the GitHub Copilot API at api.githubcopilot.com.
-func GetGitHubCopilotModels() []*ModelInfo {
-	now := int64(1732752000) // 2024-11-27
-	return []*ModelInfo{
-		{
-			ID:                  "gpt-4.1",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-4.1",
-			Description:         "OpenAI GPT-4.1 via GitHub Copilot",
-			ContextLength:       128000,
-			MaxCompletionTokens: 16384,
-		},
-		{
-			ID:                  "gpt-5",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-5",
-			Description:         "OpenAI GPT-5 via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32768,
-			SupportedEndpoints:  []string{"/chat/completions", "/responses"},
-		},
-		{
-			ID:                  "gpt-5-mini",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-5 Mini",
-			Description:         "OpenAI GPT-5 Mini via GitHub Copilot",
-			ContextLength:       128000,
-			MaxCompletionTokens: 16384,
-			SupportedEndpoints:  []string{"/chat/completions", "/responses"},
-		},
-		{
-			ID:                  "gpt-5-codex",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-5 Codex",
-			Description:         "OpenAI GPT-5 Codex via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32768,
-			SupportedEndpoints:  []string{"/responses"},
-		},
-		{
-			ID:                  "gpt-5.1",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-5.1",
-			Description:         "OpenAI GPT-5.1 via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32768,
-			SupportedEndpoints:  []string{"/chat/completions", "/responses"},
-		},
-		{
-			ID:                  "gpt-5.1-codex",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-5.1 Codex",
-			Description:         "OpenAI GPT-5.1 Codex via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32768,
-			SupportedEndpoints:  []string{"/responses"},
-		},
-		{
-			ID:                  "gpt-5.1-codex-mini",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-5.1 Codex Mini",
-			Description:         "OpenAI GPT-5.1 Codex Mini via GitHub Copilot",
-			ContextLength:       128000,
-			MaxCompletionTokens: 16384,
-			SupportedEndpoints:  []string{"/responses"},
-		},
-		{
-			ID:                  "gpt-5.1-codex-max",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-5.1 Codex Max",
-			Description:         "OpenAI GPT-5.1 Codex Max via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32768,
-			SupportedEndpoints:  []string{"/responses"},
-		},
-		{
-			ID:                  "gpt-5.2",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-5.2",
-			Description:         "OpenAI GPT-5.2 via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32768,
-			SupportedEndpoints:  []string{"/chat/completions", "/responses"},
-		},
-		{
-			ID:                  "gpt-5.2-codex",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "GPT-5.2 Codex",
-			Description:         "OpenAI GPT-5.2 Codex via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32768,
-			SupportedEndpoints:  []string{"/responses"},
-		},
-		{
-			ID:                  "claude-haiku-4.5",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Claude Haiku 4.5",
-			Description:         "Anthropic Claude Haiku 4.5 via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			SupportedEndpoints:  []string{"/chat/completions"},
-		},
-		{
-			ID:                  "claude-opus-4.1",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Claude Opus 4.1",
-			Description:         "Anthropic Claude Opus 4.1 via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 32000,
-			SupportedEndpoints:  []string{"/chat/completions"},
-		},
-		{
-			ID:                  "claude-opus-4.5",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Claude Opus 4.5",
-			Description:         "Anthropic Claude Opus 4.5 via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			SupportedEndpoints:  []string{"/chat/completions"},
-		},
-		{
-			ID:                  "claude-sonnet-4",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Claude Sonnet 4",
-			Description:         "Anthropic Claude Sonnet 4 via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			SupportedEndpoints:  []string{"/chat/completions"},
-		},
-		{
-			ID:                  "claude-sonnet-4.5",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Claude Sonnet 4.5",
-			Description:         "Anthropic Claude Sonnet 4.5 via GitHub Copilot",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			SupportedEndpoints:  []string{"/chat/completions"},
-		},
-		{
-			ID:                  "gemini-2.5-pro",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Gemini 2.5 Pro",
-			Description:         "Google Gemini 2.5 Pro via GitHub Copilot",
-			ContextLength:       1048576,
-			MaxCompletionTokens: 65536,
-		},
-		{
-			ID:                  "gemini-3-pro-preview",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Gemini 3 Pro (Preview)",
-			Description:         "Google Gemini 3 Pro Preview via GitHub Copilot",
-			ContextLength:       1048576,
-			MaxCompletionTokens: 65536,
-		},
-		{
-			ID:                  "gemini-3-flash-preview",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Gemini 3 Flash (Preview)",
-			Description:         "Google Gemini 3 Flash Preview via GitHub Copilot",
-			ContextLength:       1048576,
-			MaxCompletionTokens: 65536,
-		},
-		{
-			ID:                  "grok-code-fast-1",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Grok Code Fast 1",
-			Description:         "xAI Grok Code Fast 1 via GitHub Copilot",
-			ContextLength:       128000,
-			MaxCompletionTokens: 16384,
-		},
-		{
-			ID:                  "oswe-vscode-prime",
-			Object:              "model",
-			Created:             now,
-			OwnedBy:             "github-copilot",
-			Type:                "github-copilot",
-			DisplayName:         "Raptor mini (Preview)",
-			Description:         "Raptor mini via GitHub Copilot",
-			ContextLength:       128000,
-			MaxCompletionTokens: 16384,
-			SupportedEndpoints:  []string{"/chat/completions", "/responses"},
-		},
-	}
-}
-
-// GetKiroModels returns the Kiro (AWS CodeWhisperer) model definitions
-func GetKiroModels() []*ModelInfo {
-	return []*ModelInfo{
-		// --- Base Models ---
-		{
-			ID:                  "kiro-auto",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Kiro Auto",
-			Description:         "Automatic model selection by Kiro",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                  "kiro-claude-opus-4-5",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Kiro Claude Opus 4.5",
-			Description:         "Claude Opus 4.5 via Kiro (2.2x credit)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                  "kiro-claude-sonnet-4-5",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Kiro Claude Sonnet 4.5",
-			Description:         "Claude Sonnet 4.5 via Kiro (1.3x credit)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                  "kiro-claude-sonnet-4",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Kiro Claude Sonnet 4",
-			Description:         "Claude Sonnet 4 via Kiro (1.3x credit)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                  "kiro-claude-haiku-4-5",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Kiro Claude Haiku 4.5",
-			Description:         "Claude Haiku 4.5 via Kiro (0.4x credit)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		// --- Agentic Variants (Optimized for coding agents with chunked writes) ---
-		{
-			ID:                  "kiro-claude-opus-4-5-agentic",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Kiro Claude Opus 4.5 (Agentic)",
-			Description:         "Claude Opus 4.5 optimized for coding agents (chunked writes)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                  "kiro-claude-sonnet-4-5-agentic",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Kiro Claude Sonnet 4.5 (Agentic)",
-			Description:         "Claude Sonnet 4.5 optimized for coding agents (chunked writes)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                  "kiro-claude-sonnet-4-agentic",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Kiro Claude Sonnet 4 (Agentic)",
-			Description:         "Claude Sonnet 4 optimized for coding agents (chunked writes)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
-		},
-		{
-			ID:                  "kiro-claude-haiku-4-5-agentic",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Kiro Claude Haiku 4.5 (Agentic)",
-			Description:         "Claude Haiku 4.5 optimized for coding agents (chunked writes)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
-		},
-	}
-}
-
-// GetAmazonQModels returns the Amazon Q (AWS CodeWhisperer) model definitions.
-// These models use the same API as Kiro and share the same executor.
-func GetAmazonQModels() []*ModelInfo {
-	return []*ModelInfo{
-		{
-			ID:                  "amazonq-auto",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro", // Uses Kiro executor - same API
-			DisplayName:         "Amazon Q Auto",
-			Description:         "Automatic model selection by Amazon Q",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-		},
-		{
-			ID:                  "amazonq-claude-opus-4.5",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Amazon Q Claude Opus 4.5",
-			Description:         "Claude Opus 4.5 via Amazon Q (2.2x credit)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-		},
-		{
-			ID:                  "amazonq-claude-sonnet-4.5",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Amazon Q Claude Sonnet 4.5",
-			Description:         "Claude Sonnet 4.5 via Amazon Q (1.3x credit)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-		},
-		{
-			ID:                  "amazonq-claude-sonnet-4",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Amazon Q Claude Sonnet 4",
-			Description:         "Claude Sonnet 4 via Amazon Q (1.3x credit)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-		},
-		{
-			ID:                  "amazonq-claude-haiku-4.5",
-			Object:              "model",
-			Created:             1732752000,
-			OwnedBy:             "aws",
-			Type:                "kiro",
-			DisplayName:         "Amazon Q Claude Haiku 4.5",
-			Description:         "Claude Haiku 4.5 via Amazon Q (0.4x credit)",
-			ContextLength:       200000,
-			MaxCompletionTokens: 64000,
-		},
-	}
 }

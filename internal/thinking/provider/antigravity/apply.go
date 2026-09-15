@@ -1,6 +1,6 @@
 // Package antigravity implements thinking configuration for Antigravity API format.
 //
-// Antigravity uses request.generationConfig.thinkingConfig.* path (same as gemini-cli)
+// Antigravity uses request.generationConfig.thinkingConfig.* path.
 // but requires additional normalization for Claude models:
 //   - Ensure thinking budget < max_tokens
 //   - Remove thinkingConfig if budget < minimum allowed
@@ -9,8 +9,8 @@ package antigravity
 import (
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -94,17 +94,26 @@ func (a *Applier) applyCompatible(body []byte, config thinking.ThinkingConfig, m
 }
 
 func (a *Applier) applyLevelFormat(body []byte, config thinking.ThinkingConfig) ([]byte, error) {
-	// Remove conflicting field to avoid both thinkingLevel and thinkingBudget in output
+	// Remove conflicting fields to avoid both thinkingLevel and thinkingBudget in output
 	result, _ := sjson.DeleteBytes(body, "request.generationConfig.thinkingConfig.thinkingBudget")
-	// Normalize includeThoughts field name to avoid oneof conflicts in upstream JSON parsing.
+	result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.thinking_budget")
+	result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.thinking_level")
+	// Normalize includeThoughts field name and retain only documented booleans.
+	result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.includeThoughts")
 	result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.include_thoughts")
 
 	if config.Mode == thinking.ModeNone {
-		result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.includeThoughts", false)
+		if config.Budget == 0 && config.Level == "" {
+			// With the amount fully disabled, visibility is irrelevant. Restoring
+			// includeThoughts alone would recreate thinkingConfig and let a
+			// default-on model think again.
+			result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig")
+			return result, nil
+		}
 		if config.Level != "" {
 			result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.thinkingLevel", string(config.Level))
 		}
-		return result, nil
+		return applyAntigravityIncludeThoughts(result, body), nil
 	}
 
 	// Only handle ModeLevel - budget conversion should be done by upper layer
@@ -114,39 +123,49 @@ func (a *Applier) applyLevelFormat(body []byte, config thinking.ThinkingConfig) 
 
 	level := string(config.Level)
 	result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.thinkingLevel", level)
-	result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.includeThoughts", true)
-	return result, nil
+	return applyAntigravityIncludeThoughts(result, body), nil
 }
 
 func (a *Applier) applyBudgetFormat(body []byte, config thinking.ThinkingConfig, modelInfo *registry.ModelInfo, isClaude bool) ([]byte, error) {
-	// Remove conflicting field to avoid both thinkingLevel and thinkingBudget in output
+	// Remove conflicting fields to avoid both thinkingLevel and thinkingBudget in output
 	result, _ := sjson.DeleteBytes(body, "request.generationConfig.thinkingConfig.thinkingLevel")
-	// Normalize includeThoughts field name to avoid oneof conflicts in upstream JSON parsing.
+	result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.thinking_level")
+	result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.thinking_budget")
+	// Normalize includeThoughts field name and retain only documented booleans.
+	result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.includeThoughts")
 	result, _ = sjson.DeleteBytes(result, "request.generationConfig.thinkingConfig.include_thoughts")
 
 	budget := config.Budget
-	includeThoughts := false
-	switch config.Mode {
-	case thinking.ModeNone:
-		includeThoughts = false
-	case thinking.ModeAuto:
-		includeThoughts = true
-	default:
-		includeThoughts = budget > 0
-	}
 
-	// Apply Claude-specific constraints
+	// Apply Claude-specific constraints first to get the final budget value
 	if isClaude && modelInfo != nil {
 		budget, result = a.normalizeClaudeBudget(budget, result, modelInfo)
-		// Check if budget was removed entirely
+		// Check if the thinking amount was removed entirely. Summary visibility is
+		// independent, so retain an explicit includeThoughts control if present.
 		if budget == -2 {
-			return result, nil
+			return applyAntigravityIncludeThoughts(result, body), nil
 		}
 	}
 
 	result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.thinkingBudget", budget)
-	result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.includeThoughts", includeThoughts)
-	return result, nil
+	return applyAntigravityIncludeThoughts(result, body), nil
+}
+
+func applyAntigravityIncludeThoughts(result, original []byte) []byte {
+	for _, path := range []string{
+		"request.generationConfig.thinkingConfig.includeThoughts",
+		"request.generationConfig.thinkingConfig.include_thoughts",
+	} {
+		switch value := gjson.GetBytes(original, path); value.Type {
+		case gjson.True:
+			result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.includeThoughts", true)
+			return result
+		case gjson.False:
+			result, _ = sjson.SetBytes(result, "request.generationConfig.thinkingConfig.includeThoughts", false)
+			return result
+		}
+	}
+	return result
 }
 
 // normalizeClaudeBudget applies Claude-specific constraints to thinking budget.

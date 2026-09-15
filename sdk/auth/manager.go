@@ -2,10 +2,15 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 // Manager aggregates authenticators and coordinates persistence via a token store.
@@ -66,24 +71,45 @@ func (m *Manager) Login(ctx context.Context, provider string, cfg *config.Config
 		if dirSetter, ok := m.store.(interface{ SetBaseDir(string) }); ok {
 			dirSetter.SetBaseDir(cfg.AuthDir)
 		}
+		if strings.TrimSpace(cfg.AuthDir) != "" {
+			targetFile := record.FileName
+			if targetFile == "" {
+				targetFile = record.ID
+			}
+			if targetFile != "" {
+				fullPath := filepath.Join(cfg.AuthDir, targetFile)
+				if raw, errRead := os.ReadFile(fullPath); errRead == nil && len(raw) > 0 {
+					var existingMap map[string]any
+					if errUnmarshal := json.Unmarshal(raw, &existingMap); errUnmarshal == nil && len(existingMap) > 0 {
+						coreauth.MergeExistingAuthMetadata(record, existingMap)
+					}
+				}
+			}
+		}
+	}
+	legacyClaudeCredential, errLegacy := claudeauth.FindMatchingLegacyCredential(ctx, m.store, record)
+	if errLegacy != nil {
+		return record, "", errLegacy
+	}
+	if legacyClaudeCredential != nil {
+		coreauth.MergeExistingAuthMetadata(record, legacyClaudeCredential.Metadata)
 	}
 
-	savedPath, err := m.store.Save(ctx, record)
+	savedPath, err := m.store.Save(coreauth.WithAuthCreationIntent(ctx), record)
 	if err != nil {
 		return record, "", err
 	}
-	return record, savedPath, nil
-}
-
-// SaveAuth persists an auth record directly without going through the login flow.
-func (m *Manager) SaveAuth(record *coreauth.Auth, cfg *config.Config) (string, error) {
-	if m.store == nil {
-		return "", fmt.Errorf("no store configured")
-	}
-	if cfg != nil {
-		if dirSetter, ok := m.store.(interface{ SetBaseDir(string) }); ok {
-			dirSetter.SetBaseDir(cfg.AuthDir)
+	if legacyClaudeCredential != nil {
+		if strings.TrimSpace(savedPath) == "" {
+			return record, "", fmt.Errorf("cliproxy auth: canonical Claude credential was not persisted; legacy credential retained")
+		}
+		legacyID := strings.TrimSpace(legacyClaudeCredential.ID)
+		if legacyID == "" {
+			legacyID = strings.TrimSpace(legacyClaudeCredential.FileName)
+		}
+		if errDelete := m.store.Delete(ctx, legacyID); errDelete != nil {
+			return record, savedPath, fmt.Errorf("cliproxy auth: canonical Claude credential saved but legacy credential cleanup failed: %w", errDelete)
 		}
 	}
-	return m.store.Save(context.Background(), record)
+	return record, savedPath, nil
 }

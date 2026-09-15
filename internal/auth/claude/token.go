@@ -9,7 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
+	log "github.com/sirupsen/logrus"
 )
 
 // ClaudeTokenStorage stores OAuth2 token information for Anthropic Claude API authentication.
@@ -31,16 +32,38 @@ type ClaudeTokenStorage struct {
 	// Email is the Anthropic account email address associated with this token.
 	Email string `json:"email"`
 
+	// AccountUUID identifies the Anthropic account returned by OAuth.
+	AccountUUID string `json:"account_uuid,omitempty"`
+
+	// OrganizationUUID identifies the Anthropic organization returned by OAuth.
+	OrganizationUUID string `json:"organization_uuid,omitempty"`
+
+	// OrganizationName is the display name returned by OAuth.
+	OrganizationName string `json:"organization_name,omitempty"`
+
+	// DeviceIDs contains the single device identity assigned to this credential.
+	DeviceIDs []string `json:"claude_device_ids,omitempty"`
+
 	// Type indicates the authentication provider type, always "claude" for this storage.
 	Type string `json:"type"`
 
 	// Expire is the timestamp when the current access token expires.
 	Expire string `json:"expired"`
+
+	// Metadata holds arbitrary key-value pairs injected via hooks.
+	// It is not exported to JSON directly to allow flattening during serialization.
+	Metadata map[string]any `json:"-"`
+}
+
+// SetMetadata allows external callers to inject metadata into the storage before saving.
+func (ts *ClaudeTokenStorage) SetMetadata(meta map[string]any) {
+	ts.Metadata = meta
 }
 
 // SaveTokenToFile serializes the Claude token storage to a JSON file.
 // This method creates the necessary directory structure and writes the token
 // data in JSON format to the specified file path for persistent storage.
+// It merges any injected metadata into the top-level JSON object.
 //
 // Parameters:
 //   - authFilePath: The full path where the token file should be saved
@@ -56,17 +79,25 @@ func (ts *ClaudeTokenStorage) SaveTokenToFile(authFilePath string) error {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 
+	// Merge metadata using helper
+	data, errMerge := misc.MergeMetadata(ts, ts.Metadata)
+	if errMerge != nil {
+		return fmt.Errorf("failed to merge metadata: %w", errMerge)
+	}
+
 	// Create the token file
 	f, err := os.Create(authFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to create token file: %w", err)
 	}
 	defer func() {
-		_ = f.Close()
+		if errClose := f.Close(); errClose != nil {
+			log.Errorf("claude token storage: close token file error: %v", errClose)
+		}
 	}()
 
 	// Encode and write the token data as JSON
-	if err = json.NewEncoder(f).Encode(ts); err != nil {
+	if err = json.NewEncoder(f).Encode(data); err != nil {
 		return fmt.Errorf("failed to write token to file: %w", err)
 	}
 	return nil

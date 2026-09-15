@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	kiroauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kiro"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -40,33 +39,10 @@ func (w *Watcher) start(ctx context.Context) error {
 	}
 	log.Debugf("watching auth directory: %s", w.authDir)
 
-	w.watchKiroIDETokenFile()
-
 	go w.processEvents(ctx)
 
 	w.reloadClients(true, nil, false)
 	return nil
-}
-
-func (w *Watcher) watchKiroIDETokenFile() {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Debugf("failed to get home directory for Kiro IDE token watch: %v", err)
-		return
-	}
-
-	kiroTokenDir := filepath.Join(homeDir, ".aws", "sso", "cache")
-
-	if _, statErr := os.Stat(kiroTokenDir); os.IsNotExist(statErr) {
-		log.Debugf("Kiro IDE token directory does not exist: %s", kiroTokenDir)
-		return
-	}
-
-	if errAdd := w.watcher.Add(kiroTokenDir); errAdd != nil {
-		log.Debugf("failed to watch Kiro IDE token directory %s: %v", kiroTokenDir, errAdd)
-		return
-	}
-	log.Debugf("watching Kiro IDE token directory: %s", kiroTokenDir)
 }
 
 func (w *Watcher) processEvents(ctx context.Context) {
@@ -96,15 +72,9 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	normalizedAuthDir := w.normalizeAuthPath(w.authDir)
 	isConfigEvent := normalizedName == normalizedConfigPath && event.Op&configOps != 0
 	authOps := fsnotify.Create | fsnotify.Write | fsnotify.Remove | fsnotify.Rename
-	isAuthJSON := strings.HasPrefix(normalizedName, normalizedAuthDir) && strings.HasSuffix(normalizedName, ".json") && event.Op&authOps != 0
-	isKiroIDEToken := w.isKiroIDETokenFile(event.Name) && event.Op&authOps != 0
-	if !isConfigEvent && !isAuthJSON && !isKiroIDEToken {
+	isAuthJSON := filepath.Dir(normalizedName) == normalizedAuthDir && strings.HasSuffix(normalizedName, ".json") && event.Op&authOps != 0
+	if !isConfigEvent && !isAuthJSON {
 		// Ignore unrelated files (e.g., cookie snapshots *.cookie) and other noise.
-		return
-	}
-
-	if isKiroIDEToken {
-		w.handleKiroIDETokenChange(event)
 		return
 	}
 
@@ -119,6 +89,10 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}
 
 	// Handle auth directory changes incrementally (.json only)
+	w.authRescanMu.Lock()
+	defer w.authRescanMu.Unlock()
+	w.observeAuthFile(event.Name)
+
 	if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 		if w.shouldDebounceRemove(normalizedName, now) {
 			log.Debugf("debouncing remove event for %s", filepath.Base(event.Name))
@@ -133,7 +107,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 				return
 			}
 			log.Infof("auth file changed (%s): %s, processing incrementally", event.Op.String(), filepath.Base(event.Name))
-			w.addOrUpdateClient(event.Name)
+			w.addOrUpdateClientLocked(event.Name)
 			return
 		}
 		if !w.isKnownAuthFile(event.Name) {
@@ -141,7 +115,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 			return
 		}
 		log.Infof("auth file changed (%s): %s, processing incrementally", event.Op.String(), filepath.Base(event.Name))
-		w.removeClient(event.Name)
+		w.removeClientLocked(event.Name)
 		return
 	}
 	if event.Op&(fsnotify.Create|fsnotify.Write) != 0 {
@@ -150,43 +124,29 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 			return
 		}
 		log.Infof("auth file changed (%s): %s, processing incrementally", event.Op.String(), filepath.Base(event.Name))
-		w.addOrUpdateClient(event.Name)
+		w.addOrUpdateClientLocked(event.Name)
 	}
 }
 
-func (w *Watcher) isKiroIDETokenFile(path string) bool {
-	normalized := filepath.ToSlash(path)
-	return strings.HasSuffix(normalized, "kiro-auth-token.json") && strings.Contains(normalized, ".aws/sso/cache")
-}
-
-func (w *Watcher) handleKiroIDETokenChange(event fsnotify.Event) {
-	log.Debugf("Kiro IDE token file event detected: %s %s", event.Op.String(), event.Name)
-
-	if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
-		time.Sleep(replaceCheckDelay)
-		if _, statErr := os.Stat(event.Name); statErr != nil {
-			log.Debugf("Kiro IDE token file removed: %s", event.Name)
-			return
-		}
-	}
-
-	tokenData, err := kiroauth.LoadKiroIDEToken()
-	if err != nil {
-		log.Debugf("failed to load Kiro IDE token after change: %v", err)
+// observeAuthFile invalidates in-flight scans even if hash or content deduplication
+// suppresses an update. It must not invalidate an otherwise valid queued auth event.
+func (w *Watcher) observeAuthFile(path string) {
+	normalized := w.normalizeAuthPath(path)
+	if normalized == "" {
 		return
 	}
-
-	log.Infof("Kiro IDE token file updated, access token refreshed (provider: %s)", tokenData.Provider)
-
-	w.refreshAuthState(true)
-
-	w.clientsMutex.RLock()
-	cfg := w.config
-	w.clientsMutex.RUnlock()
-
-	if w.reloadCallback != nil && cfg != nil {
-		log.Debugf("triggering server update callback after Kiro IDE token change")
-		w.reloadCallback(cfg)
+	w.clientsMutex.Lock()
+	defer w.clientsMutex.Unlock()
+	if w.fileObservations == nil {
+		w.fileObservations = make(map[string]uint64)
+	}
+	w.fileObservations[normalized]++
+	if w.activeAuthScans > 0 {
+		// A reload may cache a hash before publishing its auth. Force the event
+		// to parse it even if the scan finishes first, retaining the known path.
+		if _, known := w.lastAuthHashes[normalized]; known {
+			w.lastAuthHashes[normalized] = ""
+		}
 	}
 }
 

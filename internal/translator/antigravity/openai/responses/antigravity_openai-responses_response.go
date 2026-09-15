@@ -3,11 +3,11 @@ package responses
 import (
 	"context"
 
-	. "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gemini/openai/responses"
+	. "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/gemini/openai/responses"
 	"github.com/tidwall/gjson"
 )
 
-func ConvertAntigravityResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+func ConvertAntigravityResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) [][]byte {
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
 		rawJSON = []byte(responseResult.Raw)
@@ -15,19 +15,19 @@ func ConvertAntigravityResponseToOpenAIResponses(ctx context.Context, modelName 
 	return ConvertGeminiResponseToOpenAIResponses(ctx, modelName, originalRequestRawJSON, requestRawJSON, rawJSON, param)
 }
 
-func ConvertAntigravityResponseToOpenAIResponsesNonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string {
+func ConvertAntigravityResponseToOpenAIResponsesNonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []byte {
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
 		rawJSON = []byte(responseResult.Raw)
 	}
 
 	requestResult := gjson.GetBytes(originalRequestRawJSON, "request")
-	if responseResult.Exists() {
+	if requestResult.Exists() {
 		originalRequestRawJSON = []byte(requestResult.Raw)
 	}
 
 	requestResult = gjson.GetBytes(requestRawJSON, "request")
-	if responseResult.Exists() {
+	if requestResult.Exists() {
 		requestRawJSON = []byte(requestResult.Raw)
 	}
 

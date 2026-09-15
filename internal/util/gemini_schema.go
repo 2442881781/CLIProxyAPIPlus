@@ -2,8 +2,11 @@
 package util
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -12,53 +15,750 @@ import (
 
 var gjsonPathKeyReplacer = strings.NewReplacer(".", "\\.", "*", "\\*", "?", "\\?")
 
-// CleanJSONSchemaForAntigravity transforms a JSON schema to be compatible with Antigravity API.
+const placeholderReasonDescription = "Brief explanation of why you are calling this tool"
+
+// Pass a single JSON schema to the functions below — never a whole request document.
+//
+// Cleaning walks every node and rewrites keys by name, and schema keywords such as "title",
+// "format", "default" and "const" are also ordinary data keys. Handing these functions a request
+// silently rewrites tool-call arguments inside the conversation history: the guard that protects
+// a key under ".properties" does not apply to argument values, so the keys are deleted outright
+// and replacements such as "enum" and "type" are fabricated. That regression reached production
+// once already; scope every call site to the schema itself.
+
+type jsonSchemaCleanOptions struct {
+	addPlaceholder                    bool
+	addMissingArrayItems              bool
+	antigravitySemantics              bool
+	removeToolTitle                   bool
+	removeGeminiMetadata              bool
+	flattenUnions                     bool
+	forceEnumStringType               bool
+	dropAllEnums                      bool
+	dropBooleanEnums                  bool
+	preserveAdditionalPropertiesFalse bool
+}
+
+// CleanJSONSchemaForAntigravity transforms a tool schema to be compatible with Antigravity API.
 // It handles unsupported keywords, type flattening, and schema simplification while preserving
-// semantic information as description hints.
+// semantic information as description hints and adding placeholders required by VALIDATED mode.
 func CleanJSONSchemaForAntigravity(jsonStr string) string {
+	return CleanJSONSchemaForAntigravityTool(jsonStr, true)
+}
+
+// CleanJSONSchemaForAntigravityTool transforms an Antigravity function schema. The private
+// backend accepts enum members only as strings, but the declared type still controls the JSON
+// type of generated function arguments, so numeric and boolean types must not be rewritten.
+// requirePlaceholder is used only for Claude VALIDATED mode.
+func CleanJSONSchemaForAntigravityTool(jsonStr string, requirePlaceholder bool) string {
+	return cleanJSONSchema(jsonStr, jsonSchemaCleanOptions{
+		addPlaceholder:       requirePlaceholder,
+		addMissingArrayItems: true,
+		antigravitySemantics: true,
+		removeToolTitle:      !requirePlaceholder,
+		flattenUnions:        true,
+		dropAllEnums:         true,
+	})
+}
+
+// CleanJSONSchemaForAntigravityResponse transforms a response schema without applying tool-only
+// compatibility rewrites that would alter the client's structured output contract.
+//
+// Sanitization policy:
+//   - Passthrough: type, properties, items, required, description, enum, nullable, and
+//     additionalProperties: false (which Antigravity natively enforces for response schemas).
+//   - Description hints + deletion: unsupported or accepted-but-ignored constraints.
+//   - Flattened: allOf merged into properties/required.
+//   - Projected: anyOf/oneOf select the strongest branch; null branches become nullable:true.
+//   - Resolved: local $ref targets are inlined before $defs/definitions are removed.
+//   - Dropped: unresolved $ref (after a hint), metadata, unsupported object-key constraints,
+//     conditional keywords (after non-conflicting properties are retained), and x-* extensions.
+func CleanJSONSchemaForAntigravityResponse(jsonStr string) string {
+	return cleanJSONSchema(jsonStr, jsonSchemaCleanOptions{
+		antigravitySemantics:              true,
+		flattenUnions:                     true,
+		dropBooleanEnums:                  true,
+		preserveAdditionalPropertiesFalse: true,
+	})
+}
+
+// CleanJSONSchemaForGemini transforms a JSON schema to be compatible with Gemini tool calling.
+// It removes unsupported keywords and simplifies schemas, without adding empty-schema placeholders.
+func CleanJSONSchemaForGemini(jsonStr string) string {
+	return cleanJSONSchema(jsonStr, jsonSchemaCleanOptions{
+		addMissingArrayItems: true,
+		removeGeminiMetadata: true,
+		flattenUnions:        true,
+		forceEnumStringType:  true,
+	})
+}
+
+// cleanJSONSchema performs the core cleaning operations on the JSON schema.
+func cleanJSONSchema(jsonStr string, options jsonSchemaCleanOptions) string {
+	// Phase 0: Normalize malformed schemas (e.g. bare property maps and boolean required from MCP tools)
+	jsonStr = normalizeMalformedSchemaObjects(jsonStr, options.addMissingArrayItems)
+
 	// Phase 1: Convert and add hints
-	jsonStr = convertRefsToHints(jsonStr)
+	if options.antigravitySemantics {
+		jsonStr = inlineLocalRefs(jsonStr)
+	}
+	jsonStr = convertRefsToHints(jsonStr, options.antigravitySemantics)
 	jsonStr = convertConstToEnum(jsonStr)
+	jsonStr = convertEnumValuesToStrings(jsonStr, options.forceEnumStringType)
 	jsonStr = addEnumHints(jsonStr)
-	jsonStr = addAdditionalPropertiesHints(jsonStr)
-	jsonStr = moveConstraintsToDescription(jsonStr)
+	jsonStr = dropIgnoredEnumsToHints(jsonStr, options)
+	if !options.preserveAdditionalPropertiesFalse {
+		jsonStr = addAdditionalPropertiesHints(jsonStr)
+	}
+	jsonStr = moveConstraintsToDescription(jsonStr, options)
+	if options.antigravitySemantics {
+		jsonStr = moveNotToDescription(jsonStr)
+	}
 
 	// Phase 2: Flatten complex structures
+	jsonStr = mergeConditionals(jsonStr)
 	jsonStr = mergeAllOf(jsonStr)
-	jsonStr = flattenAnyOfOneOf(jsonStr)
-	jsonStr = flattenTypeArrays(jsonStr)
+	if options.flattenUnions {
+		jsonStr = flattenAnyOfOneOf(jsonStr)
+	}
+	jsonStr = flattenTypeArrays(jsonStr, options.antigravitySemantics)
 
 	// Phase 3: Cleanup
-	jsonStr = removeUnsupportedKeywords(jsonStr)
+	jsonStr = removeUnsupportedKeywords(jsonStr, options)
+	if options.removeGeminiMetadata {
+		// Gemini schema cleanup: remove nullable/title and placeholder-only fields.
+		jsonStr = removeKeywords(jsonStr, []string{"nullable", "title"})
+		jsonStr = removePlaceholderFields(jsonStr)
+	} else if options.removeToolTitle {
+		// Legacy non-VALIDATED Antigravity requests used the Gemini cleaner, which drops title.
+		// Keep that harmless metadata policy without losing Antigravity's native nullable support.
+		jsonStr = removeKeywords(jsonStr, []string{"title"})
+	}
 	jsonStr = cleanupRequiredFields(jsonStr)
-
 	// Phase 4: Add placeholder for empty object schemas (Claude VALIDATED mode requirement)
-	jsonStr = addEmptySchemaPlaceholder(jsonStr)
+	if options.addPlaceholder {
+		jsonStr = addEmptySchemaPlaceholder(jsonStr)
+	}
 
 	return jsonStr
 }
 
-// convertRefsToHints converts $ref to description hints (Lazy Hint strategy).
-func convertRefsToHints(jsonStr string) string {
+// removeKeywords removes all occurrences of specified keywords from the JSON schema.
+func removeKeywords(jsonStr string, keywords []string) string {
+	deletePaths := make([]string, 0)
+	pathsByField := findPathsByFields(jsonStr, keywords)
+	for _, key := range keywords {
+		for _, p := range pathsByField[key] {
+			if isPropertyDefinition(trimSuffix(p, "."+key)) {
+				continue
+			}
+			deletePaths = append(deletePaths, p)
+		}
+	}
+	sortByDepth(deletePaths)
+	for _, p := range deletePaths {
+		jsonStr, _ = sjson.Delete(jsonStr, p)
+	}
+	return jsonStr
+}
+
+// removePlaceholderFields removes placeholder-only properties ("_" and "reason") and their required entries.
+func removePlaceholderFields(jsonStr string) string {
+	// Remove "_" placeholder properties.
+	paths := findPaths(jsonStr, "_")
+	sortByDepth(paths)
+	for _, p := range paths {
+		if !strings.HasSuffix(p, ".properties._") {
+			continue
+		}
+		jsonStr, _ = sjson.Delete(jsonStr, p)
+		parentPath := trimSuffix(p, ".properties._")
+		reqPath := joinPath(parentPath, "required")
+		req := gjson.Get(jsonStr, reqPath)
+		if req.IsArray() {
+			var filtered []string
+			for _, r := range req.Array() {
+				if r.String() != "_" {
+					filtered = append(filtered, r.String())
+				}
+			}
+			if len(filtered) == 0 {
+				jsonStr, _ = sjson.Delete(jsonStr, reqPath)
+			} else {
+				updated, _ := sjson.SetBytes([]byte(jsonStr), reqPath, filtered)
+				jsonStr = string(updated)
+			}
+		}
+	}
+
+	// Remove placeholder-only "reason" objects.
+	reasonPaths := findPaths(jsonStr, "reason")
+	sortByDepth(reasonPaths)
+	for _, p := range reasonPaths {
+		if !strings.HasSuffix(p, ".properties.reason") {
+			continue
+		}
+		parentPath := trimSuffix(p, ".properties.reason")
+		props := gjson.Get(jsonStr, joinPath(parentPath, "properties"))
+		if !props.IsObject() || len(props.Map()) != 1 {
+			continue
+		}
+		desc := gjson.Get(jsonStr, p+".description").String()
+		if desc != placeholderReasonDescription {
+			continue
+		}
+		jsonStr, _ = sjson.Delete(jsonStr, p)
+		reqPath := joinPath(parentPath, "required")
+		req := gjson.Get(jsonStr, reqPath)
+		if req.IsArray() {
+			var filtered []string
+			for _, r := range req.Array() {
+				if r.String() != "reason" {
+					filtered = append(filtered, r.String())
+				}
+			}
+			if len(filtered) == 0 {
+				jsonStr, _ = sjson.Delete(jsonStr, reqPath)
+			} else {
+				updated, _ := sjson.SetBytes([]byte(jsonStr), reqPath, filtered)
+				jsonStr = string(updated)
+			}
+		}
+	}
+
+	return jsonStr
+}
+
+// normalizeMalformedSchemaObjects normalizes malformed JSON schema nodes commonly produced by
+// certain MCP tool definitions (e.g. Asana MCP server):
+// 1. Bare property maps missing the "type": "object" and "properties": {...} wrappers are wrapped.
+// 2. Boolean "required": true on property definitions are stripped and promoted to the parent's "required" array.
+// 3. Tool array schemas missing "items" receive a string item schema required by Gemini and Antigravity.
+func normalizeMalformedSchemaObjects(jsonStr string, addMissingArrayItems bool) string {
+	if jsonStr == "" {
+		return jsonStr
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(jsonStr))
+	decoder.UseNumber()
+	var root any
+	if err := decoder.Decode(&root); err != nil {
+		return jsonStr
+	}
+
+	rootMap, ok := root.(map[string]any)
+	if !ok || isAPIRequestDocument(rootMap) {
+		return jsonStr
+	}
+
+	// If wrapped in single-key {"schema": ...} by cleanNestedSchema, unwrap, repair, and re-wrap.
+	if len(rootMap) == 1 {
+		if innerSchema, ok := rootMap["schema"].(map[string]any); ok {
+			repairedInner, modified := repairSchemaNode(innerSchema, addMissingArrayItems)
+			if !modified {
+				return jsonStr
+			}
+			out, err := marshalJSONNoHTMLEscape(map[string]any{"schema": repairedInner})
+			if err != nil {
+				return jsonStr
+			}
+			return string(out)
+		}
+	}
+
+	repaired, modified := repairSchemaNode(rootMap, addMissingArrayItems)
+	if !modified {
+		return jsonStr
+	}
+
+	out, err := marshalJSONNoHTMLEscape(repaired)
+	if err != nil {
+		return jsonStr
+	}
+	return string(out)
+}
+
+func marshalJSONNoHTMLEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	b := buf.Bytes()
+	if len(b) > 0 && b[len(b)-1] == '\n' {
+		b = b[:len(b)-1]
+	}
+	return b, nil
+}
+
+func isKnownSchemaKeywordOrExtension(key string) bool {
+	if strings.HasPrefix(key, "x-") {
+		return true
+	}
+	switch key {
+	case "properties", "patternProperties", "additionalProperties", "items", "prefixItems",
+		"$defs", "definitions", "dependentSchemas", "dependentRequired", "dependencies",
+		"if", "then", "else", "not", "contains", "propertyNames",
+		"unevaluatedProperties", "unevaluatedItems", "contentSchema", "additionalItems",
+		"default", "const", "example", "examples", "discriminator", "xml", "externalDocs",
+		"enumDescriptions", "enumTitles":
+		return true
+	}
+	return false
+}
+
+func isNonObjectDeclaredType(t any) bool {
+	if s, ok := t.(string); ok {
+		return s != "" && s != "object"
+	}
+	if arr, ok := t.([]any); ok {
+		for _, item := range arr {
+			if s, ok := item.(string); ok && s == "object" {
+				return false
+			}
+		}
+		return len(arr) > 0
+	}
+	return false
+}
+
+func isArrayDeclaredType(t any) bool {
+	switch typeValue := t.(type) {
+	case string:
+		return typeValue == "array"
+	case []any:
+		for _, item := range typeValue {
+			if itemType, ok := item.(string); ok && itemType == "array" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isAPIRequestDocument(m map[string]any) bool {
+	if _, ok := m["tools"].([]any); ok {
+		return true
+	}
+	if _, ok := m["contents"].([]any); ok {
+		return true
+	}
+	if _, ok := m["messages"].([]any); ok {
+		return true
+	}
+	if _, ok := m["functionDeclarations"].([]any); ok {
+		return true
+	}
+	if _, ok := m["function_declarations"].([]any); ok {
+		return true
+	}
+	if reqMap, ok := m["request"].(map[string]any); ok {
+		if isAPIRequestDocument(reqMap) {
+			return true
+		}
+	}
+	return false
+}
+
+func repairSchemaNode(node map[string]any, addMissingArrayItems bool) (map[string]any, bool) {
+	if node == nil {
+		return nil, false
+	}
+
+	modified := false
+	clone := make(map[string]any, len(node))
+	for k, v := range node {
+		clone[k] = v
+	}
+
+	// 1. If not declared as a primitive/array type, collect bare property definition maps
+	if !isNonObjectDeclaredType(clone["type"]) {
+		var bareProps map[string]any
+		for k, v := range clone {
+			if childMap, isMap := v.(map[string]any); isMap {
+				if !isKnownSchemaKeywordOrExtension(k) {
+					if bareProps == nil {
+						bareProps = make(map[string]any)
+					}
+					bareProps[k] = childMap
+				}
+			}
+		}
+
+		if len(bareProps) > 0 {
+			repairedProps, promotedReqs, _ := repairPropertyMap(bareProps, addMissingArrayItems)
+			for k := range bareProps {
+				delete(clone, k)
+			}
+
+			if existingProps, ok := clone["properties"].(map[string]any); ok {
+				newProps := make(map[string]any, len(existingProps)+len(repairedProps))
+				for k, v := range existingProps {
+					newProps[k] = v
+				}
+				for k, v := range repairedProps {
+					newProps[k] = v
+				}
+				clone["properties"] = newProps
+			} else {
+				clone["properties"] = repairedProps
+				if _, hasType := clone["type"]; !hasType {
+					clone["type"] = "object"
+				}
+			}
+
+			if len(promotedReqs) > 0 {
+				existingReqs := extractStringArray(clone["required"])
+				merged := mergeStringSlices(existingReqs, promotedReqs)
+				clone["required"] = merged
+			}
+			modified = true
+		}
+	}
+
+	// 2. If node has a "properties" map, recursively repair all properties inside it
+	if propsVal, ok := clone["properties"].(map[string]any); ok {
+		repairedProps, promotedReqs, propsMod := repairPropertyMap(propsVal, addMissingArrayItems)
+		if propsMod {
+			clone["properties"] = repairedProps
+			modified = true
+		}
+		if len(promotedReqs) > 0 {
+			existingReqs := extractStringArray(clone["required"])
+			merged := mergeStringSlices(existingReqs, promotedReqs)
+			clone["required"] = merged
+			modified = true
+		}
+	}
+
+	// Gemini and Antigravity reject tool array schemas without an items definition.
+	if addMissingArrayItems && isArrayDeclaredType(clone["type"]) {
+		if _, hasItems := clone["items"]; !hasItems {
+			clone["items"] = map[string]any{"type": "string"}
+			modified = true
+		}
+	}
+
+	// 3. Recurse into all other standard schema containers
+	if itemsVal, ok := clone["items"].(map[string]any); ok {
+		repairedItems, itemsMod := repairSchemaNode(itemsVal, addMissingArrayItems)
+		if itemsMod {
+			clone["items"] = repairedItems
+			modified = true
+		}
+	} else if itemsList, ok := clone["items"].([]any); ok {
+		repairedList, listMod := repairSchemaList(itemsList, addMissingArrayItems)
+		if listMod {
+			clone["items"] = repairedList
+			modified = true
+		}
+	}
+
+	if addProps, ok := clone["additionalProperties"].(map[string]any); ok {
+		repairedAddProps, addPropsMod := repairSchemaNode(addProps, addMissingArrayItems)
+		if addPropsMod {
+			clone["additionalProperties"] = repairedAddProps
+			modified = true
+		}
+	}
+
+	if patProps, ok := clone["patternProperties"].(map[string]any); ok {
+		repairedPatProps, _, patMod := repairPropertyMap(patProps, addMissingArrayItems)
+		if patMod {
+			clone["patternProperties"] = repairedPatProps
+			modified = true
+		}
+	}
+
+	for _, key := range []string{"if", "then", "else", "not", "contains", "propertyNames", "unevaluatedProperties", "unevaluatedItems", "contentSchema", "additionalItems"} {
+		if subVal, ok := clone[key].(map[string]any); ok {
+			repairedSub, subMod := repairSchemaNode(subVal, addMissingArrayItems)
+			if subMod {
+				clone[key] = repairedSub
+				modified = true
+			}
+		}
+	}
+
+	for _, key := range []string{"anyOf", "oneOf", "allOf", "prefixItems"} {
+		if listVal, ok := clone[key].([]any); ok {
+			repairedList, listMod := repairSchemaList(listVal, addMissingArrayItems)
+			if listMod {
+				clone[key] = repairedList
+				modified = true
+			}
+		}
+	}
+
+	for _, key := range []string{"$defs", "definitions", "dependentSchemas"} {
+		if defsVal, ok := clone[key].(map[string]any); ok {
+			repairedDefs := make(map[string]any, len(defsVal))
+			defsModified := false
+			for dk, dv := range defsVal {
+				if defMap, ok := dv.(map[string]any); ok {
+					repairedDef, defMod := repairSchemaNode(defMap, addMissingArrayItems)
+					repairedDefs[dk] = repairedDef
+					if defMod {
+						defsModified = true
+						modified = true
+					}
+				} else {
+					repairedDefs[dk] = dv
+				}
+			}
+			if defsModified {
+				clone[key] = repairedDefs
+			}
+		}
+	}
+
+	return clone, modified
+}
+
+func repairSchemaList(list []any, addMissingArrayItems bool) ([]any, bool) {
+	var repairedList []any
+	listModified := false
+	for _, item := range list {
+		if itemMap, ok := item.(map[string]any); ok {
+			repairedItem, itemMod := repairSchemaNode(itemMap, addMissingArrayItems)
+			repairedList = append(repairedList, repairedItem)
+			if itemMod {
+				listModified = true
+			}
+		} else {
+			repairedList = append(repairedList, item)
+		}
+	}
+	return repairedList, listModified
+}
+
+func repairPropertyMap(props map[string]any, addMissingArrayItems bool) (map[string]any, []string, bool) {
+	out := make(map[string]any, len(props))
+	var promotedReqs []string
+	modified := false
+
+	for k, v := range props {
+		childMap, isMap := v.(map[string]any)
+		if !isMap {
+			out[k] = v
+			continue
+		}
+
+		childClone := make(map[string]any, len(childMap))
+		for ck, cv := range childMap {
+			childClone[ck] = cv
+		}
+
+		if reqBool, isBool := childClone["required"].(bool); isBool {
+			delete(childClone, "required")
+			modified = true
+			if reqBool {
+				promotedReqs = append(promotedReqs, k)
+			}
+		}
+
+		repairedChild, childMod := repairSchemaNode(childClone, addMissingArrayItems)
+		if childMod {
+			modified = true
+		}
+		out[k] = repairedChild
+	}
+
+	sort.Strings(promotedReqs)
+	return out, promotedReqs, modified
+}
+
+func extractStringArray(val any) []string {
+	if val == nil {
+		return nil
+	}
+	arr, ok := val.([]any)
+	if !ok {
+		if strArr, ok := val.([]string); ok {
+			return strArr
+		}
+		return nil
+	}
+	var res []string
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			res = append(res, s)
+		}
+	}
+	return res
+}
+
+func mergeStringSlices(existing, promoted []string) []string {
+	seen := make(map[string]bool)
+	var res []string
+	for _, s := range existing {
+		if !seen[s] && s != "" {
+			seen[s] = true
+			res = append(res, s)
+		}
+	}
+	for _, s := range promoted {
+		if !seen[s] && s != "" {
+			seen[s] = true
+			res = append(res, s)
+		}
+	}
+	return res
+}
+
+// InlineLocalRefs resolves JSON Pointer references against the original schema before definition
+// containers are stripped. Each expansion receives its own copy, sibling keywords override the
+// referenced definition, and cycles terminate as a typed hint instead of recursing forever.
+func InlineLocalRefs(jsonStr string) string {
+	return inlineLocalRefs(jsonStr)
+}
+
+// inlineLocalRefs resolves JSON Pointer references against the original schema before definition
+// containers are stripped. Each expansion receives its own copy, sibling keywords override the
+// referenced definition, and cycles terminate as a typed hint instead of recursing forever.
+func inlineLocalRefs(jsonStr string) string {
+	if !strings.Contains(jsonStr, `"$ref"`) {
+		return jsonStr
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(jsonStr))
+	decoder.UseNumber()
+	var root any
+	if err := decoder.Decode(&root); err != nil {
+		return jsonStr
+	}
+
+	resolved := resolveLocalRefs(root, root, make(map[string]bool))
+	out, err := json.Marshal(resolved)
+	if err != nil {
+		return jsonStr
+	}
+	return string(out)
+}
+
+func resolveLocalRefs(root, value any, active map[string]bool) any {
+	switch node := value.(type) {
+	case []any:
+		out := make([]any, len(node))
+		for i, item := range node {
+			out[i] = resolveLocalRefs(root, item, active)
+		}
+		return out
+	case map[string]any:
+		ref, hasRef := node["$ref"].(string)
+		if hasRef && strings.HasPrefix(ref, "#/") {
+			if target, ok := resolveJSONPointer(root, ref); ok {
+				if active[ref] {
+					return cyclicRefFallback(node, target, ref)
+				}
+				active[ref] = true
+				resolvedTarget := resolveLocalRefs(root, target, active)
+				delete(active, ref)
+				if targetMap, okTarget := resolvedTarget.(map[string]any); okTarget {
+					out := make(map[string]any, len(targetMap)+len(node))
+					for key, item := range targetMap {
+						out[key] = item
+					}
+					for key, item := range node {
+						if key == "$ref" {
+							continue
+						}
+						out[key] = resolveLocalRefs(root, item, active)
+					}
+					return out
+				}
+			}
+		}
+
+		out := make(map[string]any, len(node))
+		for key, item := range node {
+			out[key] = resolveLocalRefs(root, item, active)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func resolveJSONPointer(root any, ref string) (any, bool) {
+	current := root
+	for _, rawPart := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+		part := strings.ReplaceAll(strings.ReplaceAll(rawPart, "~1", "/"), "~0", "~")
+		switch node := current.(type) {
+		case map[string]any:
+			var ok bool
+			current, ok = node[part]
+			if !ok {
+				return nil, false
+			}
+		case []any:
+			index, err := strconv.Atoi(part)
+			if err != nil || index < 0 || index >= len(node) {
+				return nil, false
+			}
+			current = node[index]
+		default:
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func cyclicRefFallback(node map[string]any, target any, ref string) map[string]any {
+	out := make(map[string]any, len(node)+2)
+	if targetMap, ok := target.(map[string]any); ok {
+		for _, key := range []string{"type", "nullable", "description"} {
+			if value, exists := targetMap[key]; exists {
+				out[key] = value
+			}
+		}
+	}
+	for key, value := range node {
+		if key != "$ref" {
+			out[key] = value
+		}
+	}
+	name := refName(ref)
+	hint := "See: " + name
+	if description, _ := out["description"].(string); description != "" {
+		out["description"] = mergeHint(description, hint)
+	} else {
+		out["description"] = hint
+	}
+	return out
+}
+
+func refName(ref string) string {
+	if index := strings.LastIndex(ref, "/"); index >= 0 && index+1 < len(ref) {
+		return strings.ReplaceAll(strings.ReplaceAll(ref[index+1:], "~1", "/"), "~0", "~")
+	}
+	return ref
+}
+
+// convertRefsToHints retains sibling keywords and converts only unresolved or external references
+// to descriptions. Local references have already been expanded by inlineLocalRefs.
+func convertRefsToHints(jsonStr string, preserveSiblings bool) string {
 	paths := findPaths(jsonStr, "$ref")
 	sortByDepth(paths)
 
 	for _, p := range paths {
 		refVal := gjson.Get(jsonStr, p).String()
-		defName := refVal
-		if idx := strings.LastIndex(refVal, "/"); idx >= 0 {
-			defName = refVal[idx+1:]
-		}
+		defName := refName(refVal)
 
 		parentPath := trimSuffix(p, ".$ref")
 		hint := fmt.Sprintf("See: %s", defName)
-		if existing := gjson.Get(jsonStr, descriptionPath(parentPath)).String(); existing != "" {
-			hint = fmt.Sprintf("%s (%s)", existing, hint)
+		if !preserveSiblings {
+			if existing := gjson.Get(jsonStr, descriptionPath(parentPath)).String(); existing != "" {
+				hint = fmt.Sprintf("%s (%s)", existing, hint)
+			}
+			replacement := `{"type":"object","description":""}`
+			replacementBytes, _ := sjson.SetBytes([]byte(replacement), "description", hint)
+			jsonStr = setRawAt(jsonStr, parentPath, string(replacementBytes))
+			continue
 		}
-
-		replacement := `{"type":"object","description":""}`
-		replacement, _ = sjson.Set(replacement, "description", hint)
-		jsonStr = setRawAt(jsonStr, parentPath, replacement)
+		jsonStr, _ = sjson.Delete(jsonStr, p)
+		jsonStr = appendHint(jsonStr, parentPath, hint)
 	}
 	return jsonStr
 }
@@ -71,7 +771,34 @@ func convertConstToEnum(jsonStr string) string {
 		}
 		enumPath := trimSuffix(p, ".const") + ".enum"
 		if !gjson.Get(jsonStr, enumPath).Exists() {
-			jsonStr, _ = sjson.Set(jsonStr, enumPath, []interface{}{val.Value()})
+			updated, _ := sjson.SetBytes([]byte(jsonStr), enumPath, []interface{}{val.Value()})
+			jsonStr = string(updated)
+		}
+	}
+	return jsonStr
+}
+
+// convertEnumValuesToStrings ensures all enum values use the string representation required by
+// Gemini's proto schema. The declared type remains independent: Antigravity uses it to choose the
+// emitted JSON type on both response and function-argument paths.
+func convertEnumValuesToStrings(jsonStr string, forceStringType bool) string {
+	for _, p := range findPaths(jsonStr, "enum") {
+		arr := gjson.Get(jsonStr, p)
+		if !arr.IsArray() {
+			continue
+		}
+
+		var stringVals []string
+		for _, item := range arr.Array() {
+			stringVals = append(stringVals, item.String())
+		}
+
+		updated, _ := sjson.SetBytes([]byte(jsonStr), p, stringVals)
+		jsonStr = string(updated)
+		if forceStringType {
+			parentPath := trimSuffix(p, ".enum")
+			updated, _ = sjson.SetBytes([]byte(jsonStr), joinPath(parentPath, "type"), "string")
+			jsonStr = string(updated)
 		}
 	}
 	return jsonStr
@@ -97,6 +824,25 @@ func addEnumHints(jsonStr string) string {
 	return jsonStr
 }
 
+// Antigravity does not enforce enum on function arguments and ignores boolean response enums.
+// Preserve the advisory values in description, but do not leave an unenforced constraint in the
+// schema contract. Response enums for string, number, and integer remain native constraints.
+func dropIgnoredEnumsToHints(jsonStr string, options jsonSchemaCleanOptions) string {
+	for _, path := range findPaths(jsonStr, "enum") {
+		parentPath := trimSuffix(path, ".enum")
+		shouldDrop := options.dropAllEnums || (options.dropBooleanEnums && gjson.Get(jsonStr, joinPath(parentPath, "type")).String() == "boolean")
+		if !shouldDrop {
+			continue
+		}
+		enum := gjson.Get(jsonStr, path)
+		if enum.IsArray() && len(enum.Array()) == 1 {
+			jsonStr = appendHint(jsonStr, parentPath, "Allowed: "+enum.Array()[0].String())
+		}
+		jsonStr, _ = sjson.Delete(jsonStr, path)
+	}
+	return jsonStr
+}
+
 func addAdditionalPropertiesHints(jsonStr string) string {
 	for _, p := range findPaths(jsonStr, "additionalProperties") {
 		if gjson.Get(jsonStr, p).Type == gjson.False {
@@ -108,23 +854,90 @@ func addAdditionalPropertiesHints(jsonStr string) string {
 
 var unsupportedConstraints = []string{
 	"minLength", "maxLength", "exclusiveMinimum", "exclusiveMaximum",
-	"pattern", "minItems", "maxItems", "format",
+	"pattern", "minItems", "maxItems", "uniqueItems", "contains", "format",
 	"default", "examples", // Claude rejects these in VALIDATED mode
 }
 
-func moveConstraintsToDescription(jsonStr string) string {
-	for _, key := range unsupportedConstraints {
-		for _, p := range findPaths(jsonStr, key) {
+func constraintKeywords(options jsonSchemaCleanOptions) []string {
+	keywords := append([]string(nil), unsupportedConstraints...)
+	if options.antigravitySemantics {
+		keywords = append(keywords, "minimum", "maximum", "multipleOf")
+	}
+	return keywords
+}
+
+func moveConstraintsToDescription(jsonStr string, options jsonSchemaCleanOptions) string {
+	constraints := constraintKeywords(options)
+	pathsByField := findPathsByFields(jsonStr, constraints)
+	for _, key := range constraints {
+		for _, p := range pathsByField[key] {
 			val := gjson.Get(jsonStr, p)
-			if !val.Exists() || val.IsObject() || val.IsArray() {
+			if !val.Exists() {
 				continue
 			}
 			parentPath := trimSuffix(p, "."+key)
 			if isPropertyDefinition(parentPath) {
 				continue
 			}
+			if val.IsObject() || val.IsArray() {
+				jsonStr = appendHint(jsonStr, parentPath, fmt.Sprintf("%s: %s", key, val.Raw))
+				continue
+			}
 			jsonStr = appendHint(jsonStr, parentPath, fmt.Sprintf("%s: %s", key, val.String()))
 		}
+	}
+	return jsonStr
+}
+
+func moveNotToDescription(jsonStr string) string {
+	for _, path := range findPaths(jsonStr, "not") {
+		value := gjson.Get(jsonStr, path)
+		if !value.Exists() || isPropertyDefinition(trimSuffix(path, ".not")) {
+			continue
+		}
+		jsonStr = appendHint(jsonStr, trimSuffix(path, ".not"), "not: "+value.Raw)
+	}
+	return jsonStr
+}
+
+func mergeConditionals(jsonStr string) string {
+	pathsByField := findPathsByFields(jsonStr, []string{"then", "else"})
+	var paths []string
+	for _, key := range []string{"then", "else"} {
+		for _, p := range pathsByField[key] {
+			parentPath := trimSuffix(p, "."+key)
+			if isPropertyDefinition(parentPath) {
+				continue
+			}
+			paths = append(paths, p)
+		}
+	}
+	sortByDepth(paths)
+
+	for _, p := range paths {
+		props := gjson.Get(jsonStr, joinPath(p, "properties"))
+		if !props.IsObject() {
+			continue
+		}
+		var parentPath string
+		if strings.HasSuffix(p, ".then") {
+			parentPath = trimSuffix(p, ".then")
+		} else if strings.HasSuffix(p, ".else") {
+			parentPath = trimSuffix(p, ".else")
+		} else if p == "then" || p == "else" {
+			parentPath = ""
+		} else {
+			continue
+		}
+
+		props.ForEach(func(key, value gjson.Result) bool {
+			destPath := joinPath(parentPath, "properties."+escapeGJSONPathKey(key.String()))
+			if !gjson.Get(jsonStr, destPath).Exists() {
+				updated, _ := sjson.SetRawBytes([]byte(jsonStr), destPath, []byte(value.Raw))
+				jsonStr = string(updated)
+			}
+			return true
+		})
 	}
 	return jsonStr
 }
@@ -141,26 +954,56 @@ func mergeAllOf(jsonStr string) string {
 		parentPath := trimSuffix(p, ".allOf")
 
 		for _, item := range allOf.Array() {
-			if props := item.Get("properties"); props.IsObject() {
-				props.ForEach(func(key, value gjson.Result) bool {
-					destPath := joinPath(parentPath, "properties."+escapeGJSONPathKey(key.String()))
-					jsonStr, _ = sjson.SetRaw(jsonStr, destPath, value.Raw)
-					return true
-				})
+			if !item.IsObject() {
+				continue
 			}
-			if req := item.Get("required"); req.IsArray() {
-				reqPath := joinPath(parentPath, "required")
-				current := getStrings(jsonStr, reqPath)
-				for _, r := range req.Array() {
-					if s := r.String(); !contains(current, s) {
-						current = append(current, s)
+			item.ForEach(func(key, value gjson.Result) bool {
+				field := key.String()
+				switch field {
+				case "required":
+					if !value.IsArray() {
+						return true
 					}
+					reqPath := joinPath(parentPath, "required")
+					current := getStrings(jsonStr, reqPath)
+					for _, required := range value.Array() {
+						if name := required.String(); !contains(current, name) {
+							current = append(current, name)
+						}
+					}
+					updated, _ := sjson.SetBytes([]byte(jsonStr), reqPath, current)
+					jsonStr = string(updated)
+				case "if", "then", "else", "allOf":
+					// Conditional applicability cannot be represented by the upstream schema.
+				default:
+					destination := joinPath(parentPath, escapeGJSONPathKey(field))
+					jsonStr = mergeMissingSchemaAtPath(jsonStr, destination, value)
 				}
-				jsonStr, _ = sjson.Set(jsonStr, reqPath, current)
-			}
+				return true
+			})
 		}
 		jsonStr, _ = sjson.Delete(jsonStr, p)
 	}
+	return jsonStr
+}
+
+// mergeMissingSchemaAtPath recursively fills absent fields without replacing any existing
+// definition. A parent schema is the canonical definition; allOf and conditional branches may
+// enrich gaps in it, but can never replace it with a narrower branch shell.
+func mergeMissingSchemaAtPath(jsonStr, destination string, incoming gjson.Result) string {
+	existing := gjson.Get(jsonStr, destination)
+	if !existing.Exists() {
+		updated, _ := sjson.SetRawBytes([]byte(jsonStr), destination, []byte(incoming.Raw))
+		return string(updated)
+	}
+	if !existing.IsObject() || !incoming.IsObject() {
+		return jsonStr
+	}
+	incoming.ForEach(func(key, value gjson.Result) bool {
+		child := joinPath(destination, escapeGJSONPathKey(key.String()))
+		jsonStr = mergeMissingSchemaAtPath(jsonStr, child, value)
+		return true
+	})
 	return jsonStr
 }
 
@@ -176,11 +1019,52 @@ func flattenAnyOfOneOf(jsonStr string) string {
 			}
 
 			parentPath := trimSuffix(p, "."+key)
-			parentDesc := gjson.Get(jsonStr, descriptionPath(parentPath)).String()
+			parent := gjson.Get(jsonStr, parentPath)
+			if parentPath == "" {
+				parent = gjson.Parse(jsonStr)
+			}
 
 			items := arr.Array()
+
+			// If the parent already defines properties (e.g. an object schema with anyOf/oneOf constraints),
+			// do not replace the parent with a single branch. Instead, merge any branch properties
+			// into the parent and delete the union keyword.
+			if parentProps := parent.Get("properties"); parentProps.IsObject() {
+				hasNull := false
+				for _, item := range items {
+					if item.Get("type").String() == "null" {
+						hasNull = true
+					}
+					if branchProps := item.Get("properties"); branchProps.IsObject() {
+						branchProps.ForEach(func(propKey, propVal gjson.Result) bool {
+							destPath := joinPath(parentPath, "properties."+escapeGJSONPathKey(propKey.String()))
+							jsonStr = mergeMissingSchemaAtPath(jsonStr, destPath, propVal)
+							return true
+						})
+					}
+				}
+				if hasNull {
+					updated, _ := sjson.SetBytes([]byte(jsonStr), joinPath(parentPath, "nullable"), true)
+					jsonStr = string(updated)
+				}
+				jsonStr, _ = sjson.Delete(jsonStr, p)
+				continue
+			}
+
+			parentDesc := gjson.Get(jsonStr, descriptionPath(parentPath)).String()
 			bestIdx, allTypes := selectBest(items)
 			selected := items[bestIdx].Raw
+			hasNull := false
+			for _, item := range items {
+				if item.Get("type").String() == "null" {
+					hasNull = true
+					break
+				}
+			}
+			if hasNull && items[bestIdx].Get("type").String() != "null" {
+				updated, _ := sjson.SetBytes([]byte(selected), "nullable", true)
+				selected = string(updated)
+			}
 
 			if parentDesc != "" {
 				selected = mergeDescriptionRaw(selected, parentDesc)
@@ -210,8 +1094,10 @@ func selectBest(items []gjson.Result) (bestIdx int, types []string) {
 			score, t = 2, orDefault(t, "array")
 		case t != "" && t != "null":
 			score = 1
+		case t == "null":
+			score, t = 0, "null"
 		default:
-			t = orDefault(t, "null")
+			score, t = 0, ""
 		}
 
 		if t != "" {
@@ -224,7 +1110,7 @@ func selectBest(items []gjson.Result) (bestIdx int, types []string) {
 	return
 }
 
-func flattenTypeArrays(jsonStr string) string {
+func flattenTypeArrays(jsonStr string, preserveNativeNullable bool) string {
 	paths := findPaths(jsonStr, "type")
 	sortByDepth(paths)
 
@@ -252,7 +1138,8 @@ func flattenTypeArrays(jsonStr string) string {
 			firstType = nonNullTypes[0]
 		}
 
-		jsonStr, _ = sjson.Set(jsonStr, p, firstType)
+		updated, _ := sjson.SetBytes([]byte(jsonStr), p, firstType)
+		jsonStr = string(updated)
 
 		parentPath := trimSuffix(p, ".type")
 		if len(nonNullTypes) > 1 {
@@ -261,15 +1148,20 @@ func flattenTypeArrays(jsonStr string) string {
 		}
 
 		if hasNull {
+			if preserveNativeNullable {
+				updated, _ = sjson.SetBytes([]byte(jsonStr), joinPath(parentPath, "nullable"), true)
+				jsonStr = string(updated)
+				jsonStr = appendHint(jsonStr, parentPath, "(nullable)")
+				continue
+			}
+
 			parts := splitGJSONPath(p)
 			if len(parts) >= 3 && parts[len(parts)-3] == "properties" {
 				fieldNameEscaped := parts[len(parts)-2]
 				fieldName := unescapeGJSONPathKey(fieldNameEscaped)
 				objectPath := strings.Join(parts[:len(parts)-3], ".")
 				nullableFields[objectPath] = append(nullableFields[objectPath], fieldName)
-
-				propPath := joinPath(objectPath, "properties."+fieldNameEscaped)
-				jsonStr = appendHint(jsonStr, propPath, "(nullable)")
+				jsonStr = appendHint(jsonStr, joinPath(objectPath, "properties."+fieldNameEscaped), "(nullable)")
 			}
 		}
 	}
@@ -282,35 +1174,97 @@ func flattenTypeArrays(jsonStr string) string {
 		}
 
 		var filtered []string
-		for _, r := range req.Array() {
-			if !contains(fields, r.String()) {
-				filtered = append(filtered, r.String())
+		for _, required := range req.Array() {
+			if !contains(fields, required.String()) {
+				filtered = append(filtered, required.String())
 			}
 		}
-
 		if len(filtered) == 0 {
 			jsonStr, _ = sjson.Delete(jsonStr, reqPath)
 		} else {
-			jsonStr, _ = sjson.Set(jsonStr, reqPath, filtered)
+			updated, _ := sjson.SetBytes([]byte(jsonStr), reqPath, filtered)
+			jsonStr = string(updated)
 		}
 	}
 	return jsonStr
 }
 
-func removeUnsupportedKeywords(jsonStr string) string {
-	keywords := append(unsupportedConstraints,
-		"$schema", "$defs", "definitions", "const", "$ref", "additionalProperties",
-		"propertyNames", // Gemini doesn't support property name validation
+func removeUnsupportedKeywords(jsonStr string, options jsonSchemaCleanOptions) string {
+	keywords := append(constraintKeywords(options),
+		"$schema", "$defs", "definitions", "const", "$ref", "$id", "additionalProperties",
+		"propertyNames", "patternProperties", // Gemini doesn't support these schema keywords
+		"if", "then", "else",
+		"$comment", "enumDescriptions", "enumTitles", "prefill", "deprecated", "encrypted", // Schema metadata fields unsupported by Gemini
 	)
+	if options.antigravitySemantics {
+		keywords = append(keywords, "not")
+	}
+
+	deletePaths := make([]string, 0)
+	pathsByField := findPathsByFields(jsonStr, keywords)
 	for _, key := range keywords {
-		for _, p := range findPaths(jsonStr, key) {
+		for _, p := range pathsByField[key] {
 			if isPropertyDefinition(trimSuffix(p, "."+key)) {
 				continue
 			}
-			jsonStr, _ = sjson.Delete(jsonStr, p)
+			if options.preserveAdditionalPropertiesFalse && key == "additionalProperties" {
+				if gjson.Get(jsonStr, p).Type == gjson.False {
+					continue
+				}
+			}
+			deletePaths = append(deletePaths, p)
 		}
 	}
+	sortByDepth(deletePaths)
+	for _, p := range deletePaths {
+		jsonStr, _ = sjson.Delete(jsonStr, p)
+	}
+	// Remove x-* extension fields (e.g., x-google-enum-descriptions) that are not supported by Gemini API
+	jsonStr = removeExtensionFields(jsonStr)
 	return jsonStr
+}
+
+// removeExtensionFields removes all x-* extension fields from the JSON schema.
+// These are OpenAPI/JSON Schema extension fields that Google APIs don't recognize.
+func removeExtensionFields(jsonStr string) string {
+	var paths []string
+	walkForExtensions(gjson.Parse(jsonStr), "", &paths)
+	// walkForExtensions returns paths in a way that deeper paths are added before their ancestors
+	// when they are not deleted wholesale, but since we skip children of deleted x-* nodes,
+	// any collected path is safe to delete. We still use DeleteBytes for efficiency.
+
+	b := []byte(jsonStr)
+	for _, p := range paths {
+		b, _ = sjson.DeleteBytes(b, p)
+	}
+	return string(b)
+}
+
+func walkForExtensions(value gjson.Result, path string, paths *[]string) {
+	if value.IsArray() {
+		arr := value.Array()
+		for i := len(arr) - 1; i >= 0; i-- {
+			walkForExtensions(arr[i], joinPath(path, strconv.Itoa(i)), paths)
+		}
+		return
+	}
+
+	if value.IsObject() {
+		value.ForEach(func(key, val gjson.Result) bool {
+			keyStr := key.String()
+			safeKey := escapeGJSONPathKey(keyStr)
+			childPath := joinPath(path, safeKey)
+
+			// If it's an extension field, we delete it and don't need to look at its children.
+			if strings.HasPrefix(keyStr, "x-") && !isPropertyDefinition(path) {
+				*paths = append(*paths, childPath)
+				return true
+			}
+
+			walkForExtensions(val, childPath, paths)
+			return true
+		})
+	}
 }
 
 func cleanupRequiredFields(jsonStr string) string {
@@ -320,7 +1274,11 @@ func cleanupRequiredFields(jsonStr string) string {
 
 		req := gjson.Get(jsonStr, p)
 		props := gjson.Get(jsonStr, propsPath)
-		if !req.IsArray() || !props.IsObject() {
+		if !req.IsArray() {
+			continue
+		}
+		if !props.IsObject() {
+			jsonStr, _ = sjson.Delete(jsonStr, p)
 			continue
 		}
 
@@ -336,7 +1294,8 @@ func cleanupRequiredFields(jsonStr string) string {
 			if len(valid) == 0 {
 				jsonStr, _ = sjson.Delete(jsonStr, p)
 			} else {
-				jsonStr, _ = sjson.Set(jsonStr, p, valid)
+				updated, _ := sjson.SetBytes([]byte(jsonStr), p, valid)
+				jsonStr = string(updated)
 			}
 		}
 	}
@@ -380,11 +1339,14 @@ func addEmptySchemaPlaceholder(jsonStr string) string {
 		if needsPlaceholder {
 			// Add placeholder "reason" property
 			reasonPath := joinPath(propsPath, "reason")
-			jsonStr, _ = sjson.Set(jsonStr, reasonPath+".type", "string")
-			jsonStr, _ = sjson.Set(jsonStr, reasonPath+".description", "Brief explanation of why you are calling this tool")
+			updated, _ := sjson.SetBytes([]byte(jsonStr), reasonPath+".type", "string")
+			jsonStr = string(updated)
+			updated, _ = sjson.SetBytes([]byte(jsonStr), reasonPath+".description", placeholderReasonDescription)
+			jsonStr = string(updated)
 
 			// Add to required array
-			jsonStr, _ = sjson.Set(jsonStr, reqPath, []string{"reason"})
+			updated, _ = sjson.SetBytes([]byte(jsonStr), reqPath, []string{"reason"})
+			jsonStr = string(updated)
 			continue
 		}
 
@@ -397,9 +1359,11 @@ func addEmptySchemaPlaceholder(jsonStr string) string {
 			}
 			placeholderPath := joinPath(propsPath, "_")
 			if !gjson.Get(jsonStr, placeholderPath).Exists() {
-				jsonStr, _ = sjson.Set(jsonStr, placeholderPath+".type", "boolean")
+				updated, _ := sjson.SetBytes([]byte(jsonStr), placeholderPath+".type", "boolean")
+				jsonStr = string(updated)
 			}
-			jsonStr, _ = sjson.Set(jsonStr, reqPath, []string{"_"})
+			updated, _ := sjson.SetBytes([]byte(jsonStr), reqPath, []string{"_"})
+			jsonStr = string(updated)
 		}
 	}
 
@@ -414,8 +1378,46 @@ func findPaths(jsonStr, field string) []string {
 	return paths
 }
 
+func findPathsByFields(jsonStr string, fields []string) map[string][]string {
+	set := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		set[field] = struct{}{}
+	}
+	paths := make(map[string][]string, len(set))
+	walkForFields(gjson.Parse(jsonStr), "", set, paths)
+	return paths
+}
+
+func walkForFields(value gjson.Result, path string, fields map[string]struct{}, paths map[string][]string) {
+	switch value.Type {
+	case gjson.JSON:
+		value.ForEach(func(key, val gjson.Result) bool {
+			keyStr := key.String()
+			safeKey := escapeGJSONPathKey(keyStr)
+
+			var childPath string
+			if path == "" {
+				childPath = safeKey
+			} else {
+				childPath = path + "." + safeKey
+			}
+
+			if _, ok := fields[keyStr]; ok {
+				paths[keyStr] = append(paths[keyStr], childPath)
+			}
+
+			walkForFields(val, childPath, fields, paths)
+			return true
+		})
+	case gjson.String, gjson.Number, gjson.True, gjson.False, gjson.Null:
+		// Terminal types - no further traversal needed
+	}
+}
+
 func sortByDepth(paths []string) {
-	sort.Slice(paths, func(i, j int) bool { return len(paths[i]) > len(paths[j]) })
+	sort.SliceStable(paths, func(i, j int) bool {
+		return len(splitGJSONPath(paths[i])) > len(splitGJSONPath(paths[j]))
+	})
 }
 
 func trimSuffix(path, suffix string) string {
@@ -436,12 +1438,44 @@ func setRawAt(jsonStr, path, value string) string {
 	if path == "" {
 		return value
 	}
-	result, _ := sjson.SetRaw(jsonStr, path, value)
-	return result
+	result, _ := sjson.SetRawBytes([]byte(jsonStr), path, []byte(value))
+	return string(result)
 }
 
+// schemaNameMapKeywords are the schema keywords whose value maps author-chosen names to
+// subschemas. A key directly under one of them is a name, never a schema keyword.
+var schemaNameMapKeywords = map[string]struct{}{
+	"properties":        {},
+	"patternProperties": {},
+	"dependentSchemas":  {},
+	"$defs":             {},
+	"definitions":       {},
+}
+
+// isPropertyDefinition reports whether path points at a map whose keys are names chosen by the
+// tool author, so a key spelled like a schema keyword there must be preserved.
+//
+// A trailing ".properties" is not enough to tell: a tool may declare a property named
+// "properties", and the schema for that property then sits at a path ending in ".properties" while
+// being an ordinary schema node. Classifying it as a name map skipped every cleaning pass inside
+// it, so unsupported keywords such as "propertyNames" reached the private Gemini backend, which
+// rejects unknown fields with a 400.
+//
+// Each name-map keyword at the end of the path therefore flips the answer, because the node it
+// names is a map only when its own parent is a schema: "properties" is a map,
+// "properties.properties" the schema of a property named "properties", and
+// "properties.properties.properties" that schema's own map. Only the trailing run matters, so any
+// prefix the caller nests the schema under is ignored.
 func isPropertyDefinition(path string) bool {
-	return path == "properties" || strings.HasSuffix(path, ".properties")
+	segments := splitGJSONPath(path)
+	trailing := 0
+	for i := len(segments) - 1; i >= 0; i-- {
+		if _, ok := schemaNameMapKeywords[unescapeGJSONPathKey(segments[i])]; !ok {
+			break
+		}
+		trailing++
+	}
+	return trailing%2 == 1
 }
 
 func descriptionPath(parentPath string) string {
@@ -451,25 +1485,38 @@ func descriptionPath(parentPath string) string {
 	return parentPath + ".description"
 }
 
+// mergeHint combines an existing description with a hint. Cleaning is not always a single pass:
+// a schema may be cleaned by a translator and again by an executor, so an already-present hint is
+// kept as-is instead of being appended a second time.
+func mergeHint(existing, hint string) string {
+	if existing == "" {
+		return hint
+	}
+	// A hint added to an empty description is stored bare and later hints are appended after it, so
+	// the bare form may sit alone, lead the description, or appear parenthesised further along.
+	if existing == hint ||
+		strings.HasPrefix(existing, hint+" (") ||
+		strings.Contains(existing, fmt.Sprintf("(%s)", hint)) {
+		return existing
+	}
+	return fmt.Sprintf("%s (%s)", existing, hint)
+}
+
 func appendHint(jsonStr, parentPath, hint string) string {
 	descPath := parentPath + ".description"
 	if parentPath == "" || parentPath == "@this" {
 		descPath = "description"
 	}
-	existing := gjson.Get(jsonStr, descPath).String()
-	if existing != "" {
-		hint = fmt.Sprintf("%s (%s)", existing, hint)
-	}
-	jsonStr, _ = sjson.Set(jsonStr, descPath, hint)
+	merged := mergeHint(gjson.Get(jsonStr, descPath).String(), hint)
+	updated, _ := sjson.SetBytes([]byte(jsonStr), descPath, merged)
+	jsonStr = string(updated)
 	return jsonStr
 }
 
 func appendHintRaw(jsonRaw, hint string) string {
-	existing := gjson.Get(jsonRaw, "description").String()
-	if existing != "" {
-		hint = fmt.Sprintf("%s (%s)", existing, hint)
-	}
-	jsonRaw, _ = sjson.Set(jsonRaw, "description", hint)
+	merged := mergeHint(gjson.Get(jsonRaw, "description").String(), hint)
+	updated, _ := sjson.SetBytes([]byte(jsonRaw), "description", merged)
+	jsonRaw = string(updated)
 	return jsonRaw
 }
 
@@ -500,6 +1547,9 @@ func orDefault(val, def string) string {
 }
 
 func escapeGJSONPathKey(key string) string {
+	if strings.IndexAny(key, ".*?") == -1 {
+		return key
+	}
 	return gjsonPathKeyReplacer.Replace(key)
 }
 
@@ -552,13 +1602,13 @@ func mergeDescriptionRaw(schemaRaw, parentDesc string) string {
 	childDesc := gjson.Get(schemaRaw, "description").String()
 	switch {
 	case childDesc == "":
-		schemaRaw, _ = sjson.Set(schemaRaw, "description", parentDesc)
-		return schemaRaw
+		updated, _ := sjson.SetBytes([]byte(schemaRaw), "description", parentDesc)
+		return string(updated)
 	case childDesc == parentDesc:
 		return schemaRaw
 	default:
 		combined := fmt.Sprintf("%s (%s)", parentDesc, childDesc)
-		schemaRaw, _ = sjson.Set(schemaRaw, "description", combined)
-		return schemaRaw
+		updated, _ := sjson.SetBytes([]byte(schemaRaw), "description", combined)
+		return string(updated)
 	}
 }

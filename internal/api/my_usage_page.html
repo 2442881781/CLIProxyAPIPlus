@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="white">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>用量面板</title>
+<style>
+:root,[data-theme="white"]{
+  --bg:#f5f4f1;--card:#ffffff;--card2:#faf9f7;--border:#e6e2dc;--border-hover:#cfc9c0;
+  --text:#1d1b18;--text2:#5a544d;--text3:#9c958d;
+  --primary:#4a453f;--primary-hover:#37332e;
+  --success:#0d9668;--error:#c65746;--warn:#b45309;
+}
+[data-theme="dark"]{
+  --bg:#151412;--card:#1d1b18;--card2:#262320;--border:#3a3530;--border-hover:#5a544d;
+  --text:#f6f4f1;--text2:#c9c3bb;--text3:#9c958d;
+  --primary:#8b8680;--primary-hover:#9a948e;
+  --success:#10b981;--error:#c65746;--warn:#f59e0b;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:40px 20px}
+.wrap{max-width:760px;margin:0 auto}
+h1{font-size:24px;font-weight:600}
+.sub{color:var(--text3);font-size:13px;margin-top:6px;margin-bottom:28px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px}
+.stat{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:16px}
+.stat .label{font-size:12px;color:var(--text3);margin-bottom:6px}
+.stat .value{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.stat .extra{font-size:12px;color:var(--text3);margin-top:4px}
+.tag{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:500}
+.tag.ok{background:rgba(16,185,129,.15);color:var(--success)}
+.tag.off{background:rgba(156,149,141,.18);color:var(--text3)}
+.tag.bad{background:rgba(198,87,70,.15);color:var(--error)}
+.bar{height:8px;border-radius:999px;background:var(--card2);border:1px solid var(--border);overflow:hidden;margin-top:10px}
+.bar>i{display:block;height:100%;background:var(--success);border-radius:999px;transition:width .4s}
+.bar.warn>i{background:var(--warn)}
+.bar.over>i{background:var(--error)}
+.row{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--border);font-size:14px}
+.row:last-child{border-bottom:none}
+.row .k{color:var(--text3)}
+.row .v{text-align:right;word-break:break-all}
+.muted{color:var(--text3)}
+.center{text-align:center;padding:60px 0}
+input[type=text]{width:100%;max-width:420px;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:14px;outline:none}
+input[type=text]:focus{border-color:var(--border-hover)}
+button{padding:10px 20px;border:none;border-radius:8px;background:var(--primary);color:var(--card);font-size:14px;cursor:pointer;font-weight:500}
+button:hover{background:var(--primary-hover)}
+h2{font-size:15px;font-weight:600;margin-bottom:12px}
+.err{background:rgba(198,87,70,.1);border:1px solid var(--error);color:var(--error);padding:12px 16px;border-radius:8px;font-size:14px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{display:inline-block;width:18px;height:18px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>用量面板</h1>
+  <div class="sub" id="subtitle">个人 API Key 用量与配额</div>
+  <div id="app"><div class="center"><span class="spin"></span></div></div>
+</div>
+<script>
+function fmt(n){return (n||0).toLocaleString()}
+function fmtDate(s){if(!s)return '—';try{return new Date(s).toLocaleString()}catch(e){return s}}
+function periodLabel(p){return p==='daily'?'每日':p==='monthly'?'每月':'总量'}
+
+function getKey(){
+  const h = location.hash.replace(/^#\/?/,'').trim();
+  if(h){ const m = h.match(/(?:^|&)k(?:ey)?=([^&]+)/); return m ? decodeURIComponent(m[1]) : decodeURIComponent(h); }
+  return new URLSearchParams(location.search).get('key') || '';
+}
+
+async function load(key){
+  const app = document.getElementById('app');
+  const res = await fetch('/v0/usage/me', {headers:{Authorization:'Bearer '+key}});
+  if(res.status===401||res.status===403){
+    app.innerHTML = '<div class="err">链接无效或 Key 不存在，请核对链接是否完整。</div>' + keyInput();
+    return;
+  }
+  if(!res.ok){ app.innerHTML = '<div class="err">查询失败（'+res.status+'），请稍后重试。</div>'; return; }
+  const d = await res.json();
+  document.getElementById('subtitle').textContent = d.name ? d.name+' 的 API Key 用量与配额' : '个人 API Key 用量与配额';
+
+  const u = d.usage||{}, q = d.quota||{};
+  const limit = q.token_limit||0;
+  const periodUsed = u.period_tokens||0;
+  const pct = limit>0 ? Math.min(100, Math.round(periodUsed/limit*100)) : 0;
+  const barCls = limit>0 && pct>=100 ? 'over' : pct>=80 ? 'warn' : '';
+  const statusTag = d.disabled ? '<span class="tag bad">已禁用</span>'
+    : d.expired ? '<span class="tag bad">已过期</span>'
+    : '<span class="tag ok">正常</span>';
+
+  let html = '<div class="card"><div class="grid">'
+    + stat('累计 Token', fmt(u.total_tokens), fmt(u.requests||0)+' 次请求')
+    + stat('本周期用量', fmt(periodUsed), periodLabel(q.period)+'限额 '+(limit>0?fmt(limit):'不限'))
+    + stat('请求成功率', (u.requests>0?Math.round((1-(u.failed||0)/u.requests)*100):100)+'%', '失败 '+fmt(u.failed||0)+' 次')
+    + stat('最近使用', u.last_used_at?fmtDate(u.last_used_at):'从未使用', '')
+    + '</div>';
+  if(limit>0){
+    html += '<div style="margin-top:18px"><div class="row" style="border:none;padding:0"><span class="k">'+periodLabel(q.period)+'额度</span><span class="v">'+fmt(periodUsed)+' / '+fmt(limit)+'（'+pct+'%）</span></div><div class="bar '+barCls+'"><i style="width:'+pct+'%"></i></div></div>';
+  }
+  html += '</div>';
+
+  html += '<div class="card"><h2>Key 信息</h2>'
+    + row('名称', d.name||'—')
+    + row('Key', '<code>'+(d.key_prefix||'')+'…</code>')
+    + row('状态', statusTag)
+    + row('过期时间', fmtDate(d.expires_at))
+    + row('可用模型', (d.allowed_models&&d.allowed_models.length)?d.allowed_models.join(', '):'全部');
+  const rl = d.effective_rate_limit||{};
+  const segs = [];
+  if(rl.rpm>0)segs.push(fmt(rl.rpm)+' 次/分');
+  if(rl.tpm>0)segs.push(fmt(rl.tpm)+' tokens/分');
+  if(rl.rpd>0)segs.push(fmt(rl.rpd)+' 次/天');
+  if(rl.max_concurrency>0)segs.push('并发 '+fmt(rl.max_concurrency));
+  html += row('速率限制', segs.length?segs.join(' · '):'不限');
+  if(d.group){
+    const g = d.group;
+    const gu = g.usage||{};
+    html += row('所属分组', g.name)
+      + row('分组限额', '并发 '+(g.max_concurrency>0?g.max_concurrency:'不限')+' · '+(g.rate_limit_rpm>0?g.rate_limit_rpm+' 次/分':'不限速'))
+      + row('分组累计用量', fmt(gu.total_tokens)+' tokens / '+fmt(gu.requests)+' 次请求');
+  }
+  html += '</div>';
+  html += '<div class="muted" style="font-size:12px;text-align:center">数据每 15 秒刷新一次 · 请妥善保管本链接，它包含你的 Key</div>';
+  app.innerHTML = html;
+}
+function stat(label,value,extra){return '<div class="stat"><div class="label">'+label+'</div><div class="value">'+value+'</div><div class="extra">'+extra+'</div></div>'}
+function row(k,v){return '<div class="row"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'}
+function keyInput(){
+  return '<div class="center"><p class="muted" style="margin-bottom:14px">手动输入你的 API Key 查看用量：</p>'
+    + '<input type="text" id="kinput" placeholder="sk-cpa-..."> '
+    + '<button onclick="location.hash=document.getElementById(\'kinput\').value.trim();location.reload()">查询</button></div>';
+}
+
+const key = getKey();
+if(!key){
+  document.getElementById('app').innerHTML = keyInput();
+}else{
+  load(key).catch(()=>{document.getElementById('app').innerHTML='<div class="err">网络错误，请稍后重试。</div>'});
+}
+</script>
+</body>
+</html>

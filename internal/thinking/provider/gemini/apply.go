@@ -12,8 +12,8 @@
 package gemini
 
 import (
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -22,7 +22,7 @@ import (
 //
 // Gemini-specific behavior:
 //   - Gemini 2.5: thinkingBudget format, flash series supports ZeroAllowed
-//   - Gemini 3.x: thinkingLevel format, cannot be disabled
+//   - Gemini 3.x: thinkingLevel format, disable by removing thinkingConfig when zero is allowed
 //   - Use ThinkingSupport.Levels to decide output format
 type Applier struct{}
 
@@ -114,21 +114,30 @@ func (a *Applier) applyCompatible(body []byte, config thinking.ThinkingConfig) (
 
 func (a *Applier) applyLevelFormat(body []byte, config thinking.ThinkingConfig) ([]byte, error) {
 	// ModeNone semantics:
-	//   - ModeNone + Budget=0: completely disable thinking (not possible for Level-only models)
-	//   - ModeNone + Budget>0: forced to think but hide output (includeThoughts=false)
-	// ValidateConfig sets config.Level to the lowest level when ModeNone + Budget > 0.
+	//   - ModeNone + Budget=0: remove the thinking amount configuration.
+	//   - ModeNone + Budget>0: clamp to the model's lowest supported amount.
+	// Summary visibility remains independent and is restored only when explicitly set.
 
-	// Remove conflicting field to avoid both thinkingLevel and thinkingBudget in output
+	// Remove conflicting fields to avoid both thinkingLevel and thinkingBudget in output
 	result, _ := sjson.DeleteBytes(body, "generationConfig.thinkingConfig.thinkingBudget")
-	// Normalize includeThoughts field name to avoid oneof conflicts in upstream JSON parsing.
+	result, _ = sjson.DeleteBytes(result, "generationConfig.thinkingConfig.thinking_budget")
+	result, _ = sjson.DeleteBytes(result, "generationConfig.thinkingConfig.thinking_level")
+	// Normalize includeThoughts field name and retain only documented booleans.
+	result, _ = sjson.DeleteBytes(result, "generationConfig.thinkingConfig.includeThoughts")
 	result, _ = sjson.DeleteBytes(result, "generationConfig.thinkingConfig.include_thoughts")
 
 	if config.Mode == thinking.ModeNone {
-		result, _ = sjson.SetBytes(result, "generationConfig.thinkingConfig.includeThoughts", false)
+		if config.Budget == 0 && config.Level == "" {
+			// With the amount fully disabled, visibility is irrelevant. Restoring
+			// includeThoughts alone would recreate thinkingConfig and let a
+			// default-on model think again.
+			result, _ = sjson.DeleteBytes(result, "generationConfig.thinkingConfig")
+			return result, nil
+		}
 		if config.Level != "" {
 			result, _ = sjson.SetBytes(result, "generationConfig.thinkingConfig.thinkingLevel", string(config.Level))
 		}
-		return result, nil
+		return applyGeminiIncludeThoughts(result, body), nil
 	}
 
 	// Only handle ModeLevel - budget conversion should be done by upper layer
@@ -138,32 +147,36 @@ func (a *Applier) applyLevelFormat(body []byte, config thinking.ThinkingConfig) 
 
 	level := string(config.Level)
 	result, _ = sjson.SetBytes(result, "generationConfig.thinkingConfig.thinkingLevel", level)
-	result, _ = sjson.SetBytes(result, "generationConfig.thinkingConfig.includeThoughts", true)
-	return result, nil
+	return applyGeminiIncludeThoughts(result, body), nil
 }
 
 func (a *Applier) applyBudgetFormat(body []byte, config thinking.ThinkingConfig) ([]byte, error) {
-	// Remove conflicting field to avoid both thinkingLevel and thinkingBudget in output
+	// Remove conflicting fields to avoid both thinkingLevel and thinkingBudget in output
 	result, _ := sjson.DeleteBytes(body, "generationConfig.thinkingConfig.thinkingLevel")
-	// Normalize includeThoughts field name to avoid oneof conflicts in upstream JSON parsing.
+	result, _ = sjson.DeleteBytes(result, "generationConfig.thinkingConfig.thinking_level")
+	result, _ = sjson.DeleteBytes(result, "generationConfig.thinkingConfig.thinking_budget")
+	// Normalize includeThoughts field name and retain only documented booleans.
+	result, _ = sjson.DeleteBytes(result, "generationConfig.thinkingConfig.includeThoughts")
 	result, _ = sjson.DeleteBytes(result, "generationConfig.thinkingConfig.include_thoughts")
 
 	budget := config.Budget
-	// ModeNone semantics:
-	//   - ModeNone + Budget=0: completely disable thinking
-	//   - ModeNone + Budget>0: forced to think but hide output (includeThoughts=false)
-	// When ZeroAllowed=false, ValidateConfig clamps Budget to Min while preserving ModeNone.
-	includeThoughts := false
-	switch config.Mode {
-	case thinking.ModeNone:
-		includeThoughts = false
-	case thinking.ModeAuto:
-		includeThoughts = true
-	default:
-		includeThoughts = budget > 0
-	}
-
 	result, _ = sjson.SetBytes(result, "generationConfig.thinkingConfig.thinkingBudget", budget)
-	result, _ = sjson.SetBytes(result, "generationConfig.thinkingConfig.includeThoughts", includeThoughts)
-	return result, nil
+	return applyGeminiIncludeThoughts(result, body), nil
+}
+
+func applyGeminiIncludeThoughts(result, original []byte) []byte {
+	for _, path := range []string{
+		"generationConfig.thinkingConfig.includeThoughts",
+		"generationConfig.thinkingConfig.include_thoughts",
+	} {
+		switch value := gjson.GetBytes(original, path); value.Type {
+		case gjson.True:
+			result, _ = sjson.SetBytes(result, "generationConfig.thinkingConfig.includeThoughts", true)
+			return result
+		case gjson.False:
+			result, _ = sjson.SetBytes(result, "generationConfig.thinkingConfig.includeThoughts", false)
+			return result
+		}
+	}
+	return result
 }

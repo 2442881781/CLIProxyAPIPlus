@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -40,8 +40,7 @@ func DoClaudeLogin(cfg *config.Config, options *LoginOptions) {
 
 	_, savedPath, err := manager.Login(context.Background(), "claude", cfg, authOpts)
 	if err != nil {
-		var authErr *claude.AuthenticationError
-		if errors.As(err, &authErr) {
+		if authErr, ok := errors.AsType[*claude.AuthenticationError](err); ok {
 			log.Error(claude.GetUserFriendlyMessage(authErr))
 			if authErr.Type == claude.ErrPortInUse.Type {
 				os.Exit(claude.ErrPortInUse.Code)

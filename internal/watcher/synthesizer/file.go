@@ -1,19 +1,24 @@
 package synthesizer
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
-	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/geminicli"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	log "github.com/sirupsen/logrus"
 )
 
 // FileSynthesizer generates Auth entries from OAuth JSON files.
-// It handles file-based authentication and Gemini virtual auth generation.
+// It handles file-based authentication.
 type FileSynthesizer struct{}
 
 // NewFileSynthesizer creates a new FileSynthesizer instance.
@@ -34,9 +39,6 @@ func (s *FileSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth, e
 		return out, nil
 	}
 
-	now := ctx.Now
-	cfg := ctx.Config
-
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -50,175 +52,294 @@ func (s *FileSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth, e
 		if errRead != nil || len(data) == 0 {
 			continue
 		}
-		var metadata map[string]any
-		if errUnmarshal := json.Unmarshal(data, &metadata); errUnmarshal != nil {
+		auths, errSynthesize := synthesizeFileAuths(ctx, full, data)
+		if errSynthesize != nil {
+			log.WithError(errSynthesize).Warnf("skipping auth file %s", name)
 			continue
 		}
-		t, _ := metadata["type"].(string)
-		if t == "" {
+		if len(auths) == 0 {
 			continue
 		}
-		provider := strings.ToLower(t)
-		if provider == "gemini" {
-			provider = "gemini-cli"
-		}
-		label := provider
-		if email, _ := metadata["email"].(string); email != "" {
-			label = email
-		}
-		// Use relative path under authDir as ID to stay consistent with the file-based token store
-		id := full
-		if rel, errRel := filepath.Rel(ctx.AuthDir, full); errRel == nil && rel != "" {
-			id = rel
-		}
-
-		proxyURL := ""
-		if p, ok := metadata["proxy_url"].(string); ok {
-			proxyURL = p
-		}
-
-		prefix := ""
-		if rawPrefix, ok := metadata["prefix"].(string); ok {
-			trimmed := strings.TrimSpace(rawPrefix)
-			trimmed = strings.Trim(trimmed, "/")
-			if trimmed != "" && !strings.Contains(trimmed, "/") {
-				prefix = trimmed
-			}
-		}
-
-		a := &coreauth.Auth{
-			ID:       id,
-			Provider: provider,
-			Label:    label,
-			Prefix:   prefix,
-			Status:   coreauth.StatusActive,
-			Attributes: map[string]string{
-				"source": full,
-				"path":   full,
-			},
-			ProxyURL:  proxyURL,
-			Metadata:  metadata,
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		ApplyAuthExcludedModelsMeta(a, cfg, nil, "oauth")
-		if provider == "gemini-cli" {
-			if virtuals := SynthesizeGeminiVirtualAuths(a, metadata, now); len(virtuals) > 0 {
-				for _, v := range virtuals {
-					ApplyAuthExcludedModelsMeta(v, cfg, nil, "oauth")
-				}
-				out = append(out, a)
-				out = append(out, virtuals...)
-				continue
-			}
-		}
-		out = append(out, a)
+		out = append(out, auths...)
 	}
 	return out, nil
 }
 
-// SynthesizeGeminiVirtualAuths creates virtual Auth entries for multi-project Gemini credentials.
-// It disables the primary auth and creates one virtual auth per project.
-func SynthesizeGeminiVirtualAuths(primary *coreauth.Auth, metadata map[string]any, now time.Time) []*coreauth.Auth {
-	if primary == nil || metadata == nil {
-		return nil
-	}
-	projects := splitGeminiProjectIDs(metadata)
-	if len(projects) <= 1 {
-		return nil
-	}
-	email, _ := metadata["email"].(string)
-	shared := geminicli.NewSharedCredential(primary.ID, email, metadata, projects)
-	primary.Disabled = true
-	primary.Status = coreauth.StatusDisabled
-	primary.Runtime = shared
-	if primary.Attributes == nil {
-		primary.Attributes = make(map[string]string)
-	}
-	primary.Attributes["gemini_virtual_primary"] = "true"
-	primary.Attributes["virtual_children"] = strings.Join(projects, ",")
-	source := primary.Attributes["source"]
-	authPath := primary.Attributes["path"]
-	originalProvider := primary.Provider
-	if originalProvider == "" {
-		originalProvider = "gemini-cli"
-	}
-	label := primary.Label
-	if label == "" {
-		label = originalProvider
-	}
-	virtuals := make([]*coreauth.Auth, 0, len(projects))
-	for _, projectID := range projects {
-		attrs := map[string]string{
-			"runtime_only":           "true",
-			"gemini_virtual_parent":  primary.ID,
-			"gemini_virtual_project": projectID,
-		}
-		if source != "" {
-			attrs["source"] = source
-		}
-		if authPath != "" {
-			attrs["path"] = authPath
-		}
-		metadataCopy := map[string]any{
-			"email":             email,
-			"project_id":        projectID,
-			"virtual":           true,
-			"virtual_parent_id": primary.ID,
-			"type":              metadata["type"],
-		}
-		proxy := strings.TrimSpace(primary.ProxyURL)
-		if proxy != "" {
-			metadataCopy["proxy_url"] = proxy
-		}
-		virtual := &coreauth.Auth{
-			ID:         buildGeminiVirtualID(primary.ID, projectID),
-			Provider:   originalProvider,
-			Label:      fmt.Sprintf("%s [%s]", label, projectID),
-			Status:     coreauth.StatusActive,
-			Attributes: attrs,
-			Metadata:   metadataCopy,
-			ProxyURL:   primary.ProxyURL,
-			Prefix:     primary.Prefix,
-			CreatedAt:  primary.CreatedAt,
-			UpdatedAt:  primary.UpdatedAt,
-			Runtime:    geminicli.NewVirtualCredential(projectID, shared),
-		}
-		virtuals = append(virtuals, virtual)
-	}
-	return virtuals
+// SynthesizeAuthFile generates Auth entries for one auth JSON file payload.
+// It shares exactly the same mapping behavior as FileSynthesizer.Synthesize.
+func SynthesizeAuthFile(ctx *SynthesisContext, fullPath string, data []byte) ([]*coreauth.Auth, error) {
+	return synthesizeFileAuths(ctx, fullPath, data)
 }
 
-// splitGeminiProjectIDs extracts and deduplicates project IDs from metadata.
-func splitGeminiProjectIDs(metadata map[string]any) []string {
-	raw, _ := metadata["project_id"].(string)
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
+func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([]*coreauth.Auth, error) {
+	if ctx == nil || len(data) == 0 {
+		return nil, nil
+	}
+	now := ctx.Now
+	cfg := ctx.Config
+	var metadata map[string]any
+	if errUnmarshal := json.Unmarshal(data, &metadata); errUnmarshal != nil {
+		return nil, nil
+	}
+	coreauth.NormalizeCredentialMetadata(metadata)
+	if errWeight := coreauth.ValidateAuthWeight(&coreauth.Auth{Metadata: metadata}); errWeight != nil {
+		return nil, fmt.Errorf("invalid weight in %s: %w", filepath.Base(fullPath), errWeight)
+	}
+	t, _ := metadata["type"].(string)
+	provider := strings.ToLower(strings.TrimSpace(t))
+	if provider == "gemini" {
+		provider = "gemini-cli"
+	}
+	if ctx.PluginAuthParser != nil {
+		auths, handled, errParse := parsePluginFileAuths(ctx.PluginAuthParser, pluginapi.AuthParseRequest{
+			Provider: provider,
+			Path:     fullPath,
+			FileName: filepath.Base(fullPath),
+			RawJSON:  data,
+		})
+		if errParse == nil && handled {
+			auths = compactPluginAuths(auths)
+			if len(auths) == 0 {
+				return nil, nil
+			}
+			perAccountExcluded := extractExcludedModelsFromMetadata(metadata)
+			perAccountModelAliases := extractOAuthModelAliasesFromMetadata(metadata)
+			disabled, _ := metadata["disabled"].(bool)
+			for index, auth := range auths {
+				if auth == nil {
+					continue
+				}
+				coreauth.NormalizeCredentialMetadata(auth.Metadata)
+				if len(auths) > 1 {
+					coreauth.MarkPluginVirtualAuth(auth, fullPath, index)
+				}
+				auth.CreatedAt = now
+				auth.UpdatedAt = now
+				if auth.Attributes == nil {
+					auth.Attributes = make(map[string]string)
+				}
+				auth.Attributes[coreauth.AttributePath] = fullPath
+				auth.Attributes[coreauth.AttributeSource] = fullPath
+				auth.Attributes[coreauth.AttributeSourceBackend] = coreauth.AuthSourceFile
+				if disabled {
+					auth.Disabled = true
+					auth.Status = coreauth.StatusDisabled
+					if auth.Metadata == nil {
+						auth.Metadata = make(map[string]any)
+					}
+					auth.Metadata["disabled"] = true
+				}
+				if p, ok := metadata["proxy_url"].(string); ok && auth.ProxyURL == "" {
+					auth.ProxyURL = strings.TrimSpace(p)
+				}
+				if pref, ok := metadata["prefix"].(string); ok && auth.Prefix == "" {
+					auth.Prefix = strings.Trim(strings.TrimSpace(pref), "/")
+				}
+				if errWeight := coreauth.ApplyAuthWeightMetadata(auth, metadata); errWeight != nil {
+					return nil, fmt.Errorf("invalid plugin auth weight in %s: %w", filepath.Base(fullPath), errWeight)
+				}
+				coreauth.SetOAuthModelAliasesAttribute(auth, perAccountModelAliases)
+				ApplyAuthExcludedModelsMeta(auth, cfg, perAccountExcluded, "oauth")
+				coreauth.ApplyCustomHeadersFromMetadata(auth)
+				applyFingerprintProfileAttribute(auth, metadata)
+			}
+			return auths, nil
+		}
+	}
+	if provider == "" || provider == "gemini-cli" {
+		return nil, nil
+	}
+	label := provider
+	if email, _ := metadata["email"].(string); email != "" {
+		label = email
+	}
+	// Use relative path under authDir as ID to stay consistent with the file-based token store.
+	id := fullPath
+	if strings.TrimSpace(ctx.AuthDir) != "" {
+		if rel, errRel := filepath.Rel(ctx.AuthDir, fullPath); errRel == nil && rel != "" {
+			id = rel
+		}
+	}
+	if runtime.GOOS == "windows" {
+		id = strings.ToLower(id)
+	}
+
+	proxyURL := ""
+	if p, ok := metadata["proxy_url"].(string); ok {
+		proxyURL = p
+	}
+
+	prefix := ""
+	if rawPrefix, ok := metadata["prefix"].(string); ok {
+		trimmed := strings.TrimSpace(rawPrefix)
+		trimmed = strings.Trim(trimmed, "/")
+		if trimmed != "" && !strings.Contains(trimmed, "/") {
+			prefix = trimmed
+		}
+	}
+
+	disabled, _ := metadata["disabled"].(bool)
+	status := coreauth.StatusActive
+	if disabled {
+		status = coreauth.StatusDisabled
+	}
+
+	// Read per-account excluded models from the OAuth JSON file.
+	perAccountExcluded := extractExcludedModelsFromMetadata(metadata)
+	perAccountModelAliases := extractOAuthModelAliasesFromMetadata(metadata)
+
+	a := &coreauth.Auth{
+		ID:       id,
+		Provider: provider,
+		Label:    label,
+		Prefix:   prefix,
+		Status:   status,
+		Disabled: disabled,
+		Attributes: map[string]string{
+			coreauth.AttributeSource:        fullPath,
+			coreauth.AttributePath:          fullPath,
+			coreauth.AttributeSourceBackend: coreauth.AuthSourceFile,
+		},
+		ProxyURL:  proxyURL,
+		Metadata:  metadata,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	// Read priority from auth file.
+	if rawPriority, ok := metadata["priority"]; ok {
+		switch v := rawPriority.(type) {
+		case float64:
+			a.Attributes["priority"] = strconv.Itoa(int(v))
+		case string:
+			priority := strings.TrimSpace(v)
+			if _, errAtoi := strconv.Atoi(priority); errAtoi == nil {
+				a.Attributes["priority"] = priority
+			}
+		}
+	}
+	if errWeight := coreauth.ApplyAuthWeightMetadata(a, metadata); errWeight != nil {
+		return nil, fmt.Errorf("invalid auth weight in %s: %w", filepath.Base(fullPath), errWeight)
+	}
+	// Read note from auth file.
+	if rawNote, ok := metadata["note"]; ok {
+		if note, isStr := rawNote.(string); isStr {
+			if trimmed := strings.TrimSpace(note); trimmed != "" {
+				a.Attributes["note"] = trimmed
+			}
+		}
+	}
+	coreauth.ApplyCustomHeadersFromMetadata(a)
+	coreauth.SetOAuthModelAliasesAttribute(a, perAccountModelAliases)
+	ApplyAuthExcludedModelsMeta(a, cfg, perAccountExcluded, "oauth")
+	applyFingerprintProfileAttribute(a, metadata)
+	// For codex auth files, extract plan_type from metadata or JWT id_token.
+	if provider == "codex" {
+		if ptRaw, ok := metadata["plan_type"].(string); ok && strings.TrimSpace(ptRaw) != "" {
+			a.Attributes["plan_type"] = strings.TrimSpace(ptRaw)
+		} else if idTokenRaw, ok := metadata["id_token"].(string); ok && strings.TrimSpace(idTokenRaw) != "" {
+			if claims, errParse := codex.ParseJWTToken(idTokenRaw); errParse == nil && claims != nil {
+				if pt := strings.TrimSpace(claims.CodexAuthInfo.ChatgptPlanType); pt != "" {
+					a.Attributes["plan_type"] = pt
+				}
+			}
+		}
+	}
+	return []*coreauth.Auth{a}, nil
+}
+
+func parsePluginFileAuths(parser PluginAuthParser, req pluginapi.AuthParseRequest) ([]*coreauth.Auth, bool, error) {
+	if parser == nil {
+		return nil, false, nil
+	}
+	if multiParser, ok := parser.(PluginMultiAuthParser); ok {
+		return multiParser.ParseAuths(context.Background(), req)
+	}
+	auth, handled, errParse := parser.ParseAuth(context.Background(), req)
+	if errParse != nil || !handled || auth == nil {
+		return nil, handled, errParse
+	}
+	return []*coreauth.Auth{auth}, true, nil
+}
+
+func compactPluginAuths(auths []*coreauth.Auth) []*coreauth.Auth {
+	if len(auths) == 0 {
 		return nil
 	}
-	parts := strings.Split(trimmed, ",")
-	result := make([]string, 0, len(parts))
-	seen := make(map[string]struct{}, len(parts))
-	for _, part := range parts {
-		id := strings.TrimSpace(part)
-		if id == "" {
+	out := auths[:0]
+	for _, auth := range auths {
+		if auth == nil {
 			continue
 		}
-		if _, ok := seen[id]; ok {
+		if errWeight := coreauth.ValidateAuthWeight(auth); errWeight != nil {
 			continue
 		}
-		seen[id] = struct{}{}
-		result = append(result, id)
+		out = append(out, auth)
+	}
+	return out
+}
+
+// extractOAuthModelAliasesFromMetadata reads per-account model aliases from OAuth JSON metadata.
+// "model_aliases" is canonical; "model-aliases" remains a legacy alias.
+func extractOAuthModelAliasesFromMetadata(metadata map[string]any) []config.OAuthModelAlias {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata["model_aliases"]
+	if !ok {
+		raw, ok = metadata["model-aliases"]
+	}
+	if !ok || raw == nil {
+		return nil
+	}
+	data, errMarshal := json.Marshal(raw)
+	if errMarshal != nil {
+		return nil
+	}
+	var aliases []config.OAuthModelAlias
+	if errUnmarshal := json.Unmarshal(data, &aliases); errUnmarshal != nil {
+		return nil
+	}
+	cfg := config.Config{
+		OAuthModelAlias: map[string][]config.OAuthModelAlias{
+			"auth": aliases,
+		},
+	}
+	cfg.SanitizeOAuthModelAlias()
+	return cfg.OAuthModelAlias["auth"]
+}
+
+// extractExcludedModelsFromMetadata reads per-account excluded models from the OAuth JSON metadata.
+// "excluded_models" is canonical; "excluded-models" remains a legacy alias.
+func extractExcludedModelsFromMetadata(metadata map[string]any) []string {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata["excluded_models"]
+	if !ok {
+		raw, ok = metadata["excluded-models"]
+	}
+	if !ok || raw == nil {
+		return nil
+	}
+	var stringSlice []string
+	switch v := raw.(type) {
+	case []string:
+		stringSlice = v
+	case []interface{}:
+		stringSlice = make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				stringSlice = append(stringSlice, s)
+			}
+		}
+	default:
+		return nil
+	}
+	result := make([]string, 0, len(stringSlice))
+	for _, s := range stringSlice {
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
+			result = append(result, trimmed)
+		}
 	}
 	return result
-}
-
-// buildGeminiVirtualID constructs a virtual auth ID from base ID and project ID.
-func buildGeminiVirtualID(baseID, projectID string) string {
-	project := strings.TrimSpace(projectID)
-	if project == "" {
-		project = "project"
-	}
-	replacer := strings.NewReplacer("/", "_", "\\", "_", " ", "_")
-	return fmt.Sprintf("%s::%s", baseID, replacer.Replace(project))
 }

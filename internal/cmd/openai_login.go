@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -54,8 +54,7 @@ func DoCodexLogin(cfg *config.Config, options *LoginOptions) {
 
 	_, savedPath, err := manager.Login(context.Background(), "codex", cfg, authOpts)
 	if err != nil {
-		var authErr *codex.AuthenticationError
-		if errors.As(err, &authErr) {
+		if authErr, ok := errors.AsType[*codex.AuthenticationError](err); ok {
 			log.Error(codex.GetUserFriendlyMessage(authErr))
 			if authErr.Type == codex.ErrPortInUse.Type {
 				os.Exit(codex.ErrPortInUse.Code)

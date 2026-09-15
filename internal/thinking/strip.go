@@ -27,28 +27,48 @@ func StripThinkingConfig(body []byte, provider string) []byte {
 		return body
 	}
 
+	var paths []string
 	switch provider {
 	case "claude":
-		result, _ := sjson.DeleteBytes(body, "thinking")
-		return result
+		paths = []string{"thinking", "output_config.effort"}
 	case "gemini":
-		result, _ := sjson.DeleteBytes(body, "generationConfig.thinkingConfig")
-		return result
-	case "gemini-cli", "antigravity":
-		result, _ := sjson.DeleteBytes(body, "request.generationConfig.thinkingConfig")
-		return result
+		paths = []string{"generationConfig.thinkingConfig"}
+	case "antigravity":
+		paths = []string{"request.generationConfig.thinkingConfig"}
+	case "interactions":
+		paths = []string{
+			"generation_config.thinking_level",
+			"generation_config.thinkingLevel",
+			"generation_config.thinking_budget",
+			"generation_config.thinkingBudget",
+			"generation_config.thinking_summaries",
+			"generation_config.thinkingSummaries",
+			"generation_config.thinking_config",
+			"generation_config.thinkingConfig",
+		}
 	case "openai":
-		result, _ := sjson.DeleteBytes(body, "reasoning_effort")
-		return result
-	case "codex":
-		result, _ := sjson.DeleteBytes(body, "reasoning.effort")
-		return result
-	case "iflow":
-		result, _ := sjson.DeleteBytes(body, "chat_template_kwargs.enable_thinking")
-		result, _ = sjson.DeleteBytes(result, "chat_template_kwargs.clear_thinking")
-		result, _ = sjson.DeleteBytes(result, "reasoning_split")
-		return result
+		paths = []string{"reasoning_effort", "reasoning"}
+	case "kimi":
+		paths = []string{
+			"reasoning_effort",
+			"thinking",
+		}
+	case "codex", "xai":
+		paths = []string{"reasoning"}
 	default:
 		return body
 	}
+
+	result := body
+	for _, path := range paths {
+		result, _ = sjson.DeleteBytes(result, path)
+	}
+
+	// Avoid leaving an empty output_config object for Claude when effort was the only field.
+	if provider == "claude" {
+		if oc := gjson.GetBytes(result, "output_config"); oc.Exists() && oc.IsObject() && len(oc.Map()) == 0 {
+			result, _ = sjson.DeleteBytes(result, "output_config")
+		}
+	}
+	return result
 }

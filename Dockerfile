@@ -1,10 +1,24 @@
-FROM golang:1.24-alpine AS builder
+FROM oven/bun:1.3.14 AS web-builder
+
+WORKDIR /web
+ARG VERSION=dev
+
+COPY web/management-center/package.json web/management-center/bun.lock ./
+RUN bun install --frozen-lockfile
+
+COPY web/management-center/ ./
+RUN VERSION="${VERSION}" bun run build
+
+FROM golang:1.26-bookworm AS builder
 
 WORKDIR /app
+ARG GOPROXY=https://proxy.golang.org,direct
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git && rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum ./
 
-RUN go mod download
+RUN GOPROXY="${GOPROXY}" go mod download
 
 COPY . .
 
@@ -12,17 +26,17 @@ ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X 'main.Version=${VERSION}-plus' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPIPlus ./cmd/server/
+RUN CGO_ENABLED=1 GOOS=linux go build -buildvcs=false -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPI ./cmd/server/
 
-FROM alpine:3.22.0
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache tzdata
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certificates && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir /CLIProxyAPI
+RUN mkdir -p /CLIProxyAPI/static
 
-COPY --from=builder ./app/CLIProxyAPIPlus /CLIProxyAPI/CLIProxyAPIPlus
-
-COPY config.example.yaml /CLIProxyAPI/config.example.yaml
+COPY --from=builder ./app/CLIProxyAPI /CLIProxyAPI/CLIProxyAPI
+COPY --from=builder ./app/config.example.yaml /CLIProxyAPI/config.example.yaml
+COPY --from=web-builder ./web/dist/index.html /CLIProxyAPI/static/management.html
 
 WORKDIR /CLIProxyAPI
 
@@ -32,4 +46,4 @@ ENV TZ=Asia/Shanghai
 
 RUN cp /usr/share/zoneinfo/${TZ} /etc/localtime && echo "${TZ}" > /etc/timezone
 
-CMD ["./CLIProxyAPIPlus"]
+CMD ["./CLIProxyAPI"]

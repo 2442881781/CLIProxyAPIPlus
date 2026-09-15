@@ -5,20 +5,43 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	misc "github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
+	misc "github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
 	log "github.com/sirupsen/logrus"
 )
+
+// OpenAIImageModelType marks models that are callable through OpenAI-compatible image endpoints.
+const OpenAIImageModelType = "openai-image"
+
+const (
+	DefaultClaudeMaxInputTokens  = 200000
+	DefaultClaudeMaxOutputTokens = 64000
+)
+
+// NativeCapabilities contains tri-state native capability metadata from the catalog.
+type NativeCapabilities struct {
+	// WebSearch reports explicit per-model support for native web search.
+	// nil means the catalog has not established support either way.
+	WebSearch *bool `json:"web_search,omitempty"`
+}
 
 // ModelInfo represents information about an available model
 type ModelInfo struct {
 	// ID is the unique identifier for the model
 	ID string `json:"id"`
+	// MetadataModelID identifies the canonical model used to resolve client metadata.
+	// It is internal and must not be exposed in model-list responses.
+	MetadataModelID string `json:"-"`
+	// ExplicitThinking indicates thinking/reasoning configuration was explicitly configured for this model.
+	ExplicitThinking bool `json:"-"`
+	// ExplicitInputModalities indicates input modalities were explicitly configured for this model.
+	ExplicitInputModalities bool `json:"-"`
 	// Object type for the model (typically "model")
 	Object string `json:"object"`
 	// Created timestamp when the model was created
@@ -43,43 +66,91 @@ type ModelInfo struct {
 	SupportedGenerationMethods []string `json:"supportedGenerationMethods,omitempty"`
 	// ContextLength is the context window size
 	ContextLength int `json:"context_length,omitempty"`
+	// MaxContextLength is an explicit per-model context window override from configuration.
+	// It is carried internally for Codex client model catalog generation.
+	MaxContextLength int `json:"-"`
 	// MaxCompletionTokens is the maximum completion tokens
 	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
 	// SupportedParameters lists supported parameters
 	SupportedParameters []string `json:"supported_parameters,omitempty"`
-	// SupportedEndpoints lists supported API endpoints (e.g., "/chat/completions", "/responses").
-	SupportedEndpoints []string `json:"supported_endpoints,omitempty"`
+	// SupportedInputModalities lists supported input modalities (e.g., TEXT, IMAGE, VIDEO, AUDIO)
+	SupportedInputModalities []string `json:"supportedInputModalities,omitempty"`
+	// SupportedOutputModalities lists supported output modalities (e.g., TEXT, IMAGE)
+	SupportedOutputModalities []string `json:"supportedOutputModalities,omitempty"`
+	// SupportsWebSearch indicates this Antigravity model is listed by
+	// fetchAvailableModels.webSearchModelIds and can execute native googleSearch.
+	SupportsWebSearch bool `json:"supports_web_search,omitempty"`
+
+	// NativeCapabilities contains internal, static per-model capability metadata.
+	// It is intentionally separate from Antigravity's dynamically probed capability.
+	NativeCapabilities *NativeCapabilities `json:"-"`
 
 	// Thinking holds provider-specific reasoning/thinking budget capabilities.
 	// This is optional and currently used for Gemini thinking budget normalization.
 	Thinking *ThinkingSupport `json:"thinking,omitempty"`
 
+	// Config holds model-specific runtime overrides loaded from models.json.
+	Config *ModelConfig `json:"config,omitempty"`
+
 	// UserDefined indicates this model was defined through config file's models[]
 	// array (e.g., openai-compatibility.*.models[], *-api-key.models[]).
 	// UserDefined models have thinking configuration passed through without validation.
 	UserDefined bool `json:"-"`
+
+	// IsCompat enables compatibility handling for this configured API-key model.
+	// It is internal metadata and is not exposed in model listings.
+	IsCompat bool `json:"-"`
+}
+
+// ModelConfig holds optional runtime overrides for a model definition.
+type ModelConfig struct {
+	// OverrideHeader forces upstream request headers when non-empty.
+	// Keys are header names (e.g. "user-agent"); values replace any existing header.
+	OverrideHeader map[string]string `json:"override_header,omitempty"`
+}
+
+// UnmarshalJSON loads internal native capability metadata without exposing it
+// through ModelInfo's normal JSON serialization.
+func (m *ModelInfo) UnmarshalJSON(data []byte) error {
+	type modelInfoAlias ModelInfo
+	aux := struct {
+		*modelInfoAlias
+		NativeCapabilities *NativeCapabilities `json:"native_capabilities"`
+	}{modelInfoAlias: (*modelInfoAlias)(m)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	m.NativeCapabilities = aux.NativeCapabilities
+	return nil
+}
+
+type availableModelsCacheEntry struct {
+	models    []map[string]any
+	expiresAt time.Time
 }
 
 // ThinkingSupport describes a model family's supported internal reasoning budget range.
 // Values are interpreted in provider-native token units.
 type ThinkingSupport struct {
 	// Min is the minimum allowed thinking budget (inclusive).
-	Min int `json:"min,omitempty"`
+	Min int `json:"min,omitempty" yaml:"min,omitempty"`
 	// Max is the maximum allowed thinking budget (inclusive).
-	Max int `json:"max,omitempty"`
+	Max int `json:"max,omitempty" yaml:"max,omitempty"`
 	// ZeroAllowed indicates whether 0 is a valid value (to disable thinking).
-	ZeroAllowed bool `json:"zero_allowed,omitempty"`
+	ZeroAllowed bool `json:"zero_allowed,omitempty" yaml:"zero-allowed,omitempty"`
 	// DynamicAllowed indicates whether -1 is a valid value (dynamic thinking budget).
-	DynamicAllowed bool `json:"dynamic_allowed,omitempty"`
+	DynamicAllowed bool `json:"dynamic_allowed,omitempty" yaml:"dynamic-allowed,omitempty"`
 	// Levels defines discrete reasoning effort levels (e.g., "low", "medium", "high").
 	// When set, the model uses level-based reasoning instead of token budgets.
-	Levels []string `json:"levels,omitempty"`
+	Levels []string `json:"levels,omitempty" yaml:"levels,omitempty"`
 }
 
 // ModelRegistration tracks a model's availability
 type ModelRegistration struct {
 	// Info contains the model metadata
 	Info *ModelInfo
+	// InfoByProvider maps provider identifiers to specific ModelInfo to support differing capabilities.
+	InfoByProvider map[string]*ModelInfo
 	// Count is the number of active clients that can provide this model
 	Count int
 	// LastUpdated tracks when this registration was last modified
@@ -110,8 +181,16 @@ type ModelRegistry struct {
 	clientModelInfos map[string]map[string]*ModelInfo
 	// clientProviders maps client ID to its provider identifier
 	clientProviders map[string]string
+	// clientEpochs tracks monotonic registration epochs for each client ID
+	clientEpochs map[string]uint64
+	// clientGenerations tracks the latest generation applied for each client ID
+	clientGenerations map[string]uint64
 	// mutex ensures thread-safe access to the registry
 	mutex *sync.RWMutex
+	// availableModelsCache stores per-handler snapshots for GetAvailableModels.
+	availableModelsCache map[string]availableModelsCacheEntry
+	// generation tracks changes to model registrations and availability.
+	generation uint64
 	// hook is an optional callback sink for model registration changes
 	hook ModelRegistryHook
 }
@@ -124,29 +203,162 @@ var registryOnce sync.Once
 func GetGlobalRegistry() *ModelRegistry {
 	registryOnce.Do(func() {
 		globalRegistry = &ModelRegistry{
-			models:           make(map[string]*ModelRegistration),
-			clientModels:     make(map[string][]string),
-			clientModelInfos: make(map[string]map[string]*ModelInfo),
-			clientProviders:  make(map[string]string),
-			mutex:            &sync.RWMutex{},
+			models:               make(map[string]*ModelRegistration),
+			clientModels:         make(map[string][]string),
+			clientModelInfos:     make(map[string]map[string]*ModelInfo),
+			clientProviders:      make(map[string]string),
+			clientEpochs:         make(map[string]uint64),
+			clientGenerations:    make(map[string]uint64),
+			availableModelsCache: make(map[string]availableModelsCacheEntry),
+			mutex:                &sync.RWMutex{},
 		}
 	})
 	return globalRegistry
 }
+func (r *ModelRegistry) ensureAvailableModelsCacheLocked() {
+	if r.availableModelsCache == nil {
+		r.availableModelsCache = make(map[string]availableModelsCacheEntry)
+	}
+}
 
-// LookupModelInfo searches the dynamic registry first, then falls back to static model definitions.
-//
-// This helper exists because some code paths only have a model ID and still need Thinking and
-// max completion token metadata even when the dynamic registry hasn't been populated.
-func LookupModelInfo(modelID string) *ModelInfo {
+func (r *ModelRegistry) invalidateAvailableModelsCacheLocked() {
+	r.generation++
+	if len(r.availableModelsCache) == 0 {
+		return
+	}
+	clear(r.availableModelsCache)
+}
+
+// GetGeneration returns the current generation counter of model registrations.
+func (r *ModelRegistry) GetGeneration() uint64 {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	return r.generation
+}
+
+// LookupModelInfo searches dynamic registry (provider-specific > global) then static definitions.
+func LookupModelInfo(modelID string, provider ...string) *ModelInfo {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return nil
 	}
-	if info := GetGlobalRegistry().GetModelInfo(modelID); info != nil {
-		return info
+
+	p := ""
+	if len(provider) > 0 {
+		p = strings.ToLower(strings.TrimSpace(provider[0]))
 	}
-	return LookupStaticModelInfo(modelID)
+
+	if info := GetGlobalRegistry().GetModelInfo(modelID, p); info != nil {
+		return cloneModelInfo(info)
+	}
+	return cloneModelInfo(LookupStaticModelInfo(modelID))
+}
+
+// NativeCapabilityRoute describes one registered route to a public model.
+type NativeCapabilityRoute struct {
+	Provider           string
+	NativeCapabilities *NativeCapabilities
+}
+
+// ResolveResponsesWebSearchCapability conservatively resolves native web search
+// across every route that can serve a public model. A known unsupported route or
+// explicit model-level false wins; missing/unknown data produces unknown.
+func ResolveResponsesWebSearchCapability(routes []NativeCapabilityRoute) *bool {
+	if len(routes) == 0 {
+		return nil
+	}
+
+	hasUnknown := false
+	for _, route := range routes {
+		if route.NativeCapabilities != nil && route.NativeCapabilities.WebSearch != nil && !*route.NativeCapabilities.WebSearch {
+			return boolPointer(false)
+		}
+		pathSupport := responsesWebSearchProviderPathSupport(route.Provider)
+		if pathSupport == nil {
+			hasUnknown = true
+			continue
+		}
+		if !*pathSupport {
+			return boolPointer(false)
+		}
+		if route.NativeCapabilities == nil || route.NativeCapabilities.WebSearch == nil {
+			hasUnknown = true
+		}
+	}
+	if hasUnknown {
+		return nil
+	}
+	return boolPointer(true)
+}
+
+func responsesWebSearchProviderPathSupport(provider string) *bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	switch provider {
+	case "codex", "xai", "claude":
+		return boolPointer(true)
+	case "openai", "openai-compatibility", "gemini", "aistudio", "vertex", "antigravity", "kimi", "interactions", "gemini-interactions":
+		return boolPointer(false)
+	default:
+		if strings.HasPrefix(provider, "openai-compatible-") {
+			return boolPointer(false)
+		}
+		return nil
+	}
+}
+
+func boolPointer(value bool) *bool {
+	return &value
+}
+
+// GetResponsesWebSearchCapability resolves capability metadata across every
+// registered client route for the exact public model ID.
+func (r *ModelRegistry) GetResponsesWebSearchCapability(modelID string) *bool {
+	modelID = strings.TrimSpace(modelID)
+	if r == nil || modelID == "" {
+		return nil
+	}
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	routes := make([]NativeCapabilityRoute, 0)
+	for clientID, modelIDs := range r.clientModels {
+		for _, registeredID := range modelIDs {
+			if strings.TrimSpace(registeredID) != modelID {
+				continue
+			}
+			var nativeCapabilities *NativeCapabilities
+			if info := r.clientModelInfos[clientID][registeredID]; info != nil {
+				nativeCapabilities = info.NativeCapabilities
+			}
+			routes = append(routes, NativeCapabilityRoute{
+				Provider:           r.clientProviders[clientID],
+				NativeCapabilities: nativeCapabilities,
+			})
+		}
+	}
+	return ResolveResponsesWebSearchCapability(routes)
+}
+
+// ModelOverrideHeaders returns models.json config.override_header for the model, if any.
+// The returned map is a defensive copy and may be empty but never nil when overrides exist.
+func ModelOverrideHeaders(modelID string, provider ...string) map[string]string {
+	info := LookupModelInfo(modelID, provider...)
+	if info == nil || info.Config == nil || len(info.Config.OverrideHeader) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(info.Config.OverrideHeader))
+	for key, value := range info.Config.OverrideHeader {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // SetHook sets an optional hook for observing model registration changes.
@@ -160,6 +372,7 @@ func (r *ModelRegistry) SetHook(hook ModelRegistryHook) {
 }
 
 const defaultModelRegistryHookTimeout = 5 * time.Second
+const modelQuotaExceededWindow = 5 * time.Minute
 
 func (r *ModelRegistry) triggerModelsRegistered(provider, clientID string, models []*ModelInfo) {
 	hook := r.hook
@@ -204,6 +417,14 @@ func (r *ModelRegistry) triggerModelsUnregistered(provider, clientID string) {
 func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models []*ModelInfo) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	r.ensureAvailableModelsCacheLocked()
+
+	if r.clientGenerations == nil {
+		r.clientGenerations = make(map[string]uint64)
+	}
+	if r.clientEpochs == nil {
+		r.clientEpochs = make(map[string]uint64)
+	}
 
 	provider := strings.ToLower(clientProvider)
 	uniqueModelIDs := make([]string, 0, len(models))
@@ -229,9 +450,14 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 		delete(r.clientModels, clientID)
 		delete(r.clientModelInfos, clientID)
 		delete(r.clientProviders, clientID)
+		r.invalidateAvailableModelsCacheLocked()
 		misc.LogCredentialSeparator()
 		return
 	}
+
+	// Monotonically increment client registration epoch and reset generation to 0.
+	r.clientEpochs[clientID]++
+	r.clientGenerations[clientID] = uint64(0)
 
 	now := time.Now()
 
@@ -242,7 +468,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 		// Pure addition path.
 		for _, modelID := range rawModelIDs {
 			model := newModels[modelID]
-			r.addModelRegistration(modelID, provider, model, now)
+			r.addModelRegistration(modelID, provider, model, now, clientID)
 		}
 		r.clientModels[clientID] = append([]string(nil), rawModelIDs...)
 		// Store client's own model infos
@@ -256,6 +482,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 		} else {
 			delete(r.clientProviders, clientID)
 		}
+		r.invalidateAvailableModelsCacheLocked()
 		r.triggerModelsRegistered(provider, clientID, models)
 		log.Debugf("Registered client %s from provider %s with %d models", clientID, clientProvider, len(rawModelIDs))
 		misc.LogCredentialSeparator()
@@ -299,8 +526,14 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 				if count, okProv := reg.Providers[oldProvider]; okProv {
 					if count <= toRemove {
 						delete(reg.Providers, oldProvider)
+						if reg.InfoByProvider != nil {
+							delete(reg.InfoByProvider, oldProvider)
+						}
 					} else {
 						reg.Providers[oldProvider] = count - toRemove
+						if reg.InfoByProvider != nil && reg.InfoByProvider[oldProvider] != nil {
+							reg.InfoByProvider[oldProvider].SupportsWebSearch = r.hasClientSupportingWebSearchLocked(id, oldProvider, clientID)
+						}
 					}
 				}
 			}
@@ -335,7 +568,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 		model := newModels[id]
 		diff := newCount - oldCount
 		for i := 0; i < diff; i++ {
-			r.addModelRegistration(id, provider, model, now)
+			r.addModelRegistration(id, provider, model, now, clientID)
 		}
 	}
 
@@ -347,8 +580,24 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	for _, id := range uniqueModelIDs {
 		model := newModels[id]
 		if reg, ok := r.models[id]; ok {
+			hasWebSearch := model.SupportsWebSearch || r.hasClientSupportingWebSearchLocked(id, "", clientID)
 			reg.Info = cloneModelInfo(model)
+			reg.Info.SupportsWebSearch = hasWebSearch
+			if provider != "" {
+				if reg.InfoByProvider == nil {
+					reg.InfoByProvider = make(map[string]*ModelInfo)
+				}
+				hasProvWebSearch := model.SupportsWebSearch || r.hasClientSupportingWebSearchLocked(id, provider, clientID)
+				reg.InfoByProvider[provider] = cloneModelInfo(model)
+				reg.InfoByProvider[provider].SupportsWebSearch = hasProvWebSearch
+			}
+			if providerChanged && oldProvider != "" && reg.InfoByProvider != nil && reg.InfoByProvider[oldProvider] != nil {
+				reg.InfoByProvider[oldProvider].SupportsWebSearch = r.hasClientSupportingWebSearchLocked(id, oldProvider, clientID)
+			}
 			reg.LastUpdated = now
+			// Re-registering an existing client/model binding starts a fresh registry
+			// snapshot for that binding. Cooldown and suspension are transient
+			// scheduling state and must not survive this reconciliation step.
 			if reg.QuotaExceededClients != nil {
 				delete(reg.QuotaExceededClients, clientID)
 			}
@@ -390,9 +639,10 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 		delete(r.clientProviders, clientID)
 	}
 
+	r.invalidateAvailableModelsCacheLocked()
 	r.triggerModelsRegistered(provider, clientID, models)
 	if len(added) == 0 && len(removed) == 0 && !providerChanged {
-		// Only metadata (e.g., display name) changed; skip separator when no log output.
+		// Only metadata (e.g., display name) changed; keep no-op re-registration quiet.
 		return
 	}
 
@@ -400,22 +650,30 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	misc.LogCredentialSeparator()
 }
 
-func (r *ModelRegistry) addModelRegistration(modelID, provider string, model *ModelInfo, now time.Time) {
+func (r *ModelRegistry) addModelRegistration(modelID, provider string, model *ModelInfo, now time.Time, excludeClientID string) {
 	if model == nil || modelID == "" {
 		return
 	}
 	if existing, exists := r.models[modelID]; exists {
 		existing.Count++
 		existing.LastUpdated = now
+		hasWebSearch := model.SupportsWebSearch || r.hasClientSupportingWebSearchLocked(modelID, "", excludeClientID)
 		existing.Info = cloneModelInfo(model)
+		existing.Info.SupportsWebSearch = hasWebSearch
 		if existing.SuspendedClients == nil {
 			existing.SuspendedClients = make(map[string]string)
+		}
+		if existing.InfoByProvider == nil {
+			existing.InfoByProvider = make(map[string]*ModelInfo)
 		}
 		if provider != "" {
 			if existing.Providers == nil {
 				existing.Providers = make(map[string]int)
 			}
 			existing.Providers[provider]++
+			hasProvWebSearch := model.SupportsWebSearch || r.hasClientSupportingWebSearchLocked(modelID, provider, excludeClientID)
+			existing.InfoByProvider[provider] = cloneModelInfo(model)
+			existing.InfoByProvider[provider].SupportsWebSearch = hasProvWebSearch
 		}
 		log.Debugf("Incremented count for model %s, now %d clients", modelID, existing.Count)
 		return
@@ -423,6 +681,7 @@ func (r *ModelRegistry) addModelRegistration(modelID, provider string, model *Mo
 
 	registration := &ModelRegistration{
 		Info:                 cloneModelInfo(model),
+		InfoByProvider:       make(map[string]*ModelInfo),
 		Count:                1,
 		LastUpdated:          now,
 		QuotaExceededClients: make(map[string]*time.Time),
@@ -430,6 +689,7 @@ func (r *ModelRegistry) addModelRegistration(modelID, provider string, model *Mo
 	}
 	if provider != "" {
 		registration.Providers = map[string]int{provider: 1}
+		registration.InfoByProvider[provider] = cloneModelInfo(model)
 	}
 	r.models[modelID] = registration
 	log.Debugf("Registered new model %s from provider %s", modelID, provider)
@@ -455,6 +715,9 @@ func (r *ModelRegistry) removeModelRegistration(clientID, modelID, provider stri
 		if count, ok := registration.Providers[provider]; ok {
 			if count <= 1 {
 				delete(registration.Providers, provider)
+				if registration.InfoByProvider != nil {
+					delete(registration.InfoByProvider, provider)
+				}
 			} else {
 				registration.Providers[provider] = count - 1
 			}
@@ -464,6 +727,13 @@ func (r *ModelRegistry) removeModelRegistration(clientID, modelID, provider stri
 	if registration.Count <= 0 {
 		delete(r.models, modelID)
 		log.Debugf("Removed model %s as no clients remain", modelID)
+	} else {
+		if registration.Info != nil {
+			registration.Info.SupportsWebSearch = r.hasClientSupportingWebSearchLocked(modelID, "", clientID)
+		}
+		if provider != "" && registration.InfoByProvider != nil && registration.InfoByProvider[provider] != nil {
+			registration.InfoByProvider[provider].SupportsWebSearch = r.hasClientSupportingWebSearchLocked(modelID, provider, clientID)
+		}
 	}
 }
 
@@ -472,14 +742,42 @@ func cloneModelInfo(model *ModelInfo) *ModelInfo {
 		return nil
 	}
 	copyModel := *model
+	if model.NativeCapabilities != nil {
+		copyCapabilities := *model.NativeCapabilities
+		if model.NativeCapabilities.WebSearch != nil {
+			webSearch := *model.NativeCapabilities.WebSearch
+			copyCapabilities.WebSearch = &webSearch
+		}
+		copyModel.NativeCapabilities = &copyCapabilities
+	}
 	if len(model.SupportedGenerationMethods) > 0 {
 		copyModel.SupportedGenerationMethods = append([]string(nil), model.SupportedGenerationMethods...)
 	}
 	if len(model.SupportedParameters) > 0 {
 		copyModel.SupportedParameters = append([]string(nil), model.SupportedParameters...)
 	}
-	if len(model.SupportedEndpoints) > 0 {
-		copyModel.SupportedEndpoints = append([]string(nil), model.SupportedEndpoints...)
+	if len(model.SupportedInputModalities) > 0 {
+		copyModel.SupportedInputModalities = append([]string(nil), model.SupportedInputModalities...)
+	}
+	if len(model.SupportedOutputModalities) > 0 {
+		copyModel.SupportedOutputModalities = append([]string(nil), model.SupportedOutputModalities...)
+	}
+	if model.Thinking != nil {
+		copyThinking := *model.Thinking
+		if len(model.Thinking.Levels) > 0 {
+			copyThinking.Levels = append([]string(nil), model.Thinking.Levels...)
+		}
+		copyModel.Thinking = &copyThinking
+	}
+	if model.Config != nil {
+		copyConfig := *model.Config
+		if len(model.Config.OverrideHeader) > 0 {
+			copyConfig.OverrideHeader = make(map[string]string, len(model.Config.OverrideHeader))
+			for key, value := range model.Config.OverrideHeader {
+				copyConfig.OverrideHeader[key] = value
+			}
+		}
+		copyModel.Config = &copyConfig
 	}
 	return &copyModel
 }
@@ -510,10 +808,20 @@ func (r *ModelRegistry) UnregisterClient(clientID string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.unregisterClientInternal(clientID)
+	r.invalidateAvailableModelsCacheLocked()
 }
 
 // unregisterClientInternal performs the actual client unregistration (internal, no locking)
 func (r *ModelRegistry) unregisterClientInternal(clientID string) {
+	if r.clientGenerations == nil {
+		r.clientGenerations = make(map[string]uint64)
+	}
+	if r.clientEpochs == nil {
+		r.clientEpochs = make(map[string]uint64)
+	}
+	r.clientEpochs[clientID]++
+	r.clientGenerations[clientID]++
+
 	models, exists := r.clientModels[clientID]
 	provider, hasProvider := r.clientProviders[clientID]
 	if !exists {
@@ -539,6 +847,9 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 				if count, ok := registration.Providers[provider]; ok {
 					if count <= 1 {
 						delete(registration.Providers, provider)
+						if registration.InfoByProvider != nil {
+							delete(registration.InfoByProvider, provider)
+						}
 					} else {
 						registration.Providers[provider] = count - 1
 					}
@@ -551,6 +862,13 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 			if registration.Count <= 0 {
 				delete(r.models, modelID)
 				log.Debugf("Removed model %s as no clients remain", modelID)
+			} else {
+				if registration.Info != nil {
+					registration.Info.SupportsWebSearch = r.hasClientSupportingWebSearchLocked(modelID, "", clientID)
+				}
+				if hasProvider && registration.InfoByProvider != nil && registration.InfoByProvider[provider] != nil {
+					registration.InfoByProvider[provider].SupportsWebSearch = r.hasClientSupportingWebSearchLocked(modelID, provider, clientID)
+				}
 			}
 		}
 	}
@@ -573,10 +891,12 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 func (r *ModelRegistry) SetModelQuotaExceeded(clientID, modelID string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	r.ensureAvailableModelsCacheLocked()
 
 	if registration, exists := r.models[modelID]; exists {
 		now := time.Now()
 		registration.QuotaExceededClients[clientID] = &now
+		r.invalidateAvailableModelsCacheLocked()
 		log.Debugf("Marked model %s as quota exceeded for client %s", modelID, clientID)
 	}
 }
@@ -588,11 +908,203 @@ func (r *ModelRegistry) SetModelQuotaExceeded(clientID, modelID string) {
 func (r *ModelRegistry) ClearModelQuotaExceeded(clientID, modelID string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	r.ensureAvailableModelsCacheLocked()
 
 	if registration, exists := r.models[modelID]; exists {
 		delete(registration.QuotaExceededClients, clientID)
+		r.invalidateAvailableModelsCacheLocked()
 		// log.Debugf("Cleared quota exceeded status for model %s and client %s", modelID, clientID)
 	}
+}
+
+// ClientModelProjection describes the desired availability and quota state for a client's model.
+type ClientModelProjection struct {
+	ModelID       string
+	Suspended     bool
+	SuspendReason string
+	QuotaExceeded bool
+}
+
+// ApplyClientModelProjections atomically applies model suspension and quota exceeded state for clientID
+// if the supplied epoch and generation are current. Stale or mismatched epoch (!= current client epoch) or stale generation
+// (< current client generation), or projections for unregistered clients/models are rejected.
+func (r *ModelRegistry) ApplyClientModelProjections(clientID string, epoch uint64, generation uint64, projections []ClientModelProjection) bool {
+	if r == nil {
+		return false
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return false
+	}
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	if r.clientEpochs == nil {
+		r.clientEpochs = make(map[string]uint64)
+	}
+	if r.clientGenerations == nil {
+		r.clientGenerations = make(map[string]uint64)
+	}
+
+	clientRegisteredModels, exists := r.clientModels[clientID]
+	if !exists || len(clientRegisteredModels) == 0 {
+		return false
+	}
+
+	currentEpoch := r.clientEpochs[clientID]
+	if epoch != currentEpoch {
+		return false
+	}
+
+	currentGen := r.clientGenerations[clientID]
+	if generation < currentGen {
+		return false
+	}
+
+	registeredSet := make(map[string]struct{}, len(clientRegisteredModels))
+	for _, m := range clientRegisteredModels {
+		trimmedModel := strings.TrimSpace(m)
+		if trimmedModel != "" {
+			registeredSet[trimmedModel] = struct{}{}
+		}
+	}
+
+	hasValidModel := false
+	for _, proj := range projections {
+		modelID := strings.TrimSpace(proj.ModelID)
+		if modelID == "" {
+			continue
+		}
+		if _, isOwned := registeredSet[modelID]; isOwned {
+			if registration, existsModel := r.models[modelID]; existsModel && registration != nil {
+				hasValidModel = true
+				break
+			}
+		}
+	}
+	if !hasValidModel {
+		return false
+	}
+
+	r.clientGenerations[clientID] = generation
+	r.ensureAvailableModelsCacheLocked()
+
+	now := time.Now()
+	changed := false
+	for _, proj := range projections {
+		modelID := strings.TrimSpace(proj.ModelID)
+		if modelID == "" {
+			continue
+		}
+		if _, isOwned := registeredSet[modelID]; !isOwned {
+			continue
+		}
+		registration, existsModel := r.models[modelID]
+		if !existsModel || registration == nil {
+			continue
+		}
+
+		// Update suspended state
+		if proj.Suspended {
+			if registration.SuspendedClients == nil {
+				registration.SuspendedClients = make(map[string]string)
+			}
+			if currentReason, ok := registration.SuspendedClients[clientID]; !ok || currentReason != proj.SuspendReason {
+				registration.SuspendedClients[clientID] = proj.SuspendReason
+				registration.LastUpdated = now
+				changed = true
+			}
+		} else {
+			if registration.SuspendedClients != nil {
+				if _, ok := registration.SuspendedClients[clientID]; ok {
+					delete(registration.SuspendedClients, clientID)
+					registration.LastUpdated = now
+					changed = true
+				}
+			}
+		}
+
+		// Update quota exceeded state
+		if proj.QuotaExceeded {
+			if registration.QuotaExceededClients == nil {
+				registration.QuotaExceededClients = make(map[string]*time.Time)
+			}
+			if _, ok := registration.QuotaExceededClients[clientID]; !ok {
+				registration.QuotaExceededClients[clientID] = &now
+				registration.LastUpdated = now
+				changed = true
+			}
+		} else {
+			if registration.QuotaExceededClients != nil {
+				if _, ok := registration.QuotaExceededClients[clientID]; ok {
+					delete(registration.QuotaExceededClients, clientID)
+					registration.LastUpdated = now
+					changed = true
+				}
+			}
+		}
+	}
+
+	if changed {
+		r.invalidateAvailableModelsCacheLocked()
+	}
+	return true
+}
+
+// ApplyClientModelCapabilities applies capability mutations to matching models of clientID
+// if the client is currently registered and its registration epoch matches expectedEpoch.
+// Returns true if applied, false if client is unregistered or epoch changed.
+func (r *ModelRegistry) ApplyClientModelCapabilities(clientID string, expectedEpoch uint64, mutate func(modelID string, info *ModelInfo)) bool {
+	if r == nil || mutate == nil {
+		return false
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return false
+	}
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	if r.clientEpochs == nil || r.clientEpochs[clientID] != expectedEpoch {
+		return false
+	}
+	clientInfos, exists := r.clientModelInfos[clientID]
+	if !exists || len(clientInfos) == 0 {
+		return false
+	}
+
+	provider := r.clientProviders[clientID]
+	for id, info := range clientInfos {
+		if info != nil {
+			mutate(id, info)
+			if reg, okReg := r.models[id]; okReg && reg != nil {
+				hasWebSearch := r.hasClientSupportingWebSearchLocked(id, "", "")
+				if reg.Info != nil {
+					reg.Info.SupportsWebSearch = hasWebSearch
+				}
+				if provider != "" && reg.InfoByProvider != nil && reg.InfoByProvider[provider] != nil {
+					reg.InfoByProvider[provider].SupportsWebSearch = r.hasClientSupportingWebSearchLocked(id, provider, "")
+				}
+			}
+		}
+	}
+	r.invalidateAvailableModelsCacheLocked()
+	return true
+}
+
+func (r *ModelRegistry) hasClientSupportingWebSearchLocked(modelID, provider, excludeClientID string) bool {
+	for cID, infos := range r.clientModelInfos {
+		if cID == excludeClientID {
+			continue
+		}
+		if provider != "" && r.clientProviders[cID] != provider {
+			continue
+		}
+		if info, ok := infos[modelID]; ok && info != nil && info.SupportsWebSearch {
+			return true
+		}
+	}
+	return false
 }
 
 // SuspendClientModel marks a client's model as temporarily unavailable until explicitly resumed.
@@ -606,6 +1118,7 @@ func (r *ModelRegistry) SuspendClientModel(clientID, modelID, reason string) {
 	}
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	r.ensureAvailableModelsCacheLocked()
 
 	registration, exists := r.models[modelID]
 	if !exists || registration == nil {
@@ -619,6 +1132,7 @@ func (r *ModelRegistry) SuspendClientModel(clientID, modelID, reason string) {
 	}
 	registration.SuspendedClients[clientID] = reason
 	registration.LastUpdated = time.Now()
+	r.invalidateAvailableModelsCacheLocked()
 	if reason != "" {
 		log.Debugf("Suspended client %s for model %s: %s", clientID, modelID, reason)
 	} else {
@@ -636,6 +1150,7 @@ func (r *ModelRegistry) ResumeClientModel(clientID, modelID string) {
 	}
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	r.ensureAvailableModelsCacheLocked()
 
 	registration, exists := r.models[modelID]
 	if !exists || registration == nil || registration.SuspendedClients == nil {
@@ -646,6 +1161,7 @@ func (r *ModelRegistry) ResumeClientModel(clientID, modelID string) {
 	}
 	delete(registration.SuspendedClients, clientID)
 	registration.LastUpdated = time.Now()
+	r.invalidateAvailableModelsCacheLocked()
 	log.Debugf("Resumed client %s for model %s", clientID, modelID)
 }
 
@@ -674,6 +1190,44 @@ func (r *ModelRegistry) ClientSupportsModel(clientID, modelID string) bool {
 	return false
 }
 
+// IsModelSuspendedForClient reports whether a model is currently suspended for a specific client.
+func (r *ModelRegistry) IsModelSuspendedForClient(clientID, modelID string) bool {
+	clientID = strings.TrimSpace(clientID)
+	modelID = strings.TrimSpace(modelID)
+	if clientID == "" || modelID == "" {
+		return false
+	}
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	registration, exists := r.models[modelID]
+	if !exists || registration == nil || registration.SuspendedClients == nil {
+		return false
+	}
+	_, suspended := registration.SuspendedClients[clientID]
+	return suspended
+}
+
+// IsModelQuotaExceededForClient reports whether a model is currently marked quota exceeded for a specific client.
+func (r *ModelRegistry) IsModelQuotaExceededForClient(clientID, modelID string) bool {
+	clientID = strings.TrimSpace(clientID)
+	modelID = strings.TrimSpace(modelID)
+	if clientID == "" || modelID == "" {
+		return false
+	}
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	registration, exists := r.models[modelID]
+	if !exists || registration == nil || registration.QuotaExceededClients == nil {
+		return false
+	}
+	_, exceeded := registration.QuotaExceededClients[clientID]
+	return exceeded
+}
+
 // GetAvailableModels returns all models that have at least one available client
 // Parameters:
 //   - handlerType: The handler type to filter models for (e.g., "openai", "claude", "gemini")
@@ -681,52 +1235,152 @@ func (r *ModelRegistry) ClientSupportsModel(clientID, modelID string) bool {
 // Returns:
 //   - []map[string]any: List of available models in the requested format
 func (r *ModelRegistry) GetAvailableModels(handlerType string) []map[string]any {
+	now := time.Now()
+
 	r.mutex.RLock()
-	defer r.mutex.RUnlock()
+	if cache, ok := r.availableModelsCache[handlerType]; ok && (cache.expiresAt.IsZero() || now.Before(cache.expiresAt)) {
+		models := cloneModelMaps(cache.models)
+		r.mutex.RUnlock()
+		return models
+	}
+	r.mutex.RUnlock()
 
-	models := make([]map[string]any, 0)
-	quotaExpiredDuration := 5 * time.Minute
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	r.ensureAvailableModelsCacheLocked()
 
-	for _, registration := range r.models {
-		// Check if model has any non-quota-exceeded clients
-		availableClients := registration.Count
-		now := time.Now()
+	if cache, ok := r.availableModelsCache[handlerType]; ok && (cache.expiresAt.IsZero() || now.Before(cache.expiresAt)) {
+		return cloneModelMaps(cache.models)
+	}
 
-		// Count clients that have exceeded quota but haven't recovered yet
-		expiredClients := 0
-		for _, quotaTime := range registration.QuotaExceededClients {
-			if quotaTime != nil && now.Sub(*quotaTime) < quotaExpiredDuration {
-				expiredClients++
-			}
+	models, expiresAt := r.buildAvailableModelsLocked(handlerType, now)
+	r.availableModelsCache[handlerType] = availableModelsCacheEntry{
+		models:    cloneModelMaps(models),
+		expiresAt: expiresAt,
+	}
+
+	return models
+}
+
+func modelRegistrationAvailability(registration *ModelRegistration, now time.Time) (bool, time.Time) {
+	if registration == nil {
+		return false, time.Time{}
+	}
+
+	availableClients := registration.Count
+	expiredClients := 0
+	var expiresAt time.Time
+	for _, quotaTime := range registration.QuotaExceededClients {
+		if quotaTime == nil {
+			continue
 		}
-
-		cooldownSuspended := 0
-		otherSuspended := 0
-		if registration.SuspendedClients != nil {
-			for _, reason := range registration.SuspendedClients {
-				if strings.EqualFold(reason, "quota") {
-					cooldownSuspended++
-					continue
-				}
-				otherSuspended++
-			}
-		}
-
-		effectiveClients := availableClients - expiredClients - otherSuspended
-		if effectiveClients < 0 {
-			effectiveClients = 0
-		}
-
-		// Include models that have available clients, or those solely cooling down.
-		if effectiveClients > 0 || (availableClients > 0 && (expiredClients > 0 || cooldownSuspended > 0) && otherSuspended == 0) {
-			model := r.convertModelToMap(registration.Info, handlerType)
-			if model != nil {
-				models = append(models, model)
+		recoveryAt := quotaTime.Add(modelQuotaExceededWindow)
+		if now.Before(recoveryAt) {
+			expiredClients++
+			if expiresAt.IsZero() || recoveryAt.Before(expiresAt) {
+				expiresAt = recoveryAt
 			}
 		}
 	}
 
-	return models
+	cooldownSuspended := 0
+	otherSuspended := 0
+	if registration.SuspendedClients != nil {
+		for _, reason := range registration.SuspendedClients {
+			if strings.EqualFold(reason, "quota") {
+				cooldownSuspended++
+				continue
+			}
+			otherSuspended++
+		}
+	}
+
+	effectiveClients := availableClients - expiredClients - otherSuspended
+	if effectiveClients < 0 {
+		effectiveClients = 0
+	}
+
+	available := effectiveClients > 0 || (availableClients > 0 && (expiredClients > 0 || cooldownSuspended > 0) && otherSuspended == 0)
+	return available, expiresAt
+}
+
+// GetAvailableModelInfos returns cloned metadata for all currently available models.
+func (r *ModelRegistry) GetAvailableModelInfos() []*ModelInfo {
+	now := time.Now()
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	result := make([]*ModelInfo, 0, len(r.models))
+	for _, registration := range r.models {
+		available, _ := modelRegistrationAvailability(registration, now)
+		if !available || registration == nil || registration.Info == nil {
+			continue
+		}
+		result = append(result, cloneModelInfo(registration.Info))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return strings.TrimSpace(result[i].ID) < strings.TrimSpace(result[j].ID)
+	})
+	return result
+}
+
+func (r *ModelRegistry) buildAvailableModelsLocked(handlerType string, now time.Time) ([]map[string]any, time.Time) {
+	models := make([]map[string]any, 0, len(r.models))
+	var expiresAt time.Time
+
+	for _, registration := range r.models {
+		available, registrationExpiresAt := modelRegistrationAvailability(registration, now)
+		if !registrationExpiresAt.IsZero() && (expiresAt.IsZero() || registrationExpiresAt.Before(expiresAt)) {
+			expiresAt = registrationExpiresAt
+		}
+		if !available || registration == nil {
+			continue
+		}
+
+		model := r.convertModelToMap(registration.Info, handlerType)
+		if model != nil {
+			models = append(models, model)
+		}
+	}
+
+	return models, expiresAt
+}
+
+func cloneModelMaps(models []map[string]any) []map[string]any {
+	cloned := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		if model == nil {
+			cloned = append(cloned, nil)
+			continue
+		}
+		copyModel := make(map[string]any, len(model))
+		for key, value := range model {
+			copyModel[key] = cloneModelMapValue(value)
+		}
+		cloned = append(cloned, copyModel)
+	}
+	return cloned
+}
+
+func cloneModelMapValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		copyMap := make(map[string]any, len(typed))
+		for key, entry := range typed {
+			copyMap[key] = cloneModelMapValue(entry)
+		}
+		return copyMap
+	case []any:
+		copySlice := make([]any, len(typed))
+		for i, entry := range typed {
+			copySlice[i] = cloneModelMapValue(entry)
+		}
+		return copySlice
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return value
+	}
 }
 
 // GetAvailableModelsByProvider returns models available for the given provider identifier.
@@ -790,7 +1444,6 @@ func (r *ModelRegistry) GetAvailableModelsByProvider(provider string) []*ModelIn
 		return nil
 	}
 
-	quotaExpiredDuration := 5 * time.Minute
 	now := time.Now()
 	result := make([]*ModelInfo, 0, len(providerModels))
 
@@ -812,7 +1465,7 @@ func (r *ModelRegistry) GetAvailableModelsByProvider(provider string) []*ModelIn
 					if p, okProvider := r.clientProviders[clientID]; !okProvider || p != provider {
 						continue
 					}
-					if quotaTime != nil && now.Sub(*quotaTime) < quotaExpiredDuration {
+					if quotaTime != nil && now.Sub(*quotaTime) < modelQuotaExceededWindow {
 						expiredClients++
 					}
 				}
@@ -842,11 +1495,11 @@ func (r *ModelRegistry) GetAvailableModelsByProvider(provider string) []*ModelIn
 
 		if effectiveClients > 0 || (availableClients > 0 && (expiredClients > 0 || cooldownSuspended > 0) && otherSuspended == 0) {
 			if entry.info != nil {
-				result = append(result, entry.info)
+				result = append(result, cloneModelInfo(entry.info))
 				continue
 			}
 			if ok && registration != nil && registration.Info != nil {
-				result = append(result, registration.Info)
+				result = append(result, cloneModelInfo(registration.Info))
 			}
 		}
 	}
@@ -866,12 +1519,11 @@ func (r *ModelRegistry) GetModelCount(modelID string) int {
 
 	if registration, exists := r.models[modelID]; exists {
 		now := time.Now()
-		quotaExpiredDuration := 5 * time.Minute
 
 		// Count clients that have exceeded quota but haven't recovered yet
 		expiredClients := 0
 		for _, quotaTime := range registration.QuotaExceededClients {
-			if quotaTime != nil && now.Sub(*quotaTime) < quotaExpiredDuration {
+			if quotaTime != nil && now.Sub(*quotaTime) < modelQuotaExceededWindow {
 				expiredClients++
 			}
 		}
@@ -945,13 +1597,23 @@ func (r *ModelRegistry) GetModelProviders(modelID string) []string {
 	return result
 }
 
-// GetModelInfo returns the registered ModelInfo for the given model ID, if present.
-// Returns nil if the model is unknown to the registry.
-func (r *ModelRegistry) GetModelInfo(modelID string) *ModelInfo {
+// GetModelInfo returns ModelInfo, prioritizing provider-specific definition if available.
+func (r *ModelRegistry) GetModelInfo(modelID, provider string) *ModelInfo {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 	if reg, ok := r.models[modelID]; ok && reg != nil {
-		return reg.Info
+		// Try provider specific definition first
+		if provider != "" && reg.InfoByProvider != nil {
+			if reg.Providers != nil {
+				if count, ok := reg.Providers[provider]; ok && count > 0 {
+					if info, ok := reg.InfoByProvider[provider]; ok && info != nil {
+						return cloneModelInfo(info)
+					}
+				}
+			}
+		}
+		// Fallback to global info (last registered)
+		return cloneModelInfo(reg.Info)
 	}
 	return nil
 }
@@ -987,46 +1649,42 @@ func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) 
 		if model.ContextLength > 0 {
 			result["context_length"] = model.ContextLength
 		}
+		if model.MaxContextLength > 0 {
+			result["max_context_length"] = model.MaxContextLength
+		}
 		if model.MaxCompletionTokens > 0 {
 			result["max_completion_tokens"] = model.MaxCompletionTokens
 		}
 		if len(model.SupportedParameters) > 0 {
-			result["supported_parameters"] = model.SupportedParameters
-		}
-		if len(model.SupportedEndpoints) > 0 {
-			result["supported_endpoints"] = model.SupportedEndpoints
+			result["supported_parameters"] = append([]string(nil), model.SupportedParameters...)
 		}
 		return result
 
-	case "claude", "kiro", "antigravity":
-		// Claude, Kiro, and Antigravity all use Claude-compatible format for Claude Code client
+	case "claude":
 		result := map[string]any{
 			"id":       model.ID,
 			"object":   "model",
 			"owned_by": model.OwnedBy,
 		}
 		if model.Created > 0 {
-			result["created"] = model.Created
+			result["created_at"] = time.Unix(model.Created, 0).UTC().Format(time.RFC3339)
 		}
-		if model.Type != "" {
-			result["type"] = model.Type
-		}
+		result["type"] = "model"
 		if model.DisplayName != "" {
 			result["display_name"] = model.DisplayName
+		} else {
+			result["display_name"] = model.ID
 		}
-		// Add thinking support for Claude Code client
-		// Claude Code checks for "thinking" field (simple boolean) to enable tab toggle
-		// Also add "extended_thinking" for detailed budget info
-		if model.Thinking != nil {
-			result["thinking"] = true
-			result["extended_thinking"] = map[string]any{
-				"supported":       true,
-				"min":             model.Thinking.Min,
-				"max":             model.Thinking.Max,
-				"zero_allowed":    model.Thinking.ZeroAllowed,
-				"dynamic_allowed": model.Thinking.DynamicAllowed,
-			}
+		maxInput := model.ContextLength
+		if maxInput <= 0 {
+			maxInput = DefaultClaudeMaxInputTokens
 		}
+		maxOutput := model.MaxCompletionTokens
+		if maxOutput <= 0 {
+			maxOutput = DefaultClaudeMaxOutputTokens
+		}
+		result["max_input_tokens"] = maxInput
+		result["max_tokens"] = maxOutput
 		return result
 
 	case "gemini":
@@ -1052,7 +1710,13 @@ func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) 
 			result["outputTokenLimit"] = model.OutputTokenLimit
 		}
 		if len(model.SupportedGenerationMethods) > 0 {
-			result["supportedGenerationMethods"] = model.SupportedGenerationMethods
+			result["supportedGenerationMethods"] = append([]string(nil), model.SupportedGenerationMethods...)
+		}
+		if len(model.SupportedInputModalities) > 0 {
+			result["supportedInputModalities"] = append([]string(nil), model.SupportedInputModalities...)
+		}
+		if len(model.SupportedOutputModalities) > 0 {
+			result["supportedOutputModalities"] = append([]string(nil), model.SupportedOutputModalities...)
 		}
 		return result
 
@@ -1081,15 +1745,19 @@ func (r *ModelRegistry) CleanupExpiredQuotas() {
 	defer r.mutex.Unlock()
 
 	now := time.Now()
-	quotaExpiredDuration := 5 * time.Minute
+	invalidated := false
 
 	for modelID, registration := range r.models {
 		for clientID, quotaTime := range registration.QuotaExceededClients {
-			if quotaTime != nil && now.Sub(*quotaTime) >= quotaExpiredDuration {
+			if quotaTime != nil && now.Sub(*quotaTime) >= modelQuotaExceededWindow {
 				delete(registration.QuotaExceededClients, clientID)
+				invalidated = true
 				log.Debugf("Cleaned up expired quota tracking for model %s, client %s", modelID, clientID)
 			}
 		}
+	}
+	if invalidated {
+		r.invalidateAvailableModelsCacheLocked()
 	}
 }
 
@@ -1104,8 +1772,6 @@ func (r *ModelRegistry) CleanupExpiredQuotas() {
 //   - string: The model ID of the first available model, or empty string if none available
 //   - error: An error if no models are available
 func (r *ModelRegistry) GetFirstAvailableModel(handlerType string) (string, error) {
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
 
 	// Get all available models for this handler type
 	models := r.GetAvailableModels(handlerType)
@@ -1136,19 +1802,19 @@ func (r *ModelRegistry) GetFirstAvailableModel(handlerType string) (string, erro
 	return "", fmt.Errorf("no available clients for any model in handler type: %s", handlerType)
 }
 
-// GetModelsForClient returns the models registered for a specific client.
-// Parameters:
-//   - clientID: The client identifier (typically auth file name or auth ID)
-//
-// Returns:
-//   - []*ModelInfo: List of models registered for this client, nil if client not found
-func (r *ModelRegistry) GetModelsForClient(clientID string) []*ModelInfo {
+// GetModelsAndEpochForClient atomically returns the models registered for clientID along with the client's current registration epoch.
+func (r *ModelRegistry) GetModelsAndEpochForClient(clientID string) ([]*ModelInfo, uint64) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
+	var epoch uint64
+	if r.clientEpochs != nil {
+		epoch = r.clientEpochs[clientID]
+	}
+
 	modelIDs, exists := r.clientModels[clientID]
 	if !exists || len(modelIDs) == 0 {
-		return nil
+		return nil, epoch
 	}
 
 	// Try to use client-specific model infos first
@@ -1164,15 +1830,36 @@ func (r *ModelRegistry) GetModelsForClient(clientID string) []*ModelInfo {
 
 		// Prefer client's own model info to preserve original type/owned_by
 		if clientInfos != nil {
-			if info, ok := clientInfos[modelID]; ok && info != nil {
-				result = append(result, info)
+			if info, okInfo := clientInfos[modelID]; okInfo && info != nil {
+				result = append(result, cloneModelInfo(info))
 				continue
 			}
 		}
 		// Fallback to global registry (for backwards compatibility)
-		if reg, ok := r.models[modelID]; ok && reg.Info != nil {
-			result = append(result, reg.Info)
+		if reg, okReg := r.models[modelID]; okReg && reg.Info != nil {
+			result = append(result, cloneModelInfo(reg.Info))
 		}
 	}
-	return result
+	return result, epoch
+}
+
+// ClientRegistrationEpoch returns the current registration epoch for clientID.
+func (r *ModelRegistry) ClientRegistrationEpoch(clientID string) uint64 {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	if r.clientEpochs == nil {
+		return 0
+	}
+	return r.clientEpochs[clientID]
+}
+
+// GetModelsForClient returns the models registered for a specific client.
+// Parameters:
+//   - clientID: The client identifier (typically auth file name or auth ID)
+//
+// Returns:
+//   - []*ModelInfo: List of models registered for this client, nil if client not found
+func (r *ModelRegistry) GetModelsForClient(clientID string) []*ModelInfo {
+	models, _ := r.GetModelsAndEpochForClient(clientID)
+	return models
 }
