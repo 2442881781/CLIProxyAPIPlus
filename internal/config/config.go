@@ -155,6 +155,10 @@ type Config struct {
 	// Used for services that use Vertex AI-style paths but with simple API key authentication.
 	VertexCompatAPIKey []VertexCompatKey `yaml:"vertex-api-key" json:"vertex-api-key"`
 
+	// OAuthAllowedModels defines per-provider global model allowlists applied to OAuth/file-backed auth entries.
+	// Empty or missing provider entries keep the provider unrestricted.
+	OAuthAllowedModels map[string][]string `yaml:"oauth-allowed-models,omitempty" json:"oauth-allowed-models,omitempty"`
+
 	// OAuthExcludedModels defines per-provider global model exclusions applied to OAuth/file-backed auth entries.
 	OAuthExcludedModels map[string][]string `yaml:"oauth-excluded-models,omitempty" json:"oauth-excluded-models,omitempty"`
 

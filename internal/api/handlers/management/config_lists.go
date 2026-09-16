@@ -1099,6 +1099,106 @@ func (h *Handler) DeleteVertexCompatKey(c *gin.Context) {
 	c.JSON(400, gin.H{"error": "missing api-key or index"})
 }
 
+// oauth-allowed-models: map[string][]string
+func (h *Handler) GetOAuthAllowedModels(c *gin.Context) {
+	c.JSON(200, gin.H{"oauth-allowed-models": config.NormalizeOAuthAllowedModels(h.cfg.OAuthAllowedModels)})
+}
+
+func (h *Handler) PutOAuthAllowedModels(c *gin.Context) {
+	data, err := c.GetRawData()
+	if err != nil {
+		c.JSON(400, gin.H{"error": "failed to read body"})
+		return
+	}
+	var entries map[string][]string
+	if err = json.Unmarshal(data, &entries); err != nil || entries == nil {
+		var wrapper struct {
+			Items   map[string][]string `json:"items"`
+			Allowed map[string][]string `json:"oauth-allowed-models"`
+		}
+		if err2 := json.Unmarshal(data, &wrapper); err2 != nil {
+			c.JSON(400, gin.H{"error": "invalid body"})
+			return
+		}
+		entries = wrapper.Items
+		if entries == nil {
+			entries = wrapper.Allowed
+		}
+	}
+	h.cfg.OAuthAllowedModels = config.NormalizeOAuthAllowedModels(entries)
+	h.persist(c)
+}
+
+func (h *Handler) PatchOAuthAllowedModels(c *gin.Context) {
+	var body struct {
+		Provider *string  `json:"provider"`
+		Channel  *string  `json:"channel"`
+		Models   []string `json:"models"`
+	}
+	if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil {
+		c.JSON(400, gin.H{"error": "invalid body"})
+		return
+	}
+	providerRaw := ""
+	if body.Channel != nil {
+		providerRaw = *body.Channel
+	} else if body.Provider != nil {
+		providerRaw = *body.Provider
+	}
+	provider := strings.ToLower(strings.TrimSpace(providerRaw))
+	if provider == "" {
+		c.JSON(400, gin.H{"error": "invalid provider"})
+		return
+	}
+
+	normalized := config.NormalizeAllowedModels(body.Models)
+	if len(normalized) == 0 {
+		if h.cfg.OAuthAllowedModels == nil {
+			c.JSON(404, gin.H{"error": "provider not found"})
+			return
+		}
+		if _, ok := h.cfg.OAuthAllowedModels[provider]; !ok {
+			c.JSON(404, gin.H{"error": "provider not found"})
+			return
+		}
+		delete(h.cfg.OAuthAllowedModels, provider)
+		if len(h.cfg.OAuthAllowedModels) == 0 {
+			h.cfg.OAuthAllowedModels = nil
+		}
+		h.persist(c)
+		return
+	}
+	if h.cfg.OAuthAllowedModels == nil {
+		h.cfg.OAuthAllowedModels = make(map[string][]string)
+	}
+	h.cfg.OAuthAllowedModels[provider] = normalized
+	h.persist(c)
+}
+
+func (h *Handler) DeleteOAuthAllowedModels(c *gin.Context) {
+	provider := strings.ToLower(strings.TrimSpace(c.Query("channel")))
+	if provider == "" {
+		provider = strings.ToLower(strings.TrimSpace(c.Query("provider")))
+	}
+	if provider == "" {
+		c.JSON(400, gin.H{"error": "missing provider"})
+		return
+	}
+	if h.cfg.OAuthAllowedModels == nil {
+		c.JSON(404, gin.H{"error": "provider not found"})
+		return
+	}
+	if _, ok := h.cfg.OAuthAllowedModels[provider]; !ok {
+		c.JSON(404, gin.H{"error": "provider not found"})
+		return
+	}
+	delete(h.cfg.OAuthAllowedModels, provider)
+	if len(h.cfg.OAuthAllowedModels) == 0 {
+		h.cfg.OAuthAllowedModels = nil
+	}
+	h.persist(c)
+}
+
 // oauth-excluded-models: map[string][]string
 func (h *Handler) GetOAuthExcludedModels(c *gin.Context) {
 	c.JSON(200, gin.H{"oauth-excluded-models": config.NormalizeOAuthExcludedModels(h.cfg.OAuthExcludedModels)})

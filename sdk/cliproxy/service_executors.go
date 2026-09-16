@@ -490,7 +490,7 @@ func (s *Service) appendPluginModels(providerKey string, models []*ModelInfo) []
 	return out
 }
 
-func (s *Service) tryRegisterPluginModelsForAuth(ctx context.Context, a *coreauth.Auth, provider, authKind string, excluded []string) bool {
+func (s *Service) tryRegisterPluginModelsForAuth(ctx context.Context, a *coreauth.Auth, provider, authKind string, allowed, excluded []string) bool {
 	if s == nil || s.pluginHost == nil || a == nil {
 		return false
 	}
@@ -554,7 +554,12 @@ func (s *Service) tryRegisterPluginModelsForAuth(ctx context.Context, a *coreaut
 	if ctx != nil && ctx.Err() != nil {
 		return true
 	}
-	models := applyExcludedModels(result.Models, activeExcluded)
+	activeAllowed := s.oauthAllowedModels(providerKey, activeAuthKind)
+	if a == activeAuth && len(activeAllowed) == 0 {
+		activeAllowed = allowed
+	}
+	models := applyAllowedModels(result.Models, activeAllowed)
+	models = applyExcludedModels(models, activeExcluded)
 	models = applyOAuthModelAliasForAuth(s.cfg, providerKey, activeAuthKind, activeAuth.Attributes, models)
 	if len(models) > 0 {
 		s.registerResolvedModelsForAuth(activeAuth, providerKey, applyModelPrefixes(models, activeAuth.Prefix, s.cfg != nil && s.cfg.ForceModelPrefix))

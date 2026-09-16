@@ -301,6 +301,37 @@ export const normalizeAuthFilesResponse = (payload: AuthFilesResponse): AuthFile
   };
 };
 
+export const normalizeOauthAllowedModels = (payload: unknown): Record<string, string[]> => {
+  if (!payload || typeof payload !== 'object') return {};
+
+  const record = payload as Record<string, unknown>;
+  const source = record['oauth-allowed-models'] ?? record.items ?? payload;
+  if (!source || typeof source !== 'object') return {};
+
+  const result: Record<string, string[]> = {};
+  Object.entries(source as Record<string, unknown>).forEach(([provider, models]) => {
+    const key = normalizeOAuthProviderKey(String(provider ?? ''));
+    if (!key) return;
+    const rawList = Array.isArray(models)
+      ? models
+      : typeof models === 'string'
+        ? models.split(/[\n,]+/)
+        : [];
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    rawList.forEach((item) => {
+      const trimmed = String(item ?? '').trim();
+      if (!trimmed) return;
+      const modelKey = trimmed.toLowerCase();
+      if (seen.has(modelKey)) return;
+      seen.add(modelKey);
+      normalized.push(trimmed);
+    });
+    if (normalized.length) result[key] = normalized;
+  });
+  return result;
+};
+
 const normalizeOauthExcludedModels = (payload: unknown): Record<string, string[]> => {
   if (!payload || typeof payload !== 'object') return {};
 
@@ -474,6 +505,23 @@ export const authFilesApi = {
     const blob = await authFilesApi.download(name);
     return blob.text();
   },
+
+  // OAuth 允许模型
+  async getOauthAllowedModels(): Promise<Record<string, string[]>> {
+    const data = await apiClient.get('/oauth-allowed-models');
+    return normalizeOauthAllowedModels(data);
+  },
+
+  saveOauthAllowedModels: (provider: string, models: string[]) =>
+    apiClient.patch('/oauth-allowed-models', {
+      provider: normalizeOAuthProviderKey(provider),
+      models,
+    }),
+
+  deleteOauthAllowedEntry: (provider: string) =>
+    apiClient.delete(
+      `/oauth-allowed-models?provider=${encodeURIComponent(normalizeOAuthProviderKey(provider))}`
+    ),
 
   // OAuth 排除模型
   async getOauthExcludedModels(): Promise<Record<string, string[]>> {

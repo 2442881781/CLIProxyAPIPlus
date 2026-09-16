@@ -20,15 +20,17 @@ import {
   IconSearch,
   IconTrash2,
 } from '@/components/ui/icons';
-import { pluginsApi } from '@/services/api';
+import { authFilesApi, modelsApi, pluginsApi } from '@/services/api';
 import { useNotificationStore } from '@/stores';
-import type { PluginConfigObject, PluginListEntry } from '@/types';
+import type { OAuthModelAliasEntry, PluginConfigObject, PluginListEntry } from '@/types';
 import {
   buildCommandCodeModelsPatch,
   COMMANDCODE_DEFAULT_MODELS,
   readCommandCodeModels,
   type CommandCodeModelEntry,
 } from '../commandCodeModels';
+import { modelPolicySignature, normalizeModelPolicy, type ModelPolicy } from '../modelPolicy';
+import { ModelPolicyEditor } from './ModelPolicyEditor';
 import styles from './ProviderPluginCredentialsPanel.module.scss';
 
 export type PluginCredentialProvider = 'commandcode' | 'opencode';
@@ -64,6 +66,11 @@ interface ModelEditorState {
   open: boolean;
   models: CommandCodeModelEntry[];
   usesDefaults: boolean;
+}
+
+interface PolicyEditorState {
+  open: boolean;
+  policy: ModelPolicy;
 }
 
 const PLUGIN_IDS: Record<PluginCredentialProvider, string> = {
@@ -137,6 +144,23 @@ const emptyModelEditor = (): ModelEditorState => ({
   usesDefaults: true,
 });
 
+const emptyPolicyEditor = (): PolicyEditorState => ({
+  open: false,
+  policy: normalizeModelPolicy(),
+});
+
+const POLICY_PROVIDER_KEYS: Record<Exclude<PluginCredentialProvider, 'commandcode'>, string> = {
+  opencode: 'opencode-go',
+};
+
+const toApiAliases = (aliases: OAuthModelAliasEntry[]) =>
+  aliases.map((entry) => ({
+    name: entry.name.trim(),
+    alias: entry.alias.trim(),
+    ...(entry.fork ? { fork: true } : {}),
+    ...(entry.forceMapping ? { 'force-mapping': true } : {}),
+  }));
+
 export function ProviderPluginCredentialsPanel({
   provider,
   refreshKey,
@@ -154,6 +178,11 @@ export function ProviderPluginCredentialsPanel({
   const [filter, setFilter] = useState('');
   const [editor, setEditor] = useState<EditorState>(emptyEditor);
   const [modelEditor, setModelEditor] = useState<ModelEditorState>(emptyModelEditor);
+  const [policy, setPolicy] = useState<ModelPolicy>(normalizeModelPolicy());
+  const [policyEditor, setPolicyEditor] = useState<PolicyEditorState>(emptyPolicyEditor);
+  const [policyCatalog, setPolicyCatalog] = useState<string[]>([]);
+  const [policyCatalogLoading, setPolicyCatalogLoading] = useState(false);
+  const [policyCatalogError, setPolicyCatalogError] = useState('');
 
   const pluginID = PLUGIN_IDS[provider];
   const entries = useMemo(() => readEntries(provider, config), [config, provider]);
@@ -171,14 +200,29 @@ export function ProviderPluginCredentialsPanel({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextConfig, pluginList] = await Promise.all([
+      const policyProvider = provider === 'opencode' ? POLICY_PROVIDER_KEYS.opencode : '';
+      const [nextConfig, pluginList, allowedMap, aliasMap] = await Promise.all([
         pluginsApi.getConfig(pluginID),
         pluginsApi.list(),
+        policyProvider
+          ? authFilesApi.getOauthAllowedModels()
+          : Promise.resolve<Record<string, string[]>>({}),
+        policyProvider
+          ? authFilesApi.getOauthModelAlias()
+          : Promise.resolve<Record<string, OAuthModelAliasEntry[]>>({}),
       ]);
       const nextPlugin = pluginList.plugins.find((item) => item.id === pluginID) ?? null;
       const nextEntries = readEntries(provider, nextConfig);
       setConfig(nextConfig);
       setPlugin(nextPlugin);
+      if (policyProvider) {
+        setPolicy(
+          normalizeModelPolicy({
+            allowedModels: allowedMap[policyProvider] ?? [],
+            aliases: aliasMap[policyProvider] ?? [],
+          })
+        );
+      }
       onStatsChange?.(
         nextEntries.length,
         nextPlugin?.registered && nextPlugin.effectiveEnabled ? nextEntries.length : 0
@@ -391,6 +435,66 @@ export function ProviderPluginCredentialsPanel({
     }
   };
 
+  const openPolicyEditor = () => {
+    setPolicyEditor({ open: true, policy: normalizeModelPolicy(policy) });
+    setPolicyCatalogLoading(true);
+    setPolicyCatalogError('');
+    void modelsApi
+      .fetchProviderModels(POLICY_PROVIDER_KEYS.opencode)
+      .then((models) => setPolicyCatalog(models.map((model) => model.name)))
+      .catch((error) => {
+        setPolicyCatalogError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setPolicyCatalogLoading(false));
+  };
+
+  const closePolicyEditor = () => {
+    if (saving) return;
+    setPolicyEditor(emptyPolicyEditor());
+  };
+
+  const savePolicy = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (saving || disabled || provider !== 'opencode') return;
+    const normalized = normalizeModelPolicy(policyEditor.policy);
+    if (normalized.aliases.some((entry) => !entry.name.trim() || !entry.alias.trim())) {
+      showNotification(t('providersPage.integrations.credentials.modelFieldsRequired'), 'error');
+      return;
+    }
+    const aliases = normalized.aliases.map((entry) => entry.alias.toLowerCase());
+    if (new Set(aliases).size !== aliases.length) {
+      showNotification(t('providersPage.integrations.credentials.duplicateModelAlias'), 'error');
+      return;
+    }
+
+    const policyProvider = POLICY_PROVIDER_KEYS.opencode;
+    setSaving(true);
+    try {
+      await Promise.all([
+        normalized.allowedModels.length
+          ? authFilesApi.saveOauthAllowedModels(policyProvider, normalized.allowedModels)
+          : policy.allowedModels.length
+            ? authFilesApi.deleteOauthAllowedEntry(policyProvider)
+            : Promise.resolve(),
+        normalized.aliases.length
+          ? authFilesApi.saveOauthModelAlias(policyProvider, toApiAliases(normalized.aliases))
+          : policy.aliases.length
+            ? authFilesApi.deleteOauthModelAlias(policyProvider)
+            : Promise.resolve(),
+      ]);
+      setPolicy(normalized);
+      setPolicyEditor(emptyPolicyEditor());
+      await load();
+      await onChanged();
+      showNotification(t('providersPage.toast.updated'), 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      showNotification(message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const ready = plugin?.registered === true && plugin.effectiveEnabled;
   const providerName = t(`providersPage.providerNames.${provider}`);
 
@@ -535,6 +639,45 @@ export function ProviderPluginCredentialsPanel({
                   ? 'providersPage.integrations.credentials.modelsDefault'
                   : 'providersPage.integrations.credentials.modelsRestricted'
               )}
+            </div>
+          </div>
+        ) : provider === 'opencode' && !loading ? (
+          <div className={styles.modelSection}>
+            <div className={styles.sectionHead}>
+              <div>
+                <h3>{t('providersPage.integrations.credentials.modelsTitle')}</h3>
+                <p>{t('providersPage.integrations.modelPolicy.summaryHint')}</p>
+              </div>
+              <button
+                type="button"
+                className={styles.newButton}
+                onClick={openPolicyEditor}
+                disabled={disabled || saving}
+              >
+                <IconPencil size={15} />
+                {t('providersPage.integrations.credentials.editModels')}
+              </button>
+            </div>
+            <div className={styles.modelList}>
+              {policy.allowedModels.map((model) => (
+                <div className={styles.modelItem} key={model}>
+                  <span className={styles.modelAlias}>{model}</span>
+                </div>
+              ))}
+              {policy.aliases.map((entry) => (
+                <div className={styles.modelItem} key={`${entry.alias}:${entry.name}`}>
+                  <span className={styles.modelAlias}>{entry.alias}</span>
+                  <span className={styles.modelArrow}>→</span>
+                  <span className={styles.modelUpstream}>{entry.name}</span>
+                </div>
+              ))}
+            </div>
+            <div className={styles.modelSource}>
+              {policy.allowedModels.length
+                ? t('providersPage.integrations.modelPolicy.restrictedCount', {
+                    count: policy.allowedModels.length,
+                  })
+                : t('providersPage.integrations.modelPolicy.unrestrictedHint')}
             </div>
           </div>
         ) : null}
@@ -722,6 +865,52 @@ export function ProviderPluginCredentialsPanel({
             <IconPlus size={15} />
             {t('providersPage.integrations.credentials.addModel')}
           </button>
+        </form>
+      </Sheet>
+      <Sheet
+        open={policyEditor.open}
+        onClose={closePolicyEditor}
+        closeDisabled={saving}
+        eyebrow={t('providersPage.integrations.modelPolicy.eyebrow')}
+        title={`${t('providersPage.integrations.credentials.modelsTitle')} · ${providerName}`}
+        description={t('providersPage.integrations.modelPolicy.description')}
+        footer={
+          <>
+            <button
+              type="button"
+              className={styles.footerButton}
+              onClick={closePolicyEditor}
+              disabled={saving}
+            >
+              {t('providersPage.actions.cancel')}
+            </button>
+            <button
+              type="submit"
+              form="plugin-model-policy-form"
+              className={`${styles.footerButton} ${styles.footerPrimary}`}
+              disabled={
+                saving ||
+                disabled ||
+                modelPolicySignature(policyEditor.policy) === modelPolicySignature(policy)
+              }
+            >
+              {saving ? <IconLoader2 size={14} /> : null}
+              {t('providersPage.actions.save')}
+            </button>
+          </>
+        }
+      >
+        <form id="plugin-model-policy-form" onSubmit={savePolicy}>
+          <ModelPolicyEditor
+            value={policyEditor.policy}
+            catalog={policyCatalog}
+            catalogLoading={policyCatalogLoading}
+            catalogError={policyCatalogError}
+            disabled={saving}
+            onChange={(nextPolicy) =>
+              setPolicyEditor((state) => ({ ...state, policy: nextPolicy }))
+            }
+          />
         </form>
       </Sheet>
     </>

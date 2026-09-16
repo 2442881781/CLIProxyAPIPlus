@@ -49,7 +49,7 @@ func (w *Watcher) reloadClients(rescanAuth bool, affectedOAuthProviders []string
 				filtered[id] = auth
 			}
 			w.currentAuths = filtered
-			log.Debugf("applying oauth-excluded-models to providers %v", affectedOAuthProviders)
+			log.Debugf("applying OAuth model policies to providers %v", affectedOAuthProviders)
 		} else {
 			w.currentAuths = nil
 		}
