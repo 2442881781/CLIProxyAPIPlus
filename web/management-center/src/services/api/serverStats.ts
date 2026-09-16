@@ -89,6 +89,12 @@ const normalizeNetRate = (value: unknown): ServerNetRate | undefined => {
   return {
     rxBytesPerSec: asOptionalNumber(raw.rx_bytes_per_sec ?? raw.rxBytesPerSec),
     txBytesPerSec: asOptionalNumber(raw.tx_bytes_per_sec ?? raw.txBytesPerSec),
+    month: typeof raw.month === 'string' ? raw.month : undefined,
+    monthRxBytes: asOptionalNumber(raw.month_rx_bytes ?? raw.monthRxBytes),
+    monthTxBytes: asOptionalNumber(raw.month_tx_bytes ?? raw.monthTxBytes),
+    totalRxBytes: asOptionalNumber(raw.total_rx_bytes ?? raw.totalRxBytes),
+    totalTxBytes: asOptionalNumber(raw.total_tx_bytes ?? raw.totalTxBytes),
+    source: typeof raw.source === 'string' ? raw.source : undefined,
   };
 };
 

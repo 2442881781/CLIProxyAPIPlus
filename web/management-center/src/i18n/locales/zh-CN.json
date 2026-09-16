@@ -2021,6 +2021,10 @@
     "throughput_section": "IO 吞吐",
     "net_rx": "网络接收",
     "net_tx_value": "发送 {{value}}/s",
+    "net_month": "本月流量（{{month}}）",
+    "net_month_detail": "收 {{rx}} · 发 {{tx}}",
+    "net_source_vnstat": "vnstat 数据",
+    "net_source_builtin": "内置统计",
     "disk_read": "磁盘读取",
     "disk_write_value": "写入 {{value}}/s"
   }

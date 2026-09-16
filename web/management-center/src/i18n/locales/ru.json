@@ -2010,6 +2010,10 @@
     "throughput_section": "Пропускная способность IO",
     "net_rx": "Сеть RX",
     "net_tx_value": "TX {{value}}/s",
+    "net_month": "Трафик {{month}}",
+    "net_month_detail": "RX {{rx}} · TX {{tx}}",
+    "net_source_vnstat": "vnstat",
+    "net_source_builtin": "встроенный",
     "disk_read": "Чтение диска",
     "disk_write_value": "запись {{value}}/s"
   }

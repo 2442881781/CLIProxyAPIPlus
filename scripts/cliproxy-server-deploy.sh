@@ -7,11 +7,15 @@ DEPLOY_REF="${1:-${CLIPROXY_DEPLOY_REF:-deploy-jp}}"
 GO_VERSION="${CLIPROXY_DEPLOY_GO_VERSION:-1.26.0}"
 STATE_DIR="${CLIPROXY_DEPLOY_STATE_DIR:-/var/lib/cliproxy/deploy}"
 INSTALL_DIR="${CLIPROXY_DEPLOY_INSTALL_DIR:-/opt/cliproxy}"
-CONFIG_FILE="${CLIPROXY_DEPLOY_CONFIG:-/etc/cliproxy/config.yaml}"
+LEGACY_CONFIG_FILE="${CLIPROXY_DEPLOY_LEGACY_CONFIG:-/etc/cliproxy/config.yaml}"
+CONFIG_FILE="${CLIPROXY_DEPLOY_CONFIG:-/var/lib/cliproxy/config/config.yaml}"
+CONFIG_DIR="$(dirname "${CONFIG_FILE}")"
+CONFIG_BACKUP_DIR="${STATE_DIR}/config-backups"
 NGINX_SITE="${CLIPROXY_DEPLOY_NGINX_SITE:-/etc/nginx/sites-available/cliproxy}"
 NGINX_UPSTREAM_FILE="${CLIPROXY_DEPLOY_NGINX_UPSTREAM_FILE:-/etc/nginx/conf.d/cliproxy-upstream.conf}"
 SERVICE_PREFIX="${CLIPROXY_DEPLOY_SERVICE_PREFIX:-cliproxy}"
 KEEP_RELEASES="${CLIPROXY_DEPLOY_KEEP_RELEASES:-5}"
+KEEP_CONFIG_BACKUPS="${CLIPROXY_DEPLOY_KEEP_CONFIG_BACKUPS:-5}"
 DRAIN_TIMEOUT="${CLIPROXY_DEPLOY_DRAIN_TIMEOUT:-7200}"
 DRAIN_POLL_INTERVAL="${CLIPROXY_DEPLOY_DRAIN_POLL_INTERVAL:-2}"
 SOURCE_DIR="${STATE_DIR}/source"
@@ -94,6 +98,32 @@ copy_tree() {
   if [[ -d "${source}" ]]; then
     cp -a "${source}/." "${target}/"
     chown -R cliproxy:cliproxy "${target}"
+  fi
+}
+
+ensure_runtime_config() {
+  install -d -m 0750 -o cliproxy -g cliproxy "${CONFIG_DIR}"
+  if [[ ! -e "${CONFIG_FILE}" ]]; then
+    [[ -f "${LEGACY_CONFIG_FILE}" ]] || fail "missing initial config: ${LEGACY_CONFIG_FILE}"
+    log "initializing writable runtime config from ${LEGACY_CONFIG_FILE}"
+    install -m 0640 -o cliproxy -g cliproxy "${LEGACY_CONFIG_FILE}" "${CONFIG_FILE}.new"
+    mv -f "${CONFIG_FILE}.new" "${CONFIG_FILE}"
+  fi
+  [[ -f "${CONFIG_FILE}" && ! -L "${CONFIG_FILE}" ]] || fail "runtime config must be a regular file: ${CONFIG_FILE}"
+  chown cliproxy:cliproxy "${CONFIG_FILE}"
+  chmod 0640 "${CONFIG_FILE}"
+}
+
+backup_runtime_config() {
+  local backup stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  backup="${CONFIG_BACKUP_DIR}/config-${stamp}.yaml"
+  install -d -m 0700 -o root -g root "${CONFIG_BACKUP_DIR}"
+  install -m 0600 -o root -g root "${CONFIG_FILE}" "${backup}"
+
+  mapfile -t old_config_backups < <(find "${CONFIG_BACKUP_DIR}" -maxdepth 1 -type f -name 'config-*.yaml' -printf '%T@ %p\n' | sort -nr | awk -v keep="${KEEP_CONFIG_BACKUPS}" 'NR > keep { sub(/^[^ ]+ /, ""); print }')
+  if [[ "${#old_config_backups[@]}" -gt 0 ]]; then
+    rm -f -- "${old_config_backups[@]}"
   fi
 }
 
@@ -212,7 +242,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${STATE_DIR}/slots/${slot} /var/lib/cliproxy/logs
+ReadWritePaths=${STATE_DIR}/slots/${slot} /var/lib/cliproxy/logs ${CONFIG_DIR}
 
 [Install]
 WantedBy=multi-user.target
@@ -311,17 +341,21 @@ if [[ "${EUID}" -ne 0 ]]; then
   fail "run this script as root"
 fi
 
-for command_name in curl git tar gcc gzip systemctl flock nginx python3 sha256sum ss; do
+for command_name in curl dirname find git tar gcc gzip systemctl flock nginx python3 sha256sum ss; do
   command -v "${command_name}" >/dev/null 2>&1 || fail "missing required command: ${command_name}"
 done
 [[ "${DRAIN_TIMEOUT}" =~ ^[0-9]+$ ]] || fail "CLIPROXY_DEPLOY_DRAIN_TIMEOUT must be an integer"
 [[ "${DRAIN_POLL_INTERVAL}" =~ ^[0-9]+$ ]] || fail "CLIPROXY_DEPLOY_DRAIN_POLL_INTERVAL must be an integer"
+[[ "${KEEP_CONFIG_BACKUPS}" =~ ^[0-9]+$ ]] || fail "CLIPROXY_DEPLOY_KEEP_CONFIG_BACKUPS must be an integer"
 getent passwd cliproxy >/dev/null || fail "missing cliproxy user"
 
 install -d -m 0755 "${STATE_DIR}" "${STATE_DIR}/toolchains" "${GOCACHE}" "${GOMODCACHE}" "${RELEASE_DIR}" "${SLOTS_DIR}" "${INSTALL_DIR}/bin"
 install -d -m 0750 -o cliproxy -g cliproxy "${STATE_DIR}/slots" "${RUN_DIR}"
 exec 9>"${LOCK_FILE}"
 flock -n 9 || fail "another deployment is already running"
+
+ensure_runtime_config
+backup_runtime_config
 
 ensure_go
 sync_source

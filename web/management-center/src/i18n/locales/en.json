@@ -2021,6 +2021,10 @@
     "throughput_section": "IO throughput",
     "net_rx": "Network RX",
     "net_tx_value": "TX {{value}}/s",
+    "net_month": "Traffic {{month}}",
+    "net_month_detail": "RX {{rx}} · TX {{tx}}",
+    "net_source_vnstat": "vnstat",
+    "net_source_builtin": "builtin",
     "disk_read": "Disk read",
     "disk_write_value": "write {{value}}/s"
   }
