@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { filterModelNames, mergeModelNames } from '../src/features/accessGroups/modelAllowlist';
 import {
   normalizeAccessGroup,
   normalizeAccessGroupUsage,
@@ -94,5 +95,21 @@ describe('access group api normalization', () => {
     // pass-through of id/label/provider/prefix/file/disabled — verified via
     // type usage in the page component.
     expect(normalizeAccessGroup({ name: 'g' }).allowedAuths).toEqual([]);
+  });
+});
+
+describe('access group model allowlist picker helpers', () => {
+  test('merges discovered and existing custom models without case-insensitive duplicates', () => {
+    expect(mergeModelNames(['gpt-5', 'custom-*'], ['GPT-5', 'claude-4', ''])).toEqual([
+      'gpt-5',
+      'custom-*',
+      'claude-4',
+    ]);
+  });
+
+  test('filters model options case-insensitively', () => {
+    expect(filterModelNames(['gpt-5', 'claude-sonnet-4', 'deepseek-v3'], 'SONNET')).toEqual([
+      'claude-sonnet-4',
+    ]);
   });
 });

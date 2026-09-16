@@ -5,12 +5,16 @@ import { Input } from '@/components/ui/Input';
 import { Sheet } from '@/components/ui/Sheet/Sheet';
 import type { AccessAuthItem, AccessGroup, RateLimitSpec } from '@/types';
 import type { AccessGroupPayload } from '@/services/api/accessControl';
+import { ModelAllowlistPicker } from './ModelAllowlistPicker';
 import styles from './AccessGroupsPage.module.scss';
 
 interface GroupEditSheetProps {
   open: boolean;
   group: AccessGroup | null;
   auths: AccessAuthItem[];
+  models: string[];
+  modelsLoading: boolean;
+  modelsError: string;
   mutating: boolean;
   onClose: () => void;
   onSubmit: (payload: AccessGroupPayload) => Promise<void>;
@@ -18,7 +22,7 @@ interface GroupEditSheetProps {
 
 interface FormState {
   name: string;
-  allowedModels: string;
+  allowedModels: string[];
   maxConcurrency: string;
   rateLimitRpm: string;
   perKeyRpm: string;
@@ -30,7 +34,7 @@ interface FormState {
 
 const emptyForm: FormState = {
   name: '',
-  allowedModels: '',
+  allowedModels: [],
   maxConcurrency: '',
   rateLimitRpm: '',
   perKeyRpm: '',
@@ -46,7 +50,7 @@ const formFromGroup = (group: AccessGroup | null): FormState => {
   const num = (v: number) => (v > 0 ? String(v) : '');
   return {
     name: group.name,
-    allowedModels: group.allowedModels.join(', '),
+    allowedModels: [...group.allowedModels],
     maxConcurrency: num(group.maxConcurrency),
     rateLimitRpm: num(group.rateLimitRpm),
     perKeyRpm: num(pk.rpm),
@@ -62,16 +66,13 @@ const toInt = (value: string): number => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 };
 
-const splitCsv = (value: string): string[] =>
-  value
-    .split(/[,\n]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-
 export function GroupEditSheet({
   open,
   group,
   auths,
+  models,
+  modelsLoading,
+  modelsError,
   mutating,
   onClose,
   onSubmit,
@@ -114,7 +115,7 @@ export function GroupEditSheet({
     await onSubmit({
       name: form.name,
       allowedAuths: form.allowedAuths,
-      allowedModels: splitCsv(form.allowedModels),
+      allowedModels: form.allowedModels,
       maxConcurrency: toInt(form.maxConcurrency),
       rateLimitRpm: toInt(form.rateLimitRpm),
       perKeyLimits,
@@ -170,10 +171,13 @@ export function GroupEditSheet({
 
         <div className={styles.field}>
           <label className={styles.label}>{t('access_groups.field_models')}</label>
-          <Input
+          <ModelAllowlistPicker
+            options={models}
             value={form.allowedModels}
-            onChange={(event) => patch({ allowedModels: event.target.value })}
-            placeholder={t('access_groups.field_models_placeholder')}
+            loading={modelsLoading}
+            error={modelsError}
+            disabled={mutating}
+            onChange={(allowedModels) => patch({ allowedModels })}
           />
           <span className={styles.hint}>{t('access_groups.field_models_hint')}</span>
         </div>
