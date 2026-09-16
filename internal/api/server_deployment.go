@@ -67,7 +67,14 @@ func (s *Server) deploymentStatus() deploymentStatus {
 }
 
 func (s *Server) authorizeDeploymentControl(c *gin.Context) bool {
-	if s == nil || c == nil || s.deploymentControlKey == "" {
+	if s == nil || c == nil {
+		return false
+	}
+	controlKey := s.deploymentControlKey
+	if controlKey == "" {
+		controlKey = deploymentControlToken()
+	}
+	if controlKey == "" {
 		return false
 	}
 	host, _, errHost := net.SplitHostPort(strings.TrimSpace(c.Request.RemoteAddr))
@@ -78,7 +85,7 @@ func (s *Server) authorizeDeploymentControl(c *gin.Context) bool {
 	if provided == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(s.deploymentControlKey)) == 1
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(controlKey)) == 1
 }
 
 func deploymentControlToken() string {
