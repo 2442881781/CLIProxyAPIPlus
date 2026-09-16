@@ -221,7 +221,8 @@ ensure_systemd_units() {
 	storage_environment="Environment=CLIPROXY_AUTH_DIR_OVERRIDE=${auth_dir}"
 	if [[ -f "${PGSTORE_ENV_FILE}" ]]; then
 	  storage_environment="EnvironmentFile=-${PGSTORE_ENV_FILE}
-Environment=PGSTORE_LOCAL_PATH=$(slot_state "${slot}")"
+Environment=PGSTORE_LOCAL_PATH=$(slot_state "${slot}")
+Environment=CLIPROXY_AUTH_DIR_OVERRIDE=$(slot_state "${slot}")/pgstore/auths"
 	fi
     cat >"${unit}" <<EOF
 [Unit]
