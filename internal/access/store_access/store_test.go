@@ -297,3 +297,37 @@ func TestProviderGroupModelCheck(t *testing.T) {
 		t.Fatalf("group-disallowed model should 403, got %v", err)
 	}
 }
+
+func TestConfigurePublishesDefaultBeforeProviderRefresh(t *testing.T) {
+	defaultStoreMu.Lock()
+	previousStore := defaultStore
+	defaultStore = nil
+	defaultStoreMu.Unlock()
+	providersRefresherMu.Lock()
+	previousRefresher := providersRefresher
+	providersRefresherMu.Unlock()
+	t.Cleanup(func() {
+		SetProvidersRefresher(previousRefresher)
+		defaultStoreMu.Lock()
+		defaultStore = previousStore
+		defaultStoreMu.Unlock()
+	})
+
+	refreshed := make(chan *Store, 1)
+	SetProvidersRefresher(func() {
+		refreshed <- DefaultStore()
+	})
+
+	configured, err := Configure(t.TempDir())
+	if err != nil {
+		t.Fatalf("Configure() error = %v", err)
+	}
+	select {
+	case observed := <-refreshed:
+		if observed != configured {
+			t.Fatalf("refresh observed store %p, want %p", observed, configured)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider refresh did not complete; default store publication may deadlock")
+	}
+}
