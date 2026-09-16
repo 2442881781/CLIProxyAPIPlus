@@ -103,6 +103,8 @@
     "oauth": "OAuth вход",
     "quota_management": "Управление квотами",
     "usage_monitor": "Мониторинг использования",
+    "model_pressure": "Нагрузка моделей",
+    "access_keys": "Ключи доступа",
     "plugins": "Плагины",
     "plugin_store": "Магазин плагинов",
     "config_management": "Панель конфигурации",
@@ -123,6 +125,8 @@
     "oauth": "Авторизация OAuth",
     "quota_management": "API ключи и лимиты",
     "usage_monitor": "Токены по поставщикам и моделям",
+    "model_pressure": "Текущая нагрузка по моделям",
+    "access_keys": "Ключи и группы подписчиков",
     "plugins": "Переключатели и ресурсы плагинов",
     "plugin_store": "Поиск и установка плагинов",
     "logs": "Трассировка запросов",
@@ -1496,6 +1500,30 @@
     }
   },
 
+  "model_pressure": {
+    "eyebrow": "MODEL PRESSURE",
+    "title": "Нагрузка моделей",
+    "description": "Текущая нагрузка по публичным моделям: активные запросы и окно завершённых за {{window}} с.",
+    "load_failed": "Ошибка загрузки: {{message}}",
+    "empty_title": "Нет данных по моделям",
+    "empty_description": "Модели не зарегистрированы или недавнего трафика нет.",
+    "model": "Модель",
+    "in_flight": "В работе",
+    "requests_per_second": "Запр./с",
+    "output_tps": "Ток./с (вывод)",
+    "error_rate": "Ошибки",
+    "avg_latency": "Ср. задержка",
+    "avg_ttft": "Ср. TTFT",
+    "supply": "Пул (актив/остыл)",
+    "providers": "Провайдеры",
+    "supply_value": "{{serving}} / {{cooling}}"
+  },
+  "access_keys": {
+    "eyebrow": "ACCESS KEYS",
+    "title": "Ключи доступа",
+    "description": "Выпуск, лимиты и отзыв ключей для подписчиков.",
+    "open_full_page": "Открыть в новой вкладке"
+  },
   "usage_monitor": {
     "eyebrow": "Учёт в реальном времени",
     "title": "Мониторинг использования",

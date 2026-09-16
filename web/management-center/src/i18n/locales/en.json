@@ -103,6 +103,8 @@
     "oauth": "OAuth Login",
     "quota_management": "Quota Management",
     "usage_monitor": "Usage Monitor",
+    "model_pressure": "Model Pressure",
+    "access_keys": "Access Keys",
     "plugins": "Plugins",
     "plugin_store": "Plugin Store",
     "config_management": "Config Panel",
@@ -124,6 +126,8 @@
     "oauth": "OAuth authorization",
     "quota_management": "API keys & limits",
     "usage_monitor": "Tokens by provider and model",
+    "model_pressure": "Live concurrency & rates per model",
+    "access_keys": "Subscriber keys & groups",
     "plugins": "Plugin toggles & config",
     "plugin_store": "Discover & install plugins",
     "logs": "Request tracing",
@@ -1507,6 +1511,30 @@
     }
   },
 
+  "model_pressure": {
+    "eyebrow": "MODEL PRESSURE",
+    "title": "Model Pressure",
+    "description": "Live pressure per public model: in-flight requests plus a {{window}}s completed-request window.",
+    "load_failed": "Failed to load: {{message}}",
+    "empty_title": "No model data",
+    "empty_description": "No registered models yet, or no recent traffic.",
+    "model": "Model",
+    "in_flight": "In-flight",
+    "requests_per_second": "Req/s",
+    "output_tps": "Out tok/s",
+    "error_rate": "Error rate",
+    "avg_latency": "Avg latency",
+    "avg_ttft": "Avg TTFT",
+    "supply": "Supply (up/cooling)",
+    "providers": "Providers",
+    "supply_value": "{{serving}} / {{cooling}}"
+  },
+  "access_keys": {
+    "eyebrow": "ACCESS KEYS",
+    "title": "Access Keys",
+    "description": "Issue, limit and revoke access keys for subscribers.",
+    "open_full_page": "Open in new tab"
+  },
   "usage_monitor": {
     "eyebrow": "Live accounting",
     "title": "Usage Monitor",
