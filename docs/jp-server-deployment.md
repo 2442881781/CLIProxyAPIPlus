@@ -46,9 +46,10 @@ snapshot:
 ./scripts/publish-jp-deploy.sh
 ```
 
-The publisher creates a transport commit that preserves the destination
-repository's `.github/workflows` directory and records the real source revision
-in a `Source-Commit` trailer.
+The publisher runs `bun run build` for `web/management-center`, injects
+`dist/index.html` into the transport snapshot as `static/management.html`,
+preserves the destination repository's `.github/workflows` directory, and
+records the real source revision in a `Source-Commit` trailer.
 
 ## Deploy
 
@@ -59,7 +60,8 @@ sudo cliproxy-deploy
 The deployment sequence is:
 
 1. acquire the deployment lock;
-2. fetch the deployment branch and build a CGO-enabled Linux binary;
+2. fetch the deployment branch, build a CGO-enabled Linux binary, and stage the
+   published management UI with a precompressed gzip copy;
 3. clone current active state into the inactive slot;
 4. merge any usage or credential changes recorded while that slot previously
    drained;
@@ -67,10 +69,12 @@ The deployment sequence is:
 6. verify `/readyz` and plugin loading;
 7. atomically switch the Nginx upstream and reload Nginx;
 8. verify both the private endpoint and public Nginx route;
-9. tell the previous slot to drain;
-10. stop it after all tracked requests and WebSockets finish, or after the drain
+9. replace `/opt/cliproxy/static/management.html` and its gzip copy, retaining
+   the prior UI alongside binary release backups for rollback;
+10. tell the previous slot to drain;
+11. stop it after all tracked requests and WebSockets finish, or after the drain
     deadline;
-11. retain its final state for the next three-way merge.
+12. retain its final state for the next three-way merge.
 
 Nginx reload behavior preserves established downstream connections on old Nginx
 workers. Those connections continue to the previous backend while new

@@ -25,6 +25,12 @@ ACTIVE_SLOT_FILE="${STATE_DIR}/active-slot"
 LOCK_FILE="${STATE_DIR}/deploy.lock"
 MERGE_SCRIPT="${INSTALL_DIR}/bin/cliproxy-merge-state.py"
 DEPLOY_SCRIPT_TARGET="/usr/local/sbin/cliproxy-deploy"
+MANAGEMENT_SOURCE="${SOURCE_DIR}/static/management.html"
+MANAGEMENT_DIR="${INSTALL_DIR}/static"
+MANAGEMENT_TARGET="${MANAGEMENT_DIR}/management.html"
+MANAGEMENT_GZIP_TARGET="${MANAGEMENT_TARGET}.gz"
+MANAGEMENT_UI_ACTIVATED=0
+MANAGEMENT_UI_HAD_PREVIOUS=0
 CONTROL_TOKEN_FILE="${RUN_DIR}/deploy-control-token"
 CONTROL_ENV_FILE="${RUN_DIR}/deploy-control.env"
 
@@ -91,8 +97,45 @@ copy_tree() {
   fi
 }
 
+stage_management_ui() {
+  [[ -s "${MANAGEMENT_SOURCE}" ]] || fail "deployment snapshot is missing static/management.html"
+  install -d -m 0755 "${MANAGEMENT_DIR}"
+  install -m 0644 "${MANAGEMENT_SOURCE}" "${MANAGEMENT_TARGET}.new"
+  gzip -9 -c "${MANAGEMENT_TARGET}.new" >"${MANAGEMENT_GZIP_TARGET}.new"
+  chmod 0644 "${MANAGEMENT_GZIP_TARGET}.new"
+}
+
+activate_management_ui() {
+  if [[ -f "${MANAGEMENT_TARGET}" ]]; then
+    cp -a "${MANAGEMENT_TARGET}" "${MANAGEMENT_BACKUP}" || return 1
+    MANAGEMENT_UI_HAD_PREVIOUS=1
+  fi
+  if [[ -f "${MANAGEMENT_GZIP_TARGET}" ]]; then
+    cp -a "${MANAGEMENT_GZIP_TARGET}" "${MANAGEMENT_GZIP_BACKUP}" || return 1
+  fi
+  MANAGEMENT_UI_ACTIVATED=1
+  mv -f "${MANAGEMENT_TARGET}.new" "${MANAGEMENT_TARGET}" || return 1
+  mv -f "${MANAGEMENT_GZIP_TARGET}.new" "${MANAGEMENT_GZIP_TARGET}" || return 1
+}
+
+restore_management_ui() {
+  [[ "${MANAGEMENT_UI_ACTIVATED}" -eq 1 ]] || return 0
+  if [[ "${MANAGEMENT_UI_HAD_PREVIOUS}" -eq 1 && -f "${MANAGEMENT_BACKUP}" ]]; then
+    cp -a "${MANAGEMENT_BACKUP}" "${MANAGEMENT_TARGET}"
+    if [[ -f "${MANAGEMENT_GZIP_BACKUP}" ]]; then
+      cp -a "${MANAGEMENT_GZIP_BACKUP}" "${MANAGEMENT_GZIP_TARGET}"
+    else
+      rm -f "${MANAGEMENT_GZIP_TARGET}"
+    fi
+  else
+    rm -f "${MANAGEMENT_TARGET}" "${MANAGEMENT_GZIP_TARGET}"
+  fi
+  MANAGEMENT_UI_ACTIVATED=0
+}
+
 rollback_nginx() {
   local old_slot="$1" old_service="$2" old_port="$3"
+  restore_management_ui
   log "rolling nginx back to ${old_slot}"
   if [[ "${LEGACY_MIGRATION:-0}" -eq 0 ]]; then
     systemctl start "${old_service}" || true
@@ -268,7 +311,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   fail "run this script as root"
 fi
 
-for command_name in curl git tar gcc systemctl flock nginx python3 sha256sum ss; do
+for command_name in curl git tar gcc gzip systemctl flock nginx python3 sha256sum ss; do
   command -v "${command_name}" >/dev/null 2>&1 || fail "missing required command: ${command_name}"
 done
 [[ "${DRAIN_TIMEOUT}" =~ ^[0-9]+$ ]] || fail "CLIPROXY_DEPLOY_DRAIN_TIMEOUT must be an integer"
@@ -290,7 +333,10 @@ SOURCE_COMMIT="$(source_commit)"
 SHORT_COMMIT="${SOURCE_COMMIT:0:8}"
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 BUILD_OUTPUT="${STATE_DIR}/cli-proxy-api-${SHORT_COMMIT}.new"
-BACKUP="${RELEASE_DIR}/cli-proxy-api-$(date -u +%Y%m%dT%H%M%SZ)"
+RELEASE_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP="${RELEASE_DIR}/cli-proxy-api-${RELEASE_STAMP}"
+MANAGEMENT_BACKUP="${RELEASE_DIR}/management-${RELEASE_STAMP}.html"
+MANAGEMENT_GZIP_BACKUP="${MANAGEMENT_BACKUP}.gz"
 
 log "building ${SHORT_COMMIT} with CGO enabled"
 (
@@ -306,6 +352,7 @@ log "building ${SHORT_COMMIT} with CGO enabled"
 )
 [[ -x "${BUILD_OUTPUT}" ]] || fail "build did not produce an executable"
 ldd "${BUILD_OUTPUT}" >/dev/null 2>&1 || fail "build is not CGO-capable; dynamic plugins would be disabled"
+stage_management_ui
 
 if [[ -f "${ACTIVE_SLOT_FILE}" ]]; then
   ACTIVE_SLOT="$(tr -d '[:space:]' <"${ACTIVE_SLOT_FILE}")"
@@ -434,6 +481,16 @@ if ! curl -fsS -H 'Upgrade: websocket' -H 'Connection: upgrade' "http://127.0.0.
   systemctl stop "${NEXT_SERVICE}" || true
   fail "nginx websocket header path check failed"
 fi
+if ! activate_management_ui; then
+  rollback_nginx "${ACTIVE_SLOT}" "${ACTIVE_SERVICE}" "${ACTIVE_PORT}"
+  systemctl stop "${NEXT_SERVICE}" || true
+  fail "management UI activation failed"
+fi
+if ! curl -fsS "http://127.0.0.1:8317/management.html" >/dev/null; then
+  rollback_nginx "${ACTIVE_SLOT}" "${ACTIVE_SERVICE}" "${ACTIVE_PORT}"
+  systemctl stop "${NEXT_SERVICE}" || true
+  fail "management UI health check failed"
+fi
 printf '%s\n' "${NEXT_SLOT}" >"${ACTIVE_SLOT_FILE}.new"
 mv -f "${ACTIVE_SLOT_FILE}.new" "${ACTIVE_SLOT_FILE}"
 systemctl enable "${NEXT_SERVICE}" >/dev/null
@@ -475,6 +532,11 @@ if [[ "${KEEP_RELEASES}" =~ ^[0-9]+$ ]]; then
   if [[ "${#old_releases[@]}" -gt 0 ]]; then
     rm -f -- "${old_releases[@]}"
   fi
+  mapfile -t old_management_releases < <(find "${RELEASE_DIR}" -maxdepth 1 -type f -name 'management-*.html' -printf '%T@ %p\n' | sort -nr | awk -v keep="${KEEP_RELEASES}" 'NR > keep { sub(/^[^ ]+ /, ""); print }')
+  for old_management in "${old_management_releases[@]}"; do
+    rm -f -- "${old_management}" "${old_management}.gz"
+  done
+
 fi
 
 log "deployed ${SHORT_COMMIT} to ${NEXT_SLOT}; health and plugin checks passed"

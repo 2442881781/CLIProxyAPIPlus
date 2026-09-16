@@ -75,7 +75,14 @@ Verify and commit only task-related files, push `origin/main`, publish the trans
 
    Run broader tests according to risk. If `go test ./...` fails in an unrelated pre-existing area, preserve the exact package/test failure and still require all changed packages plus the compile gate to pass.
 
-4. For deployment script changes, also run:
+4. For management-center changes, validate the production artifact before publishing:
+
+   ```bash
+   cd web/management-center
+   bun run verify
+   ```
+
+5. For deployment script changes, also run:
 
    ```bash
    bash -n scripts/cliproxy-server-deploy.sh scripts/publish-jp-deploy.sh
@@ -83,21 +90,24 @@ Verify and commit only task-related files, push `origin/main`, publish the trans
    git diff --check
    ```
 
-5. Before committing, load and follow the global `commit` skill. Use a concise Conventional Commit subject. Stage only intended files.
+6. Before committing, load and follow the global `commit` skill. Use a concise Conventional Commit subject. Stage only intended files.
 
-6. Push the normal branch when authorized:
+7. Push the normal branch when authorized:
 
    ```bash
    git push origin main
    ```
 
-7. Publish the transport snapshot:
+8. Publish the transport snapshot:
 
    ```bash
    ./scripts/publish-jp-deploy.sh HEAD
    ```
 
-   Record both the source commit and generated `github-deploy/deploy-jp` commit. Never force-push `github-deploy/main`.
+   Publishing runs `bun run build` and injects `web/management-center/dist/index.html`
+   into the transport snapshot as `static/management.html`. Record both the source
+   commit and generated `github-deploy/deploy-jp` commit. Never force-push
+   `github-deploy/main`.
 
 ## Remote preflight through MCP
 
@@ -186,6 +196,8 @@ A rollout is complete only when all applicable checks pass:
    ```
 
    Expected page codes are 200, 200, and 401 without a management key.
+   Also verify that the served `/management.html` hash matches the published
+   `static/management.html`, including requests that advertise gzip encoding.
 
 4. Deployment control endpoint:
 
