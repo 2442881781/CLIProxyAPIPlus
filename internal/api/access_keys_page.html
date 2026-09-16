@@ -41,6 +41,7 @@
   .field { display:flex; flex-direction:column; gap:4px; }
   label { font-size:12px; color:var(--text-secondary); }
   input,select { padding:8px 10px; border:1px solid var(--border-color); border-radius:8px; font-size:13px; min-width:160px; background:var(--bg-tertiary); color:var(--text-primary); }
+	.key-group-select { min-width:120px; max-width:180px; padding:6px 8px; }
   input:focus,select:focus { outline:none; border-color:var(--border-hover); }
   button { padding:8px 16px; border:none; border-radius:8px; font-size:13px; cursor:pointer; background:var(--primary-color); color:var(--primary-contrast); }
   button:hover { background:var(--primary-hover); }
@@ -171,6 +172,41 @@ const api = (m, p, body) => fetch('/v0/management' + p, {
 function toast(msg, ok) { const t = document.getElementById('toast'); t.textContent = msg; t.className = ok ? 'ok' : 'err'; t.style.display = 'block'; setTimeout(()=>t.style.display='none', 3000); }
 function fmt(n) { return (n||0).toLocaleString(); }
 function esc(s) { return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function copyText(text) {
+  if (!text) return false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {}
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  area.setSelectionRange(0, area.value.length);
+  let copied = false;
+  try { copied = document.execCommand('copy'); } catch (e) {}
+  area.remove();
+  return copied;
+}
+
+let GROUPS = [];
+function groupOptions(current) {
+  return '<option value="">（无分组）</option>' + GROUPS.map(g =>
+    `<option value="${esc(g.name)}" ${g.name===current?'selected':''}>${esc(g.name)}</option>`
+  ).join('');
+}
+function refreshKeyGroupSelects() {
+  document.querySelectorAll('.key-group-select').forEach(select => {
+    const current = select.dataset.current || '';
+    select.innerHTML = groupOptions(current);
+    select.value = current;
+  });
+}
 
 function login() {
   MGMT = document.getElementById('mgmtKey').value.trim();
@@ -195,7 +231,7 @@ function load() {
       return `<tr>
         <td>${esc(k.name)||'<span class="muted">(未命名)</span>'}<br><span class="muted mono">${esc(k.id)}</span></td>
         <td class="mono">${esc(k.key_prefix)}…</td>
-        <td>${k.group ? esc(k.group) : '<span class="muted">—</span>'}</td>
+        <td><select class="key-group-select" data-id="${esc(k.id)}" data-current="${esc(k.group||'')}" onchange="setKeyGroup(this.dataset.id,this.value)">${groupOptions(k.group||'')}</select></td>
         <td>${k.disabled ? '<span class="tag off">已禁用</span>' : over ? '<span class="tag off">超额</span>' : '<span class="tag on">启用</span>'}</td>
         <td>${used} / ${limit}<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
         <td class="mono" style="font-size:11px">${esc(models==='<span class="muted">全部</span>'?'':models)}${models.startsWith('<')?models:''}</td>
@@ -215,10 +251,12 @@ let AUTHS = [];
 function loadGroups() {
   api('GET','/access-groups').then(d => {
     const groups = d.groups || [];
+	GROUPS = groups;
     const sel = document.getElementById('f_group');
     const cur = sel.value;
     sel.innerHTML = '<option value="">（无分组）</option>' + groups.map(g => `<option value="${esc(g.name)}">${esc(g.name)}</option>`).join('');
     sel.value = cur;
+	refreshKeyGroupSelects();
     document.getElementById('gbody').innerHTML = groups.map(g => {
       const u = g.usage || {};
       const auths = (g.allowed_auths||[]).length ? g.allowed_auths.join(', ') : '<span class="muted">全部</span>';
@@ -294,13 +332,23 @@ function createKey() {
   }).catch(e => toast('创建失败: ' + e.message));
 }
 function toggleKey(id, en) { api('PATCH','/access-keys?id='+id,{disabled:!en}).then(load).catch(e=>toast(e.message)); }
+function setKeyGroup(id, group) {
+  api('PATCH','/access-keys?id='+encodeURIComponent(id),{group}).then(() => {
+    toast(group ? `已加入「${group}」` : '已移出分组',1);
+    load();
+  }).catch(e => { toast('分组保存失败: ' + e.message); load(); });
+}
 function resetUsage(id) { if(confirm('清零该 key 的用量计数？')) api('PATCH','/access-keys?id='+id,{reset_usage:true}).then(()=>{toast('已清零',1);load();}).catch(e=>toast(e.message)); }
 function rotateKey(id) { if(confirm('轮换后旧 key 立即失效，继续？')) api('POST','/access-keys/rotate?id='+id,{}).then(d=>{document.getElementById('newKey').textContent=d.key;document.getElementById('keyModal').style.display='flex';load();}).catch(e=>toast(e.message)); }
 function delKey(id) { if(confirm('删除后该 key 立即失效且不可恢复，继续？')) api('DELETE','/access-keys?id='+id).then(()=>{toast('已删除',1);load();}).catch(e=>toast(e.message)); }
-function copyKey() { navigator.clipboard.writeText(document.getElementById('newKey').textContent).then(()=>toast('已复制',1)); }
-function copyUsageLink() {
+async function copyKey() {
+	const copied = await copyText(document.getElementById('newKey').textContent);
+	toast(copied ? 'Key 已复制' : '复制失败，请手动选择 Key', copied);
+}
+async function copyUsageLink() {
   const link = location.origin + '/my-usage.html#' + document.getElementById('newKey').textContent;
-  navigator.clipboard.writeText(link).then(()=>toast('用量链接已复制，发给员工即可',1));
+	const copied = await copyText(link);
+	toast(copied ? '用量链接已复制，发给员工即可' : '复制失败，请手动复制', copied);
 }
 function closeModal() { document.getElementById('keyModal').style.display='none'; }
 
