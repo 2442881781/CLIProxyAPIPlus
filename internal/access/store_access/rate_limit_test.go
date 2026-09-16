@@ -186,7 +186,7 @@ func TestKeyRateLimit_TPMChargesAfterUsage(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	mustAcquire(t, s, entry.ID)()
-	if !s.RecordUsage("sk-cpa-tpm", 120, false) {
+	if !s.RecordUsage("sk-cpa-tpm", UsageEvent{Tokens: 120}) {
 		t.Fatal("record usage failed")
 	}
 	release, retryAfter, err := s.AcquireKey(entry.ID)
@@ -237,7 +237,7 @@ func TestKeyRateLimit_KeyOverridesGroupPerField(t *testing.T) {
 	}
 	// Own rpm=5 overrides group rpm=1: 5 admitted in one instant.
 	// Inherited tpm=50 still applies.
-	if !s.RecordUsage("sk-cpa-vip", 60, false) {
+	if !s.RecordUsage("sk-cpa-vip", UsageEvent{Tokens: 60}) {
 		t.Fatal("record usage failed")
 	}
 	if release, _, err := s.AcquireKey(entry.ID); err == nil {
