@@ -15,7 +15,9 @@ the configured drain deadline expires.
 
 - services: `cliproxy-blue.service`, `cliproxy-green.service`
 - slot binaries: `/opt/cliproxy/slots/{blue,green}/cli-proxy-api`
-- shared config: `/etc/cliproxy/config.yaml`
+- writable shared config: `/var/lib/cliproxy/config/config.yaml`
+- initial config source: `/etc/cliproxy/config.yaml` (copied only once)
+- config backups: `/var/lib/cliproxy/deploy/config-backups`
 - slot state: `/var/lib/cliproxy/deploy/slots/{blue,green}/auths`
 - active slot marker: `/var/lib/cliproxy/deploy/active-slot`
 - Nginx upstream: `/etc/nginx/conf.d/cliproxy-upstream.conf`
@@ -23,8 +25,10 @@ the configured drain deadline expires.
 - deploy command: `/usr/local/sbin/cliproxy-deploy`
 
 Each process receives its port and auth directory through runtime-only
-environment overrides. This keeps `/etc/cliproxy/config.yaml` unchanged and
-ensures hot reloads preserve the slot-specific state directory.
+environment overrides. Both slots share the writable runtime config under
+`/var/lib/cliproxy/config`, while auth state remains isolated per slot. The
+systemd units retain `ProtectSystem=strict` and expose only the runtime config,
+the slot state, and logs as writable paths.
 
 ## Application lifecycle endpoints
 
@@ -60,21 +64,23 @@ sudo cliproxy-deploy
 The deployment sequence is:
 
 1. acquire the deployment lock;
-2. fetch the deployment branch, build a CGO-enabled Linux binary, and stage the
+2. initialize the writable runtime config from `/etc/cliproxy/config.yaml` when
+   it does not yet exist, then create a root-only timestamped backup;
+3. fetch the deployment branch, build a CGO-enabled Linux binary, and stage the
    published management UI with a precompressed gzip copy;
-3. clone current active state into the inactive slot;
-4. merge any usage or credential changes recorded while that slot previously
+4. clone current active state into the inactive slot;
+5. merge any usage or credential changes recorded while that slot previously
    drained;
-5. start and validate the inactive slot on its private port;
-6. verify `/readyz` and plugin loading;
-7. atomically switch the Nginx upstream and reload Nginx;
-8. verify both the private endpoint and public Nginx route;
-9. replace `/opt/cliproxy/static/management.html` and its gzip copy, retaining
-   the prior UI alongside binary release backups for rollback;
-10. tell the previous slot to drain;
-11. stop it after all tracked requests and WebSockets finish, or after the drain
+6. start and validate the inactive slot on its private port;
+7. verify `/readyz` and plugin loading;
+8. atomically switch the Nginx upstream and reload Nginx;
+9. verify both the private endpoint and public Nginx route;
+10. replace `/opt/cliproxy/static/management.html` and its gzip copy, retaining
+    the prior UI alongside binary release backups for rollback;
+11. tell the previous slot to drain;
+12. stop it after all tracked requests and WebSockets finish, or after the drain
     deadline;
-12. retain its final state for the next three-way merge.
+13. retain its final state for the next three-way merge.
 
 Nginx reload behavior preserves established downstream connections on old Nginx
 workers. Those connections continue to the previous backend while new
@@ -100,6 +106,7 @@ Useful overrides:
 CLIPROXY_DEPLOY_REF=deploy-jp \
 CLIPROXY_DEPLOY_GO_VERSION=1.26.0 \
 CLIPROXY_DEPLOY_KEEP_RELEASES=5 \
+CLIPROXY_DEPLOY_KEEP_CONFIG_BACKUPS=5 \
 CLIPROXY_DEPLOY_DRAIN_TIMEOUT=7200 \
 CLIPROXY_DEPLOY_DRAIN_POLL_INTERVAL=2 \
 sudo cliproxy-deploy
@@ -108,6 +115,11 @@ sudo cliproxy-deploy
 `CLIPROXY_DEPLOY_DRAIN_TIMEOUT` is the hard deadline in seconds for an ordinary
 blue-green update. Reaching it can interrupt an in-flight stream or WebSocket,
 so keep it long enough for normal agent turns.
+
+The deployment script never overwrites an existing runtime config from the
+legacy `/etc` copy. Backups are root-owned mode `0600`; the live runtime config
+is owned by `cliproxy:cliproxy` with mode `0640` so management saves and hot
+reloads work inside the systemd sandbox.
 
 The one-time migration from the legacy `cliproxy.service` cannot use the new
 drain endpoint. It instead waits for existing TCP connections to disappear,

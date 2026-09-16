@@ -39,6 +39,8 @@ Production layout:
 - Green: `127.0.0.1:18318`, `cliproxy-green.service`
 - active marker: `/var/lib/cliproxy/deploy/active-slot`
 - state root: `/var/lib/cliproxy/deploy/slots`
+- writable shared config: `/var/lib/cliproxy/config/config.yaml`
+- config backups: `/var/lib/cliproxy/deploy/config-backups`
 - deploy command: `/usr/local/sbin/cliproxy-deploy`
 - transport branch: `github-deploy/deploy-jp`
 
@@ -173,7 +175,10 @@ A rollout is complete only when all applicable checks pass:
 
    The deployed commit must equal the intended source commit, not merely the transport commit.
 
-2. Exactly one slot is active and enabled; the other slot and legacy service are inactive and disabled:
+2. Confirm the active process uses `/var/lib/cliproxy/config/config.yaml`, the
+   file is `cliproxy:cliproxy` mode `0640`, and the unit keeps
+   `ProtectSystem=strict` with `/var/lib/cliproxy/config` in `ReadWritePaths`.
+3. Exactly one slot is active and enabled; the other slot and legacy service are inactive and disabled:
 
    ```bash
    systemctl is-active cliproxy-blue.service || true
@@ -184,7 +189,7 @@ A rollout is complete only when all applicable checks pass:
    systemctl is-enabled cliproxy.service || true
    ```
 
-3. Nginx and health:
+4. Nginx and health:
 
    ```bash
    nginx -t
@@ -199,13 +204,13 @@ A rollout is complete only when all applicable checks pass:
    Also verify that the served `/management.html` hash matches the published
    `static/management.html`, including requests that advertise gzip encoding.
 
-4. Deployment control endpoint:
+5. Deployment control endpoint:
 
    - local request with the token must report `ready=true`, `draining=false` and sensible connection counts;
    - public request without the token must return 404;
    - do not display the token in the final report.
 
-5. Plugins: journal output for the new process must show both `commandcode` and `opencode-go` loaded and registered. Treat any of these as deployment failure:
+6. Plugins: journal output for the new process must show both `commandcode` and `opencode-go` loaded and registered. Treat any of these as deployment failure:
 
    ```text
    failed to load plugin
@@ -213,9 +218,9 @@ A rollout is complete only when all applicable checks pass:
    returned invalid metadata or no capabilities
    ```
 
-6. Inspect recent logs for panic, fatal errors, repeated restarts, write-permission failures, and unexpected auth/state paths.
+7. Inspect recent logs for panic, fatal errors, repeated restarts, write-permission failures, and unexpected auth/state paths.
 
-7. Confirm the active private listener matches the Nginx upstream and the inactive private port is no longer listening after drain.
+8. Confirm the active private listener matches the Nginx upstream and the inactive private port is no longer listening after drain.
 
 ## Failure and rollback
 
