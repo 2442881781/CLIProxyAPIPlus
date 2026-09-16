@@ -61,20 +61,26 @@ type UsageMonitorSnapshot struct {
 }
 
 type usageMonitorState struct {
-	mu        sync.RWMutex
-	since     time.Time
-	updatedAt time.Time
-	truncated bool
-	requests  int64
-	success   int64
-	failed    int64
-	tokens    UsageTokenTotals
-	rows      map[string]*UsageModelStats
+	mu           sync.RWMutex
+	since        time.Time
+	updatedAt    time.Time
+	truncated    bool
+	requests     int64
+	success      int64
+	failed       int64
+	tokens       UsageTokenTotals
+	rows         map[string]*UsageModelStats
+	providerRate map[string]*coreusage.RateWindow // by provider (memory only)
+	authRate     map[string]*coreusage.RateWindow // by provider + auth id (memory only)
+	now          func() time.Time                 // injectable clock for rate reads
 }
 
 var usageMonitor = usageMonitorState{
-	since: time.Now(),
-	rows:  make(map[string]*UsageModelStats),
+	since:        time.Now(),
+	rows:         make(map[string]*UsageModelStats),
+	providerRate: make(map[string]*coreusage.RateWindow),
+	authRate:     make(map[string]*coreusage.RateWindow),
+	now:          time.Now,
 }
 
 func normalizeUsageDimension(value, fallback string) string {
@@ -131,6 +137,13 @@ func observeUsageRecord(record coreusage.Record, detail coreusage.Detail, failed
 	}
 	addUsageTokens(&usageMonitor.tokens, tokens)
 
+	// Feed the live rate gauges with the canonical token split. Kept ahead of
+	// the row-cap early return so gauges stay live even when rows truncate.
+	rateWindowFor(usageMonitor.providerRate, provider).Add(timestamp, tokens.InputTokens, tokens.OutputTokens, tokens.TotalTokens)
+	if authID := strings.TrimSpace(record.AuthID); authID != "" {
+		rateWindowFor(usageMonitor.authRate, provider+"\x00"+authID).Add(timestamp, tokens.InputTokens, tokens.OutputTokens, tokens.TotalTokens)
+	}
+
 	row := usageMonitor.rows[key]
 	if row == nil {
 		if len(usageMonitor.rows) >= maxUsageMonitorRows {
@@ -159,6 +172,17 @@ func observeUsageRecord(record coreusage.Record, detail coreusage.Detail, failed
 	addUsageTokens(&row.Tokens, tokens)
 	usageMonitor.mu.Unlock()
 	scheduleUsageMonitorPersistence()
+}
+
+// rateWindowFor returns (creating if needed) the window for a map key.
+// Caller must hold usageMonitor.mu.
+func rateWindowFor(m map[string]*coreusage.RateWindow, key string) *coreusage.RateWindow {
+	w := m[key]
+	if w == nil {
+		w = &coreusage.RateWindow{}
+		m[key] = w
+	}
+	return w
 }
 
 // ResetUsageMonitor clears accumulated usage and starts a new monitoring period.
@@ -232,5 +256,73 @@ func GetUsageMonitorSnapshot() UsageMonitorSnapshot {
 		Failed:    usageMonitor.failed,
 		Tokens:    usageMonitor.tokens,
 		Providers: ordered,
+	}
+}
+
+// ProviderRateRow is one provider's live throughput gauge.
+type ProviderRateRow struct {
+	Provider string `json:"provider"`
+	coreusage.Rate
+}
+
+// AuthRateRow is one upstream credential's live throughput gauge.
+type AuthRateRow struct {
+	Provider string `json:"provider"`
+	AuthID   string `json:"auth_id"`
+	coreusage.Rate
+}
+
+// RateSnapshot reports current per-second throughput over a sliding
+// RateWindowSeconds window — real-time gauges, independent of the cumulative
+// snapshot above. Rows idle for the whole window are omitted.
+type RateSnapshot struct {
+	Enabled       bool              `json:"enabled"`
+	WindowSeconds int               `json:"window_seconds"`
+	Providers     []ProviderRateRow `json:"providers"`
+	Auths         []AuthRateRow     `json:"auths"`
+}
+
+// GetRateSnapshot returns the live provider and upstream-auth rates, sorted
+// by total tokens/sec descending.
+func GetRateSnapshot() RateSnapshot {
+	usageMonitor.mu.RLock()
+	now := usageMonitor.now()
+	providers := make([]ProviderRateRow, 0, len(usageMonitor.providerRate))
+	for provider, w := range usageMonitor.providerRate {
+		rate := w.Rate(now)
+		if rate.RequestsPerSecond == 0 && rate.TotalTokensPerSecond == 0 {
+			continue // fully expired — nothing is flowing
+		}
+		providers = append(providers, ProviderRateRow{Provider: provider, Rate: rate})
+	}
+	auths := make([]AuthRateRow, 0, len(usageMonitor.authRate))
+	for key, w := range usageMonitor.authRate {
+		rate := w.Rate(now)
+		if rate.RequestsPerSecond == 0 && rate.TotalTokensPerSecond == 0 {
+			continue
+		}
+		provider, authID, _ := strings.Cut(key, "\x00")
+		auths = append(auths, AuthRateRow{Provider: provider, AuthID: authID, Rate: rate})
+	}
+	enabled := UsageStatisticsEnabled()
+	usageMonitor.mu.RUnlock()
+
+	sort.Slice(providers, func(i, j int) bool {
+		if providers[i].TotalTokensPerSecond != providers[j].TotalTokensPerSecond {
+			return providers[i].TotalTokensPerSecond > providers[j].TotalTokensPerSecond
+		}
+		return providers[i].Provider < providers[j].Provider
+	})
+	sort.Slice(auths, func(i, j int) bool {
+		if auths[i].TotalTokensPerSecond != auths[j].TotalTokensPerSecond {
+			return auths[i].TotalTokensPerSecond > auths[j].TotalTokensPerSecond
+		}
+		return auths[i].AuthID < auths[j].AuthID
+	})
+	return RateSnapshot{
+		Enabled:       enabled,
+		WindowSeconds: coreusage.RateWindowSeconds,
+		Providers:     providers,
+		Auths:         auths,
 	}
 }

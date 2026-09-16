@@ -128,6 +128,45 @@ func TestAccessKeyValidation(t *testing.T) {
 	}
 }
 
+func TestRatesEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storeaccess.Configure(dir)
+	if err != nil {
+		t.Fatalf("configure store: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h := &Handler{}
+	r.GET("/rates", h.GetRates)
+
+	if _, err := store.Create("sk-cpa-rate-1", storeaccess.AccessKey{Name: "live"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	store.RecordUsage("sk-cpa-rate-1", storeaccess.UsageEvent{Tokens: 120, InputTokens: 80, OutputTokens: 40})
+
+	rec, body := doReq(t, r, "GET", "/rates", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rates: %d %s", rec.Code, rec.Body.String())
+	}
+	if body["window_seconds"].(float64) != 60 {
+		t.Fatalf("window_seconds: %v", body["window_seconds"])
+	}
+	keys, _ := body["keys"].([]any)
+	if len(keys) != 1 {
+		t.Fatalf("keys: %v", body["keys"])
+	}
+	row := keys[0].(map[string]any)
+	if row["name"] != "live" || row["output_tokens_per_second"].(float64) != 40.0/60.0 {
+		t.Fatalf("key rate row: %v", row)
+	}
+	if _, ok := body["providers"].([]any); !ok {
+		t.Fatalf("providers: %v", body["providers"])
+	}
+	if _, ok := body["auths"].([]any); !ok {
+		t.Fatalf("auths: %v", body["auths"])
+	}
+}
+
 func TestAccessKeyUsageEndpoints(t *testing.T) {
 	dir := t.TempDir()
 	store, err := storeaccess.Configure(dir)

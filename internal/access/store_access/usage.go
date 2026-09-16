@@ -31,12 +31,14 @@ func (p *usagePlugin) HandleUsage(_ context.Context, record usage.Record) {
 		model = strings.TrimSpace(record.Model)
 	}
 	p.store.RecordUsage(key, UsageEvent{
-		Tokens:  record.Detail.TotalTokens,
-		Failed:  record.Failed,
-		Model:   model,
-		AuthID:  strings.TrimSpace(record.AuthID),
-		Latency: record.Latency,
-		TTFT:    record.TTFT,
+		Tokens:       record.Detail.TotalTokens,
+		InputTokens:  record.Detail.InputTokens,
+		OutputTokens: record.Detail.OutputTokens,
+		Failed:       record.Failed,
+		Model:        model,
+		AuthID:       strings.TrimSpace(record.AuthID),
+		Latency:      record.Latency,
+		TTFT:         record.TTFT,
 	})
 }
 

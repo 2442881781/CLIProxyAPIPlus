@@ -5,6 +5,8 @@ import (
 	"maps"
 	"sort"
 	"time"
+
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 // Cardinality guards for per-key usage detail maps. Distinct dimensions
@@ -31,12 +33,14 @@ type DimUsage struct {
 // the client-requested (alias) name; AuthID is the upstream credential that
 // served the request.
 type UsageEvent struct {
-	Tokens  int64
-	Failed  bool
-	Model   string
-	AuthID  string
-	Latency time.Duration
-	TTFT    time.Duration
+	Tokens       int64
+	InputTokens  int64
+	OutputTokens int64
+	Failed       bool
+	Model        string
+	AuthID       string
+	Latency      time.Duration
+	TTFT         time.Duration
 }
 
 // UsageTopEntry is one row of the usage leaderboard.
@@ -131,11 +135,11 @@ func (s *Store) pruneDailyLocked(entry *AccessKey, now time.Time) {
 	}
 }
 
-// UsageSummary shapes a Usage for JSON responses, adding exact averages.
-// includeAuths controls whether upstream-auth attribution is exposed (admin
-// views only; self-service callers must pass false so pool internals are not
-// leaked to key holders).
-func UsageSummary(u Usage, includeAuths bool) map[string]any {
+// UsageSummary shapes a Usage for JSON responses, adding exact averages and
+// the key's live rate gauge. includeAuths controls whether upstream-auth
+// attribution is exposed (admin views only; self-service callers must pass
+// false so pool internals are not leaked to key holders).
+func UsageSummary(u Usage, includeAuths bool, rate coreusage.Rate) map[string]any {
 	requests := u.Requests
 	if requests <= 0 {
 		requests = 1
@@ -155,6 +159,7 @@ func UsageSummary(u Usage, includeAuths bool) map[string]any {
 		"ttft_total_ms":    u.TTFTTotalMS,
 		"models":           u.Models,
 		"daily":            u.Daily,
+		"rates":            rate,
 	}
 	if includeAuths {
 		out["auths"] = u.Auths

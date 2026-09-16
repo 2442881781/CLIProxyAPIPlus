@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
 )
 
@@ -61,6 +62,29 @@ func (h *Handler) GetUsageMonitor(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, redisqueue.GetUsageMonitorSnapshot())
+}
+
+// GetRates returns live throughput gauges over a sliding window: per provider,
+// per upstream auth, and per access key. Rates are memory-only and always
+// reflect the current pace, not accumulated history.
+func (h *Handler) GetRates(c *gin.Context) {
+	if h == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler unavailable"})
+		return
+	}
+	snap := redisqueue.GetRateSnapshot()
+	resp := gin.H{
+		"enabled":        snap.Enabled,
+		"window_seconds": snap.WindowSeconds,
+		"providers":      snap.Providers,
+		"auths":          snap.Auths,
+		"keys":           []storeaccess.KeyRateRow{},
+	}
+	// The access-key store is optional; degrade to an empty list, not a 503.
+	if store := storeaccess.DefaultStore(); store != nil {
+		resp["keys"] = store.KeyRates()
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // ResetUsageMonitor clears all token usage aggregates, including the persisted snapshot.

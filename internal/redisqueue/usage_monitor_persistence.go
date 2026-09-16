@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -265,6 +266,8 @@ func restorePersistedUsageMonitor(persisted persistedUsageMonitor) error {
 	usageMonitor.failed = persisted.Failed
 	usageMonitor.tokens = persisted.Tokens
 	usageMonitor.rows = rows
+	usageMonitor.providerRate = make(map[string]*coreusage.RateWindow)
+	usageMonitor.authRate = make(map[string]*coreusage.RateWindow)
 	usageMonitor.mu.Unlock()
 	return nil
 }
@@ -279,6 +282,8 @@ func resetUsageMonitorInMemory(since time.Time) {
 	usageMonitor.failed = 0
 	usageMonitor.tokens = UsageTokenTotals{}
 	usageMonitor.rows = make(map[string]*UsageModelStats)
+	usageMonitor.providerRate = make(map[string]*coreusage.RateWindow)
+	usageMonitor.authRate = make(map[string]*coreusage.RateWindow)
 	usageMonitor.mu.Unlock()
 }
 
