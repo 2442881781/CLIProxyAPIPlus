@@ -84,7 +84,7 @@ func (s *Server) setupRoutes() {
 			"quota":                entry.Quota,
 			"rate_limit":           entry.RateLimit,
 			"effective_rate_limit": store.EffectiveRateLimit(entry),
-			"usage":                entry.Usage,
+			"usage":                storeaccess.UsageSummary(entry.Usage, false),
 		}
 		if grp := store.GroupFor(entry); grp != nil {
 			resp["group"] = gin.H{

@@ -114,6 +114,9 @@ async function load(key){
   if(rl.rpd>0)segs.push(fmt(rl.rpd)+' 次/天');
   if(rl.max_concurrency>0)segs.push('并发 '+fmt(rl.max_concurrency));
   html += row('速率限制', segs.length?segs.join(' · '):'不限');
+  if(rl.avg_latency_ms!==undefined||u.avg_latency_ms){
+    html += row('平均延迟', (u.avg_latency_ms||0)+' ms'+(u.avg_ttft_ms?' · 首token '+u.avg_ttft_ms+' ms':''));
+  }
   if(d.group){
     const g = d.group;
     const gu = g.usage||{};
@@ -122,6 +125,24 @@ async function load(key){
       + row('分组累计用量', fmt(gu.total_tokens)+' tokens / '+fmt(gu.requests)+' 次请求');
   }
   html += '</div>';
+
+  const models = u.models||{};
+  const modelRows = Object.keys(models).map(k=>({m:k,...models[k]})).sort((a,b)=>b.tokens-a.tokens);
+  if(modelRows.length){
+    html += '<div class="card"><h2>分模型用量</h2>'
+      + modelRows.slice(0,20).map(r=>row('<code>'+r.m+'</code>', fmt(r.tokens)+' tokens / '+fmt(r.requests)+' 次'+(r.failed?' · 失败 '+fmt(r.failed):''))).join('')
+      + '</div>';
+  }
+  const daily = u.daily||{};
+  const days = Object.keys(daily).sort().slice(-14);
+  if(days.length){
+    const maxT = Math.max.apply(null, days.map(k=>daily[k].tokens||0).concat([1]));
+    html += '<div class="card"><h2>近 14 天用量</h2>'
+      + days.map(k=>{const dd=daily[k];const p=Math.round((dd.tokens||0)/maxT*100);
+        return '<div class="row"><span class="k">'+k+'</span><span class="v">'+fmt(dd.tokens)+' tokens / '+dd.requests+' 次</span></div><div class="bar"><i style="width:'+p+'%"></i></div>'}).join('')
+      + '</div>';
+  }
+
   html += '<div class="muted" style="font-size:12px;text-align:center">数据每 15 秒刷新一次 · 请妥善保管本链接，它包含你的 Key</div>';
   app.innerHTML = html;
 }

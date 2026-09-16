@@ -85,16 +85,22 @@ type Quota struct {
 // Usage accumulates counters for a key. PeriodKey scopes PeriodTokens to the
 // current quota window (e.g. "2026-09" for monthly, "2026-09-14" for daily).
 // DayKey/DayRequests implement the RPD admission counter so the daily request
-// budget survives restarts.
+// budget survives restarts. Models/Daily/Auths are bounded attribution
+// breakdowns; LatencyTotalMS/TTFTTotalMS feed exact averages at read time.
 type Usage struct {
-	TotalTokens  int64  `json:"total_tokens,omitempty"`
-	PeriodTokens int64  `json:"period_tokens,omitempty"`
-	PeriodKey    string `json:"period_key,omitempty"`
-	Requests     int64  `json:"requests,omitempty"`
-	Failed       int64  `json:"failed,omitempty"`
-	LastUsedAt   string `json:"last_used_at,omitempty"`
-	DayKey       string `json:"day_key,omitempty"`
-	DayRequests  int64  `json:"day_requests,omitempty"`
+	TotalTokens    int64               `json:"total_tokens,omitempty"`
+	PeriodTokens   int64               `json:"period_tokens,omitempty"`
+	PeriodKey      string              `json:"period_key,omitempty"`
+	Requests       int64               `json:"requests,omitempty"`
+	Failed         int64               `json:"failed,omitempty"`
+	LastUsedAt     string              `json:"last_used_at,omitempty"`
+	DayKey         string              `json:"day_key,omitempty"`
+	DayRequests    int64               `json:"day_requests,omitempty"`
+	Models         map[string]DimUsage `json:"models,omitempty"`
+	Daily          map[string]DimUsage `json:"daily,omitempty"`
+	Auths          map[string]DimUsage `json:"auths,omitempty"`
+	LatencyTotalMS int64               `json:"latency_total_ms,omitempty"`
+	TTFTTotalMS    int64               `json:"ttft_total_ms,omitempty"`
 }
 
 // Store is a file-backed, goroutine-safe collection of access keys.
@@ -329,13 +335,8 @@ func (s *Store) Lookup(key string) *AccessKey {
 	hash := HashKey(key)
 	s.maybeReload()
 	s.mu.RLock()
-	entry, ok := s.byHash[hash]
-	s.mu.RUnlock()
-	if !ok {
-		return nil
-	}
-	copyEntry := *entry
-	return &copyEntry
+	defer s.mu.RUnlock()
+	return copyAccessKey(s.byHash[hash])
 }
 
 // List returns all entries sorted by creation time.
@@ -347,7 +348,7 @@ func (s *Store) List() []AccessKey {
 	defer s.mu.RUnlock()
 	list := make([]AccessKey, 0, len(s.keys))
 	for _, entry := range s.keys {
-		list = append(list, *entry)
+		list = append(list, *copyAccessKey(entry))
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt < list[j].CreatedAt })
 	return list
@@ -361,8 +362,7 @@ func (s *Store) Get(id string) *AccessKey {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if entry, ok := s.keys[id]; ok {
-		copyEntry := *entry
-		return &copyEntry
+		return copyAccessKey(entry)
 	}
 	return nil
 }
@@ -408,8 +408,7 @@ func (s *Store) Create(plaintext string, fields AccessKey) (*AccessKey, error) {
 		delete(s.byHash, hash)
 		return nil, err
 	}
-	copyEntry := *entry
-	return &copyEntry, nil
+	return copyAccessKey(entry), nil
 }
 
 // Update applies non-empty fields to an existing entry. Key material cannot be
@@ -456,8 +455,7 @@ func (s *Store) Update(id string, patch AccessKeyPatch) (*AccessKey, error) {
 	if err := s.persistLocked(); err != nil {
 		return nil, err
 	}
-	copyEntry := *entry
-	return &copyEntry, nil
+	return copyAccessKey(entry), nil
 }
 
 // Rotate replaces the key material of an entry and returns the updated entry
@@ -492,8 +490,7 @@ func (s *Store) Rotate(id string, newPlaintext string) (*AccessKey, string, erro
 	if err := s.persistLocked(); err != nil {
 		return nil, "", err
 	}
-	copyEntry := *entry
-	return &copyEntry, newPlaintext, nil
+	return copyAccessKey(entry), newPlaintext, nil
 }
 
 // Delete removes an entry by id.
@@ -617,9 +614,10 @@ func (k *AccessKey) QuotaExceeded(now time.Time) bool {
 	return k.Usage.PeriodTokens >= k.Quota.TokenLimit
 }
 
-// RecordUsage adds tokens for a presented plaintext key, rolling the period
-// bucket when the window changed. Returns false when the key is unknown.
-func (s *Store) RecordUsage(key string, tokens int64, failed bool) bool {
+// RecordUsage folds one completed request's usage into the presented key's
+// counters: totals, quota period bucket, per-dimension detail maps, and the
+// TPM bucket charge. Returns false when the key is unknown.
+func (s *Store) RecordUsage(key string, ev UsageEvent) bool {
 	if s == nil || !s.loaded {
 		return false
 	}
@@ -631,20 +629,23 @@ func (s *Store) RecordUsage(key string, tokens int64, failed bool) bool {
 		return false
 	}
 	now := s.nowTime().UTC()
-	entry.Usage.TotalTokens += tokens
+	entry.Usage.TotalTokens += ev.Tokens
 	entry.Usage.Requests++
-	if failed {
+	if ev.Failed {
 		entry.Usage.Failed++
 	}
+	entry.Usage.LatencyTotalMS += max(ev.Latency.Milliseconds(), 0)
+	entry.Usage.TTFTTotalMS += max(ev.TTFT.Milliseconds(), 0)
 	periodKey := entry.Quota.periodKeyFor(now)
 	if entry.Usage.PeriodKey != periodKey {
 		entry.Usage.PeriodKey = periodKey
 		entry.Usage.PeriodTokens = 0
 	}
-	entry.Usage.PeriodTokens += tokens
+	entry.Usage.PeriodTokens += ev.Tokens
 	entry.Usage.LastUsedAt = now.Format(time.RFC3339)
-	s.recordGroupUsageLocked(entry, tokens, failed, now)
-	s.chargeKeyTPMLocked(entry, tokens, now)
+	s.recordDetailLocked(entry, ev, now)
+	s.recordGroupUsageLocked(entry, ev.Tokens, ev.Failed, now)
+	s.chargeKeyTPMLocked(entry, ev.Tokens, now)
 	s.dirty = true
 	return true
 }

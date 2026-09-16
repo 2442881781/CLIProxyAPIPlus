@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
@@ -124,5 +125,85 @@ func TestAccessKeyValidation(t *testing.T) {
 	rec, _ = doReq(t, r, "PATCH", "/access-keys", `{"disabled":true}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing id should 400, got %d", rec.Code)
+	}
+}
+
+func TestAccessKeyUsageEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storeaccess.Configure(dir)
+	if err != nil {
+		t.Fatalf("configure store: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h := &Handler{}
+	r.GET("/access-keys/usage", h.GetAccessKeyUsage)
+	r.GET("/access-keys/usage-top", h.GetAccessKeyUsageTop)
+	r.GET("/access-groups/usage", h.GetAccessGroupUsage)
+
+	if _, err := store.UpsertGroup(storeaccess.Group{Name: "plan-a"}); err != nil {
+		t.Fatalf("upsert group: %v", err)
+	}
+	entry, err := store.Create("sk-cpa-e2e-user", storeaccess.AccessKey{Name: "u", Group: "plan-a"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	store.RecordUsage("sk-cpa-e2e-user", storeaccess.UsageEvent{Tokens: 100, Model: "claude-x", AuthID: "auth-1", Latency: 80 * time.Millisecond})
+	store.RecordUsage("sk-cpa-e2e-user", storeaccess.UsageEvent{Tokens: 60, Model: "gpt-y", AuthID: "auth-2", Failed: true})
+
+	// per-key detail
+	rec, body := doReq(t, r, "GET", "/access-keys/usage?id="+entry.ID, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("usage: %d %s", rec.Code, rec.Body.String())
+	}
+	usage, _ := body["usage"].(map[string]any)
+	if usage["total_tokens"].(float64) != 160 || usage["failed"].(float64) != 1 {
+		t.Fatalf("usage summary: %v", usage)
+	}
+	models, _ := body["models"].([]any)
+	if len(models) != 2 || models[0].(map[string]any)["model"] != "claude-x" {
+		t.Fatalf("models: %v", models)
+	}
+	auths, _ := body["auths"].([]any)
+	if len(auths) != 2 {
+		t.Fatalf("auths: %v", auths)
+	}
+	daily, _ := body["daily"].([]any)
+	if len(daily) != 1 {
+		t.Fatalf("daily: %v", daily)
+	}
+
+	// missing/unknown id
+	if rec, _ := doReq(t, r, "GET", "/access-keys/usage", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing id should 400, got %d", rec.Code)
+	}
+	if rec, _ := doReq(t, r, "GET", "/access-keys/usage?id=nope", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown id should 404, got %d", rec.Code)
+	}
+
+	// leaderboard
+	rec, body = doReq(t, r, "GET", "/access-keys/usage-top?by=tokens&period=all&limit=5", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("top: %d", rec.Code)
+	}
+	keys, _ := body["keys"].([]any)
+	if len(keys) != 1 || keys[0].(map[string]any)["id"] != entry.ID || keys[0].(map[string]any)["tokens"].(float64) != 160 {
+		t.Fatalf("top: %v", keys)
+	}
+	if rec, _ := doReq(t, r, "GET", "/access-keys/usage-top?by=bogus", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad by should 400, got %d", rec.Code)
+	}
+
+	// group aggregate
+	rec, body = doReq(t, r, "GET", "/access-groups/usage?name=plan-a", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("group usage: %d", rec.Code)
+	}
+	totals, _ := body["totals"].(map[string]any)
+	if totals["tokens"].(float64) != 160 || totals["requests"].(float64) != 2 {
+		t.Fatalf("group totals: %v", totals)
+	}
+	if rec, _ := doReq(t, r, "GET", "/access-groups/usage?name=nope", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown group should 404, got %d", rec.Code)
 	}
 }

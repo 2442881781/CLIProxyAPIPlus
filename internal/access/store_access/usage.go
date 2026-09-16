@@ -24,7 +24,20 @@ func (p *usagePlugin) HandleUsage(_ context.Context, record usage.Record) {
 	if key == "" {
 		return
 	}
-	p.store.RecordUsage(key, record.Detail.TotalTokens, record.Failed)
+	// Attribute the client-requested (alias) model when present so the
+	// breakdown matches what the customer asked for.
+	model := strings.TrimSpace(record.Alias)
+	if model == "" {
+		model = strings.TrimSpace(record.Model)
+	}
+	p.store.RecordUsage(key, UsageEvent{
+		Tokens:  record.Detail.TotalTokens,
+		Failed:  record.Failed,
+		Model:   model,
+		AuthID:  strings.TrimSpace(record.AuthID),
+		Latency: record.Latency,
+		TTFT:    record.TTFT,
+	})
 }
 
 // startUsageFeed registers the counter plugin on the default usage manager and

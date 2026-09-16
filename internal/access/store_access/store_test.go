@@ -96,7 +96,7 @@ func TestQuotaAndUsage(t *testing.T) {
 	if entry.QuotaExceeded(time.Now()) {
 		t.Fatal("fresh key must not be over quota")
 	}
-	if !s.RecordUsage("sk-cpa-quota", 60, false) {
+	if !s.RecordUsage("sk-cpa-quota", UsageEvent{Tokens: 60}) {
 		t.Fatal("record usage failed")
 	}
 	got := s.Lookup("sk-cpa-quota")
@@ -106,7 +106,7 @@ func TestQuotaAndUsage(t *testing.T) {
 	if got.QuotaExceeded(time.Now()) {
 		t.Fatal("under limit must not be over quota")
 	}
-	s.RecordUsage("sk-cpa-quota", 50, false)
+	s.RecordUsage("sk-cpa-quota", UsageEvent{Tokens: 50})
 	if !s.Lookup("sk-cpa-quota").QuotaExceeded(time.Now()) {
 		t.Fatal("over limit must be over quota")
 	}
@@ -114,7 +114,7 @@ func TestQuotaAndUsage(t *testing.T) {
 	s.mu.Lock()
 	s.keys[entry.ID].Usage.PeriodKey = "2000-01"
 	s.mu.Unlock()
-	if !s.RecordUsage("sk-cpa-quota", 10, false) {
+	if !s.RecordUsage("sk-cpa-quota", UsageEvent{Tokens: 10}) {
 		t.Fatal("record after roll failed")
 	}
 	got = s.Lookup("sk-cpa-quota")
@@ -124,7 +124,7 @@ func TestQuotaAndUsage(t *testing.T) {
 	if got.QuotaExceeded(time.Now()) {
 		t.Fatal("rolled period must reset quota")
 	}
-	if s.RecordUsage("sk-cpa-unknown", 10, false) {
+	if s.RecordUsage("sk-cpa-unknown", UsageEvent{Tokens: 10}) {
 		t.Fatal("unknown key must not count")
 	}
 }
@@ -132,7 +132,7 @@ func TestQuotaAndUsage(t *testing.T) {
 func TestQuotaEnforcementInProvider(t *testing.T) {
 	s := newTestStore(t)
 	s.Create("sk-cpa-limited", AccessKey{Quota: Quota{TokenLimit: 10}})
-	s.RecordUsage("sk-cpa-limited", 20, false)
+	s.RecordUsage("sk-cpa-limited", UsageEvent{Tokens: 20})
 	p := &provider{store: s}
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"x"}`))
 	req.Header.Set("Authorization", "Bearer sk-cpa-limited")
@@ -265,7 +265,7 @@ func TestGroupUsageAggregation(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry, _ := s.Create("sk-cpa-g1", AccessKey{Name: "a", Group: "g"})
-	if !s.RecordUsage("sk-cpa-g1", 100, false) {
+	if !s.RecordUsage("sk-cpa-g1", UsageEvent{Tokens: 100}) {
 		t.Fatal("record failed")
 	}
 	g := s.GetGroup("g")
