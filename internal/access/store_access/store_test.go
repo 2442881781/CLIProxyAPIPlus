@@ -1,9 +1,11 @@
 package storeaccess
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -329,5 +331,63 @@ func TestConfigurePublishesDefaultBeforeProviderRefresh(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("provider refresh did not complete; default store publication may deadlock")
+	}
+}
+
+type memoryStorePersister struct {
+	data  []byte
+	saves int
+}
+
+func (p *memoryStorePersister) LoadAccessStore(context.Context) ([]byte, error) {
+	return append([]byte(nil), p.data...), nil
+}
+
+func (p *memoryStorePersister) SaveAccessStore(_ context.Context, data []byte) error {
+	p.data = append([]byte(nil), data...)
+	p.saves++
+	return nil
+}
+
+func TestStorePersisterSeedsAndReceivesUpdates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, StoreFileName)
+	initial := []byte(`{"keys":[],"groups":[{"name":"deepseek"}]}`)
+	if err := os.WriteFile(path, initial, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	persister := &memoryStorePersister{}
+	store := &Store{path: path, managed: true, persister: persister}
+	if err := store.loadLocked(); err != nil {
+		t.Fatalf("loadLocked() error = %v", err)
+	}
+	if persister.saves != 1 || store.GetGroup("deepseek") == nil {
+		t.Fatalf("seed saves = %d, group = %#v", persister.saves, store.GetGroup("deepseek"))
+	}
+	if _, err := store.UpsertGroup(Group{Name: "team"}); err != nil {
+		t.Fatalf("UpsertGroup() error = %v", err)
+	}
+	if persister.saves != 2 || !strings.Contains(string(persister.data), `"team"`) {
+		t.Fatalf("update saves = %d, data = %s", persister.saves, persister.data)
+	}
+}
+
+func TestStorePersisterIsAuthoritative(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, StoreFileName)
+	if err := os.WriteFile(path, []byte(`{"keys":[],"groups":[{"name":"local"}]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	persister := &memoryStorePersister{data: []byte(`{"keys":[],"groups":[{"name":"postgres"}]}`)}
+	store := &Store{path: path, persister: persister}
+	if err := store.loadLocked(); err != nil {
+		t.Fatalf("loadLocked() error = %v", err)
+	}
+	if store.GetGroup("postgres") == nil || store.GetGroup("local") != nil || persister.saves != 0 {
+		t.Fatalf("groups = %#v, saves = %d", store.ListGroups(), persister.saves)
+	}
+	mirrored, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(mirrored), `"postgres"`) {
+		t.Fatalf("mirrored data = %s, error = %v", mirrored, err)
 	}
 }

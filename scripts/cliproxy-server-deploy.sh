@@ -37,6 +37,7 @@ MANAGEMENT_UI_ACTIVATED=0
 MANAGEMENT_UI_HAD_PREVIOUS=0
 CONTROL_TOKEN_FILE="${RUN_DIR}/deploy-control-token"
 CONTROL_ENV_FILE="${RUN_DIR}/deploy-control.env"
+PGSTORE_ENV_FILE="${CLIPROXY_DEPLOY_PGSTORE_ENV:-/etc/cliproxy/pgstore.env}"
 
 log() {
   printf '[cliproxy-deploy] %s\n' "$*"
@@ -217,6 +218,11 @@ ensure_systemd_units() {
     port="$(port_for_slot "${slot}")"
     auth_dir="$(slot_auth "${slot}")"
     unit="/etc/systemd/system/$(service_for_slot "${slot}")"
+	storage_environment="Environment=CLIPROXY_AUTH_DIR_OVERRIDE=${auth_dir}"
+	if [[ -f "${PGSTORE_ENV_FILE}" ]]; then
+	  storage_environment="EnvironmentFile=-${PGSTORE_ENV_FILE}
+Environment=PGSTORE_LOCAL_PATH=$(slot_state "${slot}")"
+	fi
     cat >"${unit}" <<EOF
 [Unit]
 Description=CLIProxyAPI Plus (${slot})
@@ -229,7 +235,7 @@ User=cliproxy
 Group=cliproxy
 WorkingDirectory=${INSTALL_DIR}
 Environment=CLIPROXY_PORT_OVERRIDE=${port}
-Environment=CLIPROXY_AUTH_DIR_OVERRIDE=${auth_dir}
+${storage_environment}
 EnvironmentFile=-${CONTROL_ENV_FILE}
 Environment=CLIPROXY_DEPLOY_CONTROL_TOKEN_FILE=${CONTROL_TOKEN_FILE}
 ExecStart=$(slot_binary "${slot}") --config ${CONFIG_FILE}
@@ -408,13 +414,24 @@ if systemctl list-unit-files cliproxy.service >/dev/null 2>&1 && systemctl is-ac
   LEGACY_MIGRATION=1
 fi
 
-if [[ "${LEGACY_MIGRATION}" -eq 0 && ! -d "${ACTIVE_AUTH}" ]]; then
+if [[ "${LEGACY_MIGRATION}" -eq 0 && ! -d "${ACTIVE_AUTH}" && ! -f "${PGSTORE_ENV_FILE}" ]]; then
   log "initializing ${ACTIVE_SLOT} state from configured auth directory"
   config_auth_dir="$(awk -F: '/^[[:space:]]*auth-dir[[:space:]]*:/ {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[\"\047]/, ""); print; exit}' "${CONFIG_FILE}")"
   [[ -n "${config_auth_dir}" && -d "${config_auth_dir}" ]] || fail "cannot resolve existing auth-dir from ${CONFIG_FILE}"
   copy_tree "${config_auth_dir}" "${ACTIVE_AUTH}"
 fi
 
+if [[ -f "${PGSTORE_ENV_FILE}" ]]; then
+  install -d -m 0750 -o cliproxy -g cliproxy "$(slot_state "${ACTIVE_SLOT}")/pgstore/auths"
+  if [[ ! -e "$(slot_state "${ACTIVE_SLOT}")/pgstore/config/config.yaml" ]]; then
+    install -d -m 0750 -o cliproxy -g cliproxy "$(slot_state "${ACTIVE_SLOT}")/pgstore/config"
+    install -m 0600 -o cliproxy -g cliproxy "${CONFIG_FILE}" "$(slot_state "${ACTIVE_SLOT}")/pgstore/config/config.yaml"
+  fi
+  if [[ -d "${ACTIVE_AUTH}" ]] && ! find "$(slot_state "${ACTIVE_SLOT}")/pgstore/auths" -mindepth 1 -print -quit | grep -q .; then
+    cp -a "${ACTIVE_AUTH}/." "$(slot_state "${ACTIVE_SLOT}")/pgstore/auths/"
+    chown -R cliproxy:cliproxy "$(slot_state "${ACTIVE_SLOT}")/pgstore"
+  fi
+fi
 if [[ "${LEGACY_MIGRATION}" -eq 1 ]]; then
   config_auth_dir="$(awk -F: '/^[[:space:]]*auth-dir[[:space:]]*:/ {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[\"\047]/, ""); print; exit}' "${CONFIG_FILE}")"
   [[ -n "${config_auth_dir}" && -d "${config_auth_dir}" ]] || fail "cannot resolve existing auth-dir from ${CONFIG_FILE}"
@@ -451,6 +468,12 @@ chmod 0640 "${CONTROL_ENV_FILE}"
 if [[ "${LEGACY_MIGRATION}" -eq 1 ]]; then
   log "preparing the first blue-green slot from a live legacy snapshot"
   copy_tree "${ACTIVE_AUTH}" "${NEXT_AUTH}"
+elif [[ -f "${PGSTORE_ENV_FILE}" ]]; then
+  log "PostgreSQL store enabled; preparing an isolated spool for ${NEXT_SLOT}"
+  install -d -m 0750 -o cliproxy -g cliproxy "$(slot_state "${NEXT_SLOT}")/pgstore"
+  if [[ -d "$(slot_state "${ACTIVE_SLOT}")/pgstore" ]]; then
+    copy_tree "$(slot_state "${ACTIVE_SLOT}")/pgstore" "$(slot_state "${NEXT_SLOT}")/pgstore"
+  fi
 elif [[ -d "${NEXT_BASE}" && -d "${NEXT_AUTH}" ]]; then
   STALE_NEXT_AUTH="$(slot_state "${NEXT_SLOT}")/drained-auths"
   copy_tree "${NEXT_AUTH}" "${STALE_NEXT_AUTH}"
@@ -462,9 +485,11 @@ else
   copy_tree "${ACTIVE_AUTH}" "${NEXT_AUTH}"
 fi
 
-# Preserve the old active slot's exact cutover baseline. Its final drained
-# state remains in that slot and is merged the next time the slot is reused.
-copy_tree "${ACTIVE_AUTH}" "${ACTIVE_BASE}"
+# Preserve the old active slot's exact cutover baseline for file-backed auth.
+# PostgreSQL-backed slots use the database as the authoritative state.
+if [[ ! -f "${PGSTORE_ENV_FILE}" ]]; then
+  copy_tree "${ACTIVE_AUTH}" "${ACTIVE_BASE}"
+fi
 install -d -m 0755 "${SLOTS_DIR}/${NEXT_SLOT}"
 install -m 0755 "${BUILD_OUTPUT}" "$(slot_binary "${NEXT_SLOT}").new"
 mv -f "$(slot_binary "${NEXT_SLOT}").new" "$(slot_binary "${NEXT_SLOT}")"
