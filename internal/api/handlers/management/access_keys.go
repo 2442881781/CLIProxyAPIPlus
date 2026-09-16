@@ -2,6 +2,8 @@ package management
 
 import (
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -248,6 +250,118 @@ func (h *Handler) DeleteAccessGroup(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"deleted": name})
+}
+
+// sortedDimRows flattens a dimension map into a list ordered by tokens desc,
+// attaching the dimension name under keyField. For "day" rows the order is
+// date-descending instead so the time series reads as a trend.
+func sortedDimRows(m map[string]storeaccess.DimUsage, keyField string) []gin.H {
+	rows := make([]gin.H, 0, len(m))
+	for name, d := range m {
+		rows = append(rows, gin.H{
+			keyField:       name,
+			"tokens":       d.Tokens,
+			"requests":     d.Requests,
+			"failed":       d.Failed,
+			"last_used_at": d.LastUsedAt,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if keyField == "day" {
+			return rows[i][keyField].(string) > rows[j][keyField].(string)
+		}
+		if rows[i]["tokens"].(int64) != rows[j]["tokens"].(int64) {
+			return rows[i]["tokens"].(int64) > rows[j]["tokens"].(int64)
+		}
+		return rows[i][keyField].(string) < rows[j][keyField].(string)
+	})
+	return rows
+}
+
+// GetAccessKeyUsage returns per-dimension usage detail for one key (?id=).
+func (h *Handler) GetAccessKeyUsage(c *gin.Context) {
+	store := h.accessKeyStore(c)
+	if store == nil {
+		return
+	}
+	id := strings.TrimSpace(c.Query("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing id"})
+		return
+	}
+	entry := store.Get(id)
+	if entry == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "access key not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":         entry.ID,
+		"name":       entry.Name,
+		"key_prefix": entry.KeyPrefix,
+		"group":      entry.Group,
+		"usage":      storeaccess.UsageSummary(entry.Usage, false),
+		"models":     sortedDimRows(entry.Usage.Models, "model"),
+		"daily":      sortedDimRows(entry.Usage.Daily, "day"),
+		"auths":      sortedDimRows(entry.Usage.Auths, "auth"),
+	})
+}
+
+// GetAccessKeyUsageTop ranks access keys by usage
+// (?by=tokens|requests|failed&period=all|month|day&limit=N).
+func (h *Handler) GetAccessKeyUsageTop(c *gin.Context) {
+	store := h.accessKeyStore(c)
+	if store == nil {
+		return
+	}
+	by := strings.ToLower(strings.TrimSpace(c.DefaultQuery("by", "tokens")))
+	if by != "tokens" && by != "requests" && by != "failed" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "by must be tokens|requests|failed"})
+		return
+	}
+	period := strings.ToLower(strings.TrimSpace(c.DefaultQuery("period", "all")))
+	if period != "all" && period != "month" && period != "day" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "period must be all|month|day"})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	c.JSON(http.StatusOK, gin.H{
+		"by":     by,
+		"period": period,
+		"keys":   store.UsageTop(by, period, limit),
+	})
+}
+
+// GetAccessGroupUsage aggregates member keys' usage detail for one group
+// (?name=).
+func (h *Handler) GetAccessGroupUsage(c *gin.Context) {
+	store := h.accessKeyStore(c)
+	if store == nil {
+		return
+	}
+	name := strings.TrimSpace(c.Query("name"))
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing name"})
+		return
+	}
+	view, err := store.GroupUsage(name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	requests := view.Totals.Requests
+	if requests <= 0 {
+		requests = 1
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"name":           view.Name,
+		"keys":           view.Keys,
+		"totals":         view.Totals,
+		"avg_latency_ms": view.LatencyTotalMS / requests,
+		"avg_ttft_ms":    view.TTFTTotalMS / requests,
+		"models":         sortedDimRows(view.Models, "model"),
+		"daily":          sortedDimRows(view.Daily, "day"),
+		"auths":          sortedDimRows(view.Auths, "auth"),
+	})
 }
 
 // ListAccessAuths returns the upstream credentials that groups can reference
