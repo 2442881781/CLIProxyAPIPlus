@@ -485,6 +485,12 @@ else
   copy_tree "${ACTIVE_AUTH}" "${NEXT_AUTH}"
 fi
 
+if [[ ! -f "${PGSTORE_ENV_FILE}" ]]; then
+  chown -R cliproxy:cliproxy "${NEXT_AUTH}"
+  find "${NEXT_AUTH}" -type d -exec chmod 0750 {} +
+  find "${NEXT_AUTH}" -type f -exec chmod 0600 {} +
+fi
+
 # Preserve the old active slot's exact cutover baseline for file-backed auth.
 # PostgreSQL-backed slots use the database as the authoritative state.
 if [[ ! -f "${PGSTORE_ENV_FILE}" ]]; then
