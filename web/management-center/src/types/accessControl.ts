@@ -112,6 +112,12 @@ export interface ServerIORate {
 export interface ServerNetRate {
   rxBytesPerSec?: number;
   txBytesPerSec?: number;
+  month?: string;
+  monthRxBytes?: number;
+  monthTxBytes?: number;
+  totalRxBytes?: number;
+  totalTxBytes?: number;
+  source?: string;
 }
 
 export interface ServerStats {

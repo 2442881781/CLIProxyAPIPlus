@@ -64,6 +64,7 @@ type Handler struct {
 	runtimeStats            func() (activeRequests, activeWebSockets int64)
 	statsMu                 sync.Mutex
 	lastStatsSample         *statsSample
+	netUsage                *netUsageTracker
 }
 
 type configReloadSnapshot struct {

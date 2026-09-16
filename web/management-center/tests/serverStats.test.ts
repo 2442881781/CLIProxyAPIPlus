@@ -65,7 +65,15 @@ describe('server stats API normalization', () => {
         swap_used_percent: 75,
       },
       disk_io: { read_bytes_per_sec: 1200, write_bytes_per_sec: 3400 },
-      network: { rx_bytes_per_sec: 5600, tx_bytes_per_sec: 7800 },
+      network: {
+        rx_bytes_per_sec: 5600,
+        tx_bytes_per_sec: 7800,
+        month: '2026-09',
+        month_rx_bytes: 1_500_000_000,
+        month_tx_bytes: 500_000_000,
+        total_rx_bytes: 9_000_000_000,
+        total_tx_bytes: 3_000_000_000,
+      },
     });
     expect(stats.host).toMatchObject({
       memUsedPercent: 60,
@@ -74,7 +82,15 @@ describe('server stats API normalization', () => {
       swapUsedPercent: 75,
     });
     expect(stats.diskIo).toEqual({ readBytesPerSec: 1200, writeBytesPerSec: 3400 });
-    expect(stats.network).toEqual({ rxBytesPerSec: 5600, txBytesPerSec: 7800 });
+    expect(stats.network).toEqual({
+      rxBytesPerSec: 5600,
+      txBytesPerSec: 7800,
+      month: '2026-09',
+      monthRxBytes: 1_500_000_000,
+      monthTxBytes: 500_000_000,
+      totalRxBytes: 9_000_000_000,
+      totalTxBytes: 3_000_000_000,
+    });
   });
 
   test('leaves disks undefined when the backend omits the field', () => {

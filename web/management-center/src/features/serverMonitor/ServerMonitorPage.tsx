@@ -223,6 +223,27 @@ export function ServerMonitorPage() {
             <section aria-label={t('server_monitor.throughput_section')}>
               <h2 className={styles.sectionTitle}>{t('server_monitor.throughput_section')}</h2>
               <div className={styles.kpis}>
+                {stats.network?.monthRxBytes !== undefined && (
+                  <article className={styles.kpi}>
+                    <span>
+                      {t('server_monitor.net_month', { month: stats.network.month ?? '' })}
+                    </span>
+                    <strong>
+                      {formatFileSize(
+                        stats.network.monthRxBytes + (stats.network.monthTxBytes ?? 0)
+                      )}
+                    </strong>
+                    <small>
+                      {t('server_monitor.net_month_detail', {
+                        rx: formatFileSize(stats.network.monthRxBytes),
+                        tx: formatFileSize(stats.network.monthTxBytes ?? 0),
+                      })}
+                      {stats.network.source
+                        ? ` · ${t(`server_monitor.net_source_${stats.network.source}`)}`
+                        : ''}
+                    </small>
+                  </article>
+                )}
                 {stats.network?.rxBytesPerSec !== undefined && (
                   <article className={styles.kpi}>
                     <span>{t('server_monitor.net_rx')}</span>

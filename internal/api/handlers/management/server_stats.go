@@ -136,9 +136,25 @@ func (h *Handler) GetServerStats(c *gin.Context) {
 		}
 	}
 
+	var monthRx, monthTx, totalRx, totalTx uint64
+	var monthName, netSource string
 	if counters, err := statsNetIOCounters(false); err == nil && len(counters) > 0 {
 		sample.netRecv = counters[0].BytesRecv
 		sample.netSent = counters[0].BytesSent
+		totalRx, totalTx = sample.netRecv, sample.netSent
+	}
+	// Prefer the vnstat daemon's authoritative monthly accounting; fall back
+	// to the builtin tracker when vnstat is not installed.
+	if vt, ok := queryVnstat(sample.at); ok {
+		monthRx, monthTx = vt.RxBytes, vt.TxBytes
+		totalRx, totalTx = vt.TotalRxBytes, vt.TotalTxBytes
+		monthName, netSource = vt.Month, "vnstat"
+	} else if sample.netRecv > 0 || sample.netSent > 0 {
+		if h.netUsage == nil {
+			h.netUsage = newNetUsageTracker(defaultNetUsagePath())
+		}
+		usage := h.netUsage.Observe(sample.netRecv, sample.netSent, sample.at)
+		monthRx, monthTx, monthName, netSource = usage.Rx, usage.Tx, usage.Month, "builtin"
 	}
 
 	host := gin.H{"num_cpu": runtime.NumCPU()}
@@ -173,11 +189,19 @@ func (h *Handler) GetServerStats(c *gin.Context) {
 				"read_bytes_per_sec":  rate(sample.diskRead, prev.diskRead, elapsed),
 				"write_bytes_per_sec": rate(sample.diskWrite, prev.diskWrite, elapsed),
 			}
-			body["network"] = gin.H{
-				"rx_bytes_per_sec": rate(sample.netRecv, prev.netRecv, elapsed),
-				"tx_bytes_per_sec": rate(sample.netSent, prev.netSent, elapsed),
-			}
+			body["network"] = networkBody(sample, *prev, elapsed)
 		}
+	}
+	if _, has := body["network"]; !has && monthName != "" {
+		body["network"] = gin.H{}
+	}
+	if netBody, ok := body["network"].(gin.H); ok && monthName != "" {
+		netBody["month"] = monthName
+		netBody["month_rx_bytes"] = monthRx
+		netBody["month_tx_bytes"] = monthTx
+		netBody["total_rx_bytes"] = totalRx
+		netBody["total_tx_bytes"] = totalTx
+		netBody["source"] = netSource
 	}
 	h.lastStatsSample = &sample
 	body["host"] = host
@@ -189,6 +213,16 @@ func (h *Handler) GetServerStats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, body)
+}
+
+// networkBody builds the network section with windowed rates; monthly
+// totals are merged in by the caller once the tracker has observed the
+// latest counters.
+func networkBody(sample, prev statsSample, elapsed float64) gin.H {
+	return gin.H{
+		"rx_bytes_per_sec": rate(sample.netRecv, prev.netRecv, elapsed),
+		"tx_bytes_per_sec": rate(sample.netSent, prev.netSent, elapsed),
+	}
 }
 
 // rate converts a cumulative-counter delta into a per-second value,

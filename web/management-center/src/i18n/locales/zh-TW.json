@@ -2047,6 +2047,10 @@
     "throughput_section": "IO 吞吐",
     "net_rx": "網路接收",
     "net_tx_value": "傳送 {{value}}/s",
+    "net_month": "本月流量（{{month}}）",
+    "net_month_detail": "收 {{rx}} · 發 {{tx}}",
+    "net_source_vnstat": "vnstat 資料",
+    "net_source_builtin": "內建統計",
     "disk_read": "磁碟讀取",
     "disk_write_value": "寫入 {{value}}/s"
   }
