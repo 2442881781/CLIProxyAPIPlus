@@ -132,3 +132,24 @@ func TestDeploymentControlTokenFile(t *testing.T) {
 		t.Fatalf("deploymentControlToken() = %q, want %q", got, "file-secret")
 	}
 }
+
+func TestDeploymentControlLoadsTokenFileAfterServerStart(t *testing.T) {
+	server := newTestServerWithOptions(t)
+	server.deploymentReady.Store(true)
+	server.deploymentControlKey = ""
+	path := t.TempDir() + "/token"
+	t.Setenv("CLIPROXY_DEPLOY_CONTROL_TOKEN", "")
+	t.Setenv("CLIPROXY_DEPLOY_CONTROL_TOKEN_FILE", path)
+	if errWrite := os.WriteFile(path, []byte("late-secret\n"), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v0/deployment/status", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set(deploymentControlHeader, "late-secret")
+	server.engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
