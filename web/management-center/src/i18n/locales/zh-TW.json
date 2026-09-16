@@ -2024,7 +2024,7 @@
     "host_memory": "主機記憶體",
     "process_section": "程序指標",
     "host_section": "主機指標",
-    "host_unavailable": "目前平台不提供主機級指標（僅 Linux 支援）。",
+    "host_unavailable": "目前平台不提供主機級指標。",
     "active_requests": "在途請求",
     "active_requests_hint": "正在處理的用戶端請求",
     "active_websockets": "活躍 WS",
@@ -2038,6 +2038,16 @@
     "load": "系統負載",
     "host_mem_detail": "已用記憶體",
     "host_mem_of": "共 {{total}}",
-    "num_cpu": "CPU 核數"
+    "num_cpu": "CPU 核數",
+    "disk_section": "磁碟",
+    "disk_label": "磁碟 {{mount}}",
+    "disk_avail_of": "共 {{total}} 可用",
+    "disk_full_warning": "磁碟即將寫滿：{{mounts}}",
+    "swap": "Swap 已用",
+    "throughput_section": "IO 吞吐",
+    "net_rx": "網路接收",
+    "net_tx_value": "傳送 {{value}}/s",
+    "disk_read": "磁碟讀取",
+    "disk_write_value": "寫入 {{value}}/s"
   }
 }

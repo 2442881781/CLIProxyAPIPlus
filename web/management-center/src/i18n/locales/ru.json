@@ -1987,7 +1987,7 @@
     "host_memory": "Память хоста",
     "process_section": "Процесс",
     "host_section": "Хост",
-    "host_unavailable": "Метрики хоста доступны только на Linux.",
+    "host_unavailable": "Метрики хоста недоступны на этой платформе.",
     "active_requests": "В обработке",
     "active_requests_hint": "Обслуживаемые запросы клиентов",
     "active_websockets": "Активные WS",
@@ -2001,6 +2001,16 @@
     "load": "Load average",
     "host_mem_detail": "Памяти занято",
     "host_mem_of": "из {{total}}",
-    "num_cpu": "Ядер CPU"
+    "num_cpu": "Ядер CPU",
+    "disk_section": "Диски",
+    "disk_label": "Диск {{mount}}",
+    "disk_avail_of": "свободно из {{total}}",
+    "disk_full_warning": "Диск почти заполнен: {{mounts}}",
+    "swap": "Swap занято",
+    "throughput_section": "Пропускная способность IO",
+    "net_rx": "Сеть RX",
+    "net_tx_value": "TX {{value}}/s",
+    "disk_read": "Чтение диска",
+    "disk_write_value": "запись {{value}}/s"
   }
 }

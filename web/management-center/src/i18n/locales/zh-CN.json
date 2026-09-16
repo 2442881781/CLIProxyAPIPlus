@@ -1998,7 +1998,7 @@
     "host_memory": "主机内存",
     "process_section": "进程指标",
     "host_section": "主机指标",
-    "host_unavailable": "当前平台不提供主机级指标（仅 Linux 支持）。",
+    "host_unavailable": "当前平台不提供主机级指标。",
     "active_requests": "在途请求",
     "active_requests_hint": "正在处理的客户端请求",
     "active_websockets": "活跃 WS",
@@ -2012,6 +2012,16 @@
     "load": "系统负载",
     "host_mem_detail": "已用内存",
     "host_mem_of": "共 {{total}}",
-    "num_cpu": "CPU 核数"
+    "num_cpu": "CPU 核数",
+    "disk_section": "磁盘",
+    "disk_label": "磁盘 {{mount}}",
+    "disk_avail_of": "共 {{total}} 可用",
+    "disk_full_warning": "磁盘即将写满：{{mounts}}",
+    "swap": "Swap 已用",
+    "throughput_section": "IO 吞吐",
+    "net_rx": "网络接收",
+    "net_tx_value": "发送 {{value}}/s",
+    "disk_read": "磁盘读取",
+    "disk_write_value": "写入 {{value}}/s"
   }
 }

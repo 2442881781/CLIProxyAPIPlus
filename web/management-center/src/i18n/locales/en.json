@@ -1998,7 +1998,7 @@
     "host_memory": "Host memory",
     "process_section": "Process",
     "host_section": "Host",
-    "host_unavailable": "Host-level metrics are only available on Linux.",
+    "host_unavailable": "Host-level metrics are unavailable on this platform.",
     "active_requests": "In-flight",
     "active_requests_hint": "Client requests being served",
     "active_websockets": "Active WS",
@@ -2012,6 +2012,16 @@
     "load": "Load avg",
     "host_mem_detail": "Memory used",
     "host_mem_of": "of {{total}}",
-    "num_cpu": "CPU cores"
+    "num_cpu": "CPU cores",
+    "disk_section": "Disks",
+    "disk_label": "Disk {{mount}}",
+    "disk_avail_of": "avail of {{total}}",
+    "disk_full_warning": "Disk nearly full: {{mounts}}",
+    "swap": "Swap used",
+    "throughput_section": "IO throughput",
+    "net_rx": "Network RX",
+    "net_tx_value": "TX {{value}}/s",
+    "disk_read": "Disk read",
+    "disk_write_value": "write {{value}}/s"
   }
 }

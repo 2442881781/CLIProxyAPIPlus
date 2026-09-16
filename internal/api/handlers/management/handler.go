@@ -63,7 +63,7 @@ type Handler struct {
 	pluginReleases          pluginReleaseCache
 	runtimeStats            func() (activeRequests, activeWebSockets int64)
 	statsMu                 sync.Mutex
-	lastCPUSample           *cpuSample
+	lastStatsSample         *statsSample
 }
 
 type configReloadSnapshot struct {

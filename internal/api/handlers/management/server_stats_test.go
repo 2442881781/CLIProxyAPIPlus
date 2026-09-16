@@ -1,20 +1,24 @@
 package management
 
 import (
+	"errors"
 	"net/http"
 	"runtime"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/disk"
+	gnet "github.com/shirou/gopsutil/v4/net"
 )
 
 // Feature: GET /v0/management/server-stats
 //
-//   Process-level gauges come from the Go runtime and the server's own
-//   counters; host-level gauges are read from /proc on Linux and degrade to
-//   omitted fields elsewhere. CPU percentages are windowed: the server keeps
-//   the previous sample and reports the delta between consecutive calls.
+//   Process gauges come from the Go runtime and the server's own counters;
+//   host gauges are collected through gopsutil on every supported platform.
+//   Rates (disk IO, network) and CPU percentages are windowed: the handler
+//   keeps the previous sample and reports the delta between calls.
 
 func setupServerStatsRouter(t *testing.T, active, websockets int64) *gin.Engine {
 	t.Helper()
@@ -29,7 +33,7 @@ func setupServerStatsRouter(t *testing.T, active, websockets int64) *gin.Engine 
 func TestServerStats_Shape(t *testing.T) {
 	// Given a handler with an injected runtime-stats provider
 	// When GET /server-stats is called
-	// Then the response carries process fields and a host object on linux
+	// Then process fields, host gauges, and disk rows are present
 	r := setupServerStatsRouter(t, 0, 0)
 	rec, body := doReq(t, r, "GET", "/server-stats", "")
 	if rec.Code != http.StatusOK {
@@ -46,21 +50,65 @@ func TestServerStats_Shape(t *testing.T) {
 	if body["num_cpu"] != float64(runtime.NumCPU()) {
 		t.Fatalf("num_cpu = %v, want %d", body["num_cpu"], runtime.NumCPU())
 	}
+
 	host, hasHost := body["host"].(map[string]any)
-	if runtime.GOOS == "linux" {
-		if !hasHost {
-			t.Fatalf("host section missing on linux: %v", body)
+	if !hasHost {
+		t.Fatalf("host section missing: %v", body)
+	}
+	for _, field := range []string{"num_cpu", "mem_total_bytes", "mem_available_bytes", "mem_used_percent"} {
+		if _, ok := host[field]; !ok {
+			t.Fatalf("missing host field %q: %v", field, host)
 		}
-		for _, field := range []string{"load1", "load5", "load15", "mem_total_bytes", "mem_available_bytes"} {
+	}
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		for _, field := range []string{"load1", "load5", "load15"} {
 			if _, ok := host[field]; !ok {
-				t.Fatalf("missing host field %q: %v", field, host)
+				t.Fatalf("missing load field %q on %s: %v", field, runtime.GOOS, host)
 			}
 		}
-		if _, ok := body["num_fds"]; !ok {
-			t.Fatalf("num_fds missing on linux: %v", body)
+	}
+
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		disks, ok := body["disks"].([]any)
+		if !ok || len(disks) == 0 {
+			t.Fatalf("disks missing on %s: %v", runtime.GOOS, body)
 		}
-	} else if hasHost {
-		t.Fatalf("host section should be omitted on %s: %v", runtime.GOOS, host)
+		first, _ := disks[0].(map[string]any)
+		for _, field := range []string{"mount", "device", "total_bytes", "avail_bytes", "used_percent"} {
+			if _, ok := first[field]; !ok {
+				t.Fatalf("disk row missing field %q: %v", field, first)
+			}
+		}
+	}
+}
+
+func TestServerStats_DiskDedupe(t *testing.T) {
+	// Given two partitions on the same device, only one row is emitted
+	parts := []disk.PartitionStat{
+		{Device: "/dev/sda1", Mountpoint: "/", Fstype: "ext4"},
+		{Device: "/dev/sda1", Mountpoint: "/boot", Fstype: "ext4"},
+		{Device: "/dev/sdb1", Mountpoint: "/data", Fstype: "xfs"},
+		{Device: "/dev/sdc1", Mountpoint: "/gone", Fstype: "ext4"},
+	}
+	usage := func(mount string) (*disk.UsageStat, error) {
+		switch mount {
+		case "/", "/boot":
+			return &disk.UsageStat{Path: mount, Total: 1000, Free: 400, UsedPercent: 60}, nil
+		case "/data":
+			return &disk.UsageStat{Path: mount, Total: 500, Free: 100, UsedPercent: 80}, nil
+		default:
+			return nil, errors.New("unreadable")
+		}
+	}
+	rows := collectDiskStats(parts, usage)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (same-device dedupe + unreadable skipped): %v", len(rows), rows)
+	}
+	if rows[0]["used_percent"] != float64(60) {
+		t.Fatalf("used_percent = %v, want 60", rows[0]["used_percent"])
+	}
+	if rows[0]["device"] != "/dev/sda1" {
+		t.Fatalf("device = %v, want /dev/sda1", rows[0]["device"])
 	}
 }
 
@@ -80,67 +128,81 @@ func TestServerStats_RuntimeCounters(t *testing.T) {
 	}
 }
 
-func TestServerStats_CPUWindow(t *testing.T) {
-	// Given two consecutive calls, process_cpu_seconds never decreases
-	// and the second call reports windowed cpu percentages on linux
-	if runtime.GOOS != "linux" {
-		t.Skip("cpu window metrics are linux-only")
+func TestServerStats_WindowRates(t *testing.T) {
+	// Given injected gopsutil counters that advance between two calls
+	// Then the second call reports windowed rates and cpu percentages
+	var call int
+	origCPU, origDisk, origNet := statsCPUTimes, statsDiskIOCounters, statsNetIOCounters
+	t.Cleanup(func() {
+		statsCPUTimes, statsDiskIOCounters, statsNetIOCounters = origCPU, origDisk, origNet
+	})
+	statsCPUTimes = func(percpu bool) ([]cpu.TimesStat, error) {
+		base := float64(call) * 10
+		return []cpu.TimesStat{{CPU: "cpu-total", User: base, Idle: base, Iowait: 0}}, nil
 	}
+	statsDiskIOCounters = func(names ...string) (map[string]disk.IOCountersStat, error) {
+		return map[string]disk.IOCountersStat{
+			"sda": {Name: "sda", ReadBytes: uint64(call) * 1000, WriteBytes: uint64(call) * 2000},
+		}, nil
+	}
+	statsNetIOCounters = func(pernic bool) ([]gnet.IOCountersStat, error) {
+		return []gnet.IOCountersStat{{BytesRecv: uint64(call) * 3000, BytesSent: uint64(call) * 4000}}, nil
+	}
+
+	r := setupServerStatsRouter(t, 0, 0)
+
+	call = 1
+	_, first := doReq(t, r, "GET", "/server-stats", "")
+	if _, ok := first["disk_io"]; ok {
+		t.Fatalf("first call must not report windowed rates: %v", first)
+	}
+
+	call = 2
+	time.Sleep(50 * time.Millisecond)
+	_, second := doReq(t, r, "GET", "/server-stats", "")
+
+	diskIO, ok := second["disk_io"].(map[string]any)
+	if !ok {
+		t.Fatalf("disk_io missing on second call: %v", second)
+	}
+	if v, _ := diskIO["read_bytes_per_sec"].(float64); v <= 0 {
+		t.Fatalf("read_bytes_per_sec = %v, want > 0", v)
+	}
+	if v, _ := diskIO["write_bytes_per_sec"].(float64); v <= 0 {
+		t.Fatalf("write_bytes_per_sec = %v, want > 0", v)
+	}
+
+	network, ok := second["network"].(map[string]any)
+	if !ok {
+		t.Fatalf("network missing on second call: %v", second)
+	}
+	if v, _ := network["rx_bytes_per_sec"].(float64); v <= 0 {
+		t.Fatalf("rx_bytes_per_sec = %v, want > 0", v)
+	}
+
+	host, _ := second["host"].(map[string]any)
+	if pct, ok := host["cpu_percent"].(float64); !ok || pct <= 0 || pct > 100 {
+		// busy delta == total delta in the fake (idle == user == base),
+		// so cpu percent must sit in (0, 100]
+		t.Fatalf("host.cpu_percent = %v (ok=%v), want in (0,100]", pct, ok)
+	}
+}
+
+func TestServerStats_CPUWindowLive(t *testing.T) {
+	// With real gopsutil collectors, a second call reports a sane cpu percent
 	r := setupServerStatsRouter(t, 0, 0)
 
 	_, first := doReq(t, r, "GET", "/server-stats", "")
-	cpu1, _ := first["process_cpu_seconds"].(float64)
-
-	// burn a little CPU so the window delta is observable
-	deadline := time.Now().Add(20 * time.Millisecond)
-	for time.Now().Before(deadline) {
+	if _, ok := first["process_cpu_seconds"].(float64); !ok {
+		t.Fatalf("process_cpu_seconds missing: %v", first)
 	}
 
 	_, second := doReq(t, r, "GET", "/server-stats", "")
-	cpu2, _ := second["process_cpu_seconds"].(float64)
-	if cpu2 < cpu1 {
-		t.Fatalf("process_cpu_seconds decreased: %v -> %v", cpu1, cpu2)
-	}
 	pct, ok := second["process_cpu_percent"].(float64)
 	if !ok || pct < 0 {
 		t.Fatalf("process_cpu_percent = %v (ok=%v), want non-negative number", second["process_cpu_percent"], ok)
 	}
-	host, _ := second["host"].(map[string]any)
-	if _, ok := host["cpu_percent"].(float64); !ok {
-		t.Fatalf("host.cpu_percent missing on second call: %v", host)
-	}
-}
-
-func TestServerStats_ProcParsing(t *testing.T) {
-	// Given fixture contents, parsers extract jiffies/mem/load; malformed input yields zeros
-	stat := "cpu  100 0 200 1600 50 0 30 0 0 0\ncpu0 50 0 100 800 25 0 15 0 0 0\n"
-	jiffies := parseProcStatCPUTotal(stat)
-	if jiffies != 1980 {
-		t.Fatalf("cpu total jiffies = %v, want 1980", jiffies)
-	}
-	if idle := parseProcStatCPUIdle(stat); idle != 1650 {
-		t.Fatalf("cpu idle jiffies = %v, want 1650", idle)
-	}
-	if parseProcStatCPUTotal("garbage") != 0 {
-		t.Fatal("malformed stat should yield 0")
-	}
-
-	meminfo := "MemTotal:       16384000 kB\nMemFree:         1024000 kB\nMemAvailable:    8192000 kB\n"
-	total, avail := parseProcMeminfo(meminfo)
-	if total != 16384000*1024 || avail != 8192000*1024 {
-		t.Fatalf("meminfo = (%v, %v)", total, avail)
-	}
-	if total2, _ := parseProcMeminfo("garbage"); total2 != 0 {
-		t.Fatal("malformed meminfo should yield 0")
-	}
-
-	l1, l5, l15 := parseProcLoadavg("0.42 1.23 4.56 1/234 5678")
-	if l1 != 0.42 || l5 != 1.23 || l15 != 4.56 {
-		t.Fatalf("loadavg = (%v, %v, %v)", l1, l5, l15)
-	}
-
-	self := "12345 (cli-proxy-api) S 1 12345 12345 0 -1 4194304 1000 0 0 0 14 6 0 0 20 0 10 0 999"
-	if jiffies := parseProcSelfStatCPU(self); jiffies != 20 {
-		t.Fatalf("self stat cpu = %v, want 20 (utime 14 + stime 6)", jiffies)
+	if _, ok := second["host"].(map[string]any)["cpu_percent"].(float64); !ok {
+		t.Fatalf("host.cpu_percent missing on second call: %v", second["host"])
 	}
 }
