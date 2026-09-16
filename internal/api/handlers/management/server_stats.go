@@ -39,14 +39,16 @@ var (
 // statsSample holds cumulative counters; windowed rates are computed from
 // the delta against the previous sample kept on the handler.
 type statsSample struct {
-	at         time.Time
-	processCPU float64 // seconds
-	hostBusy   float64 // seconds
-	hostTotal  float64 // seconds
-	diskRead   uint64  // bytes
-	diskWrite  uint64  // bytes
-	netRecv    uint64  // bytes
-	netSent    uint64  // bytes
+	at              time.Time
+	processCPU      float64 // seconds
+	processCPUValid bool
+	hostBusy        float64 // seconds
+	hostTotal       float64 // seconds
+	hostCPUValid    bool
+	diskRead        uint64 // bytes
+	diskWrite       uint64 // bytes
+	netRecv         uint64 // bytes
+	netSent         uint64 // bytes
 }
 
 // collectDiskStats emits one row per physical partition device, skipping
@@ -112,6 +114,7 @@ func (h *Handler) GetServerStats(c *gin.Context) {
 	if proc, err := statsNewProcess(int32(os.Getpid())); err == nil {
 		if times, errT := proc.Times(); errT == nil {
 			sample.processCPU = times.User + times.System
+			sample.processCPUValid = true
 			body["process_cpu_seconds"] = sample.processCPU
 		}
 		if fds, errF := proc.NumFDs(); errF == nil {
@@ -123,6 +126,7 @@ func (h *Handler) GetServerStats(c *gin.Context) {
 		t := times[0]
 		sample.hostTotal = t.Total()
 		sample.hostBusy = t.Total() - t.Idle - t.Iowait
+		sample.hostCPUValid = true
 	}
 
 	if counters, err := statsDiskIOCounters(); err == nil {
@@ -156,11 +160,14 @@ func (h *Handler) GetServerStats(c *gin.Context) {
 
 	if prev := h.lastStatsSample; prev != nil {
 		if elapsed := sample.at.Sub(prev.at).Seconds(); elapsed > 0 {
-			if sample.processCPU >= prev.processCPU {
+			if sample.processCPUValid && prev.processCPUValid && sample.processCPU >= prev.processCPU {
 				body["process_cpu_percent"] = clampPercent((sample.processCPU - prev.processCPU) / elapsed * 100)
 			}
-			if hostDelta := sample.hostTotal - prev.hostTotal; hostDelta > 0 {
-				host["cpu_percent"] = clampPercent((sample.hostBusy - prev.hostBusy) / hostDelta * 100)
+			if sample.hostCPUValid && prev.hostCPUValid {
+				host["cpu_percent"] = float64(0)
+				if hostDelta := sample.hostTotal - prev.hostTotal; hostDelta > 0 {
+					host["cpu_percent"] = clampPercent((sample.hostBusy - prev.hostBusy) / hostDelta * 100)
+				}
 			}
 			body["disk_io"] = gin.H{
 				"read_bytes_per_sec":  rate(sample.diskRead, prev.diskRead, elapsed),

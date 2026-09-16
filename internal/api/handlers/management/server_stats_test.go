@@ -197,13 +197,6 @@ func TestServerStats_CPUWindowLive(t *testing.T) {
 		t.Fatalf("process_cpu_seconds missing: %v", first)
 	}
 
-	deadline := time.Now().Add(20 * time.Millisecond)
-	for time.Now().Before(deadline) {
-	}
-	// host tick counters are coarse-grained (~10ms on darwin); give the
-	// window enough width for the cumulative totals to advance.
-	time.Sleep(200 * time.Millisecond)
-
 	_, second := doReq(t, r, "GET", "/server-stats", "")
 	pct, ok := second["process_cpu_percent"].(float64)
 	if !ok || pct < 0 {
