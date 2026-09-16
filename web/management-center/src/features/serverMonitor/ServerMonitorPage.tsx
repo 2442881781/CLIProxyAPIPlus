@@ -78,9 +78,10 @@ export function ServerMonitorPage() {
 
   const host = stats?.host;
   const memUsedPercent =
-    host && host.memTotalBytes > 0
+    host?.memUsedPercent ??
+    (host && host.memTotalBytes > 0
       ? ((host.memTotalBytes - host.memAvailableBytes) / host.memTotalBytes) * 100
-      : undefined;
+      : undefined);
   const disks = stats?.disks ?? [];
   const fullDisks = disks.filter((disk) => disk.usedPercent >= 90);
 
@@ -172,13 +173,16 @@ export function ServerMonitorPage() {
             <section aria-label={t('server_monitor.host_section')}>
               <h2 className={styles.sectionTitle}>{t('server_monitor.host_section')}</h2>
               <div className={styles.kpis}>
-                <article className={styles.kpi}>
-                  <span>{t('server_monitor.load')}</span>
-                  <strong>
-                    {host.load1.toFixed(2)} / {host.load5.toFixed(2)} / {host.load15.toFixed(2)}
-                  </strong>
-                  <small>1 / 5 / 15 min</small>
-                </article>
+                {host.load1 !== undefined && (
+                  <article className={styles.kpi}>
+                    <span>{t('server_monitor.load')}</span>
+                    <strong>
+                      {host.load1.toFixed(2)} / {(host.load5 ?? 0).toFixed(2)} /{' '}
+                      {(host.load15 ?? 0).toFixed(2)}
+                    </strong>
+                    <small>1 / 5 / 15 min</small>
+                  </article>
+                )}
                 <article className={styles.kpi}>
                   <span>{t('server_monitor.host_mem_detail')}</span>
                   <strong>{formatFileSize(host.memTotalBytes - host.memAvailableBytes)}</strong>
@@ -188,6 +192,21 @@ export function ServerMonitorPage() {
                     })}
                   </small>
                 </article>
+                {host.swapTotalBytes !== undefined && host.swapTotalBytes > 0 && (
+                  <article className={styles.kpi}>
+                    <span>{t('server_monitor.swap')}</span>
+                    <strong>
+                      {formatFileSize(host.swapTotalBytes - (host.swapFreeBytes ?? 0))}
+                    </strong>
+                    <small>
+                      {t('server_monitor.host_mem_of', {
+                        total: formatFileSize(host.swapTotalBytes),
+                      })}
+                      {' · '}
+                      {formatPercent(host.swapUsedPercent ?? 0)}
+                    </small>
+                  </article>
+                )}
                 <article className={styles.kpi}>
                   <span>{t('server_monitor.num_cpu')}</span>
                   <strong>{host.numCpu}</strong>
@@ -198,6 +217,36 @@ export function ServerMonitorPage() {
             <div className={styles.notice} role="status">
               {t('server_monitor.host_unavailable')}
             </div>
+          )}
+
+          {(stats.diskIo || stats.network) && (
+            <section aria-label={t('server_monitor.throughput_section')}>
+              <h2 className={styles.sectionTitle}>{t('server_monitor.throughput_section')}</h2>
+              <div className={styles.kpis}>
+                {stats.network?.rxBytesPerSec !== undefined && (
+                  <article className={styles.kpi}>
+                    <span>{t('server_monitor.net_rx')}</span>
+                    <strong>{formatFileSize(stats.network.rxBytesPerSec)}/s</strong>
+                    <small>
+                      {t('server_monitor.net_tx_value', {
+                        value: formatFileSize(stats.network.txBytesPerSec ?? 0),
+                      })}
+                    </small>
+                  </article>
+                )}
+                {stats.diskIo?.readBytesPerSec !== undefined && (
+                  <article className={styles.kpi}>
+                    <span>{t('server_monitor.disk_read')}</span>
+                    <strong>{formatFileSize(stats.diskIo.readBytesPerSec)}/s</strong>
+                    <small>
+                      {t('server_monitor.disk_write_value', {
+                        value: formatFileSize(stats.diskIo.writeBytesPerSec ?? 0),
+                      })}
+                    </small>
+                  </article>
+                )}
+              </div>
+            </section>
           )}
 
           {disks.length > 0 && (
@@ -214,6 +263,7 @@ export function ServerMonitorPage() {
                       })}
                       {' · '}
                       {formatPercent(disk.usedPercent)}
+                      {disk.device ? ` · ${disk.device}` : ''}
                     </small>
                   </article>
                 ))}

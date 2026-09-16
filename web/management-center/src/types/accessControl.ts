@@ -82,20 +82,36 @@ export interface AccessKeyUsageDetail {
 }
 
 export interface ServerStatsHost {
-  load1: number;
-  load5: number;
-  load15: number;
+  load1?: number;
+  load5?: number;
+  load15?: number;
   cpuPercent?: number;
   memTotalBytes: number;
   memAvailableBytes: number;
+  memUsedPercent?: number;
+  swapTotalBytes?: number;
+  swapFreeBytes?: number;
+  swapUsedPercent?: number;
   numCpu: number;
 }
 
 export interface ServerDiskStat {
   mount: string;
+  device: string;
+  fstype: string;
   totalBytes: number;
   availBytes: number;
   usedPercent: number;
+}
+
+export interface ServerIORate {
+  readBytesPerSec?: number;
+  writeBytesPerSec?: number;
+}
+
+export interface ServerNetRate {
+  rxBytesPerSec?: number;
+  txBytesPerSec?: number;
 }
 
 export interface ServerStats {
@@ -113,4 +129,6 @@ export interface ServerStats {
   processCpuPercent?: number;
   host?: ServerStatsHost;
   disks?: ServerDiskStat[];
+  diskIo?: ServerIORate;
+  network?: ServerNetRate;
 }

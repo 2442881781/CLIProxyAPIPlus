@@ -1,4 +1,10 @@
-import type { ServerDiskStat, ServerStats, ServerStatsHost } from '@/types';
+import type {
+  ServerDiskStat,
+  ServerIORate,
+  ServerNetRate,
+  ServerStats,
+  ServerStatsHost,
+} from '@/types';
 import { apiClient } from './client';
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -20,12 +26,16 @@ const normalizeHost = (value: unknown): ServerStatsHost | undefined => {
   const raw = asRecord(value);
   if (!Object.keys(raw).length) return undefined;
   return {
-    load1: asNumber(raw.load1),
-    load5: asNumber(raw.load5),
-    load15: asNumber(raw.load15),
+    load1: asOptionalNumber(raw.load1),
+    load5: asOptionalNumber(raw.load5),
+    load15: asOptionalNumber(raw.load15),
     cpuPercent: asOptionalNumber(raw.cpu_percent ?? raw.cpuPercent),
     memTotalBytes: asNumber(raw.mem_total_bytes ?? raw.memTotalBytes),
     memAvailableBytes: asNumber(raw.mem_available_bytes ?? raw.memAvailableBytes),
+    memUsedPercent: asOptionalNumber(raw.mem_used_percent ?? raw.memUsedPercent),
+    swapTotalBytes: asOptionalNumber(raw.swap_total_bytes ?? raw.swapTotalBytes),
+    swapFreeBytes: asOptionalNumber(raw.swap_free_bytes ?? raw.swapFreeBytes),
+    swapUsedPercent: asOptionalNumber(raw.swap_used_percent ?? raw.swapUsedPercent),
     numCpu: asNumber(raw.num_cpu ?? raw.numCpu),
   };
 };
@@ -34,6 +44,8 @@ const normalizeDisk = (value: unknown): ServerDiskStat => {
   const raw = asRecord(value);
   return {
     mount: typeof raw.mount === 'string' && raw.mount ? raw.mount : '/',
+    device: typeof raw.device === 'string' ? raw.device : '',
+    fstype: typeof raw.fstype === 'string' ? raw.fstype : '',
     totalBytes: asNumber(raw.total_bytes ?? raw.totalBytes),
     availBytes: asNumber(raw.avail_bytes ?? raw.availBytes),
     usedPercent: asNumber(raw.used_percent ?? raw.usedPercent),
@@ -57,6 +69,26 @@ export const normalizeServerStats = (value: unknown): ServerStats => {
     processCpuPercent: asOptionalNumber(raw.process_cpu_percent ?? raw.processCpuPercent),
     host: normalizeHost(raw.host),
     disks: Array.isArray(raw.disks) ? raw.disks.map(normalizeDisk) : undefined,
+    diskIo: normalizeIoRate(raw.disk_io ?? raw.diskIo),
+    network: normalizeNetRate(raw.network),
+  };
+};
+
+const normalizeIoRate = (value: unknown): ServerIORate | undefined => {
+  const raw = asRecord(value);
+  if (Object.keys(raw).length === 0) return undefined;
+  return {
+    readBytesPerSec: asOptionalNumber(raw.read_bytes_per_sec ?? raw.readBytesPerSec),
+    writeBytesPerSec: asOptionalNumber(raw.write_bytes_per_sec ?? raw.writeBytesPerSec),
+  };
+};
+
+const normalizeNetRate = (value: unknown): ServerNetRate | undefined => {
+  const raw = asRecord(value);
+  if (Object.keys(raw).length === 0) return undefined;
+  return {
+    rxBytesPerSec: asOptionalNumber(raw.rx_bytes_per_sec ?? raw.rxBytesPerSec),
+    txBytesPerSec: asOptionalNumber(raw.tx_bytes_per_sec ?? raw.txBytesPerSec),
   };
 };
 
