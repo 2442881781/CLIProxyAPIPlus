@@ -1,0 +1,154 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.page {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+  padding-bottom: $spacing-xl;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: $spacing-lg;
+
+  h1 {
+    margin: 3px 0 6px;
+    color: var(--text-primary);
+    font-size: clamp(26px, 3vw, 36px);
+    line-height: 1.12;
+    letter-spacing: -0.03em;
+  }
+
+  p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+}
+
+.eyebrow {
+  color: var(--primary-color);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.buttonContent {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.spinning {
+  animation: spin 0.8s linear infinite;
+}
+
+.error {
+  display: flex;
+  padding: 12px 14px;
+  border-radius: $radius-md;
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  background: rgba(220, 38, 38, 0.08);
+  color: var(--danger-color);
+  font-size: 13px;
+}
+
+.loading {
+  padding: 80px 20px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.tableCard {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-lg;
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+}
+
+.tableScroll {
+  overflow-x: auto;
+
+  table {
+    width: 100%;
+    min-width: 900px;
+    border-collapse: collapse;
+  }
+
+  th,
+  td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border-color);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  th {
+    color: var(--text-tertiary);
+    background: var(--bg-secondary);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  td {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th:first-child,
+  td:first-child,
+  th:last-child,
+  td:last-child {
+    text-align: left;
+  }
+
+  tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  tbody tr:hover td {
+    background: var(--bg-hover);
+  }
+
+  code {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+}
+
+.hotCell {
+  color: var(--primary-color) !important;
+  font-weight: 800;
+}
+
+.badCell {
+  color: var(--danger-color) !important;
+  font-weight: 700;
+}
+
+.totalCell {
+  color: var(--text-primary) !important;
+  font-weight: 800;
+}
+
+.providersCell {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -103,6 +103,8 @@
     "oauth": "OAuth 登录",
     "quota_management": "配额管理",
     "usage_monitor": "用量监控",
+    "model_pressure": "模型压力",
+    "access_keys": "访问密钥",
     "plugins": "插件管理",
     "plugin_store": "插件商店",
     "config_management": "配置面板",
@@ -124,6 +126,8 @@
     "oauth": "OAuth 授权登录",
     "quota_management": "API Key 与限额",
     "usage_monitor": "按提供商和模型统计 Token",
+    "model_pressure": "各模型实时并发与速率",
+    "access_keys": "订阅用户的密钥与分组",
     "plugins": "插件启停与配置",
     "plugin_store": "发现并安装插件",
     "logs": "请求追踪与排查",
@@ -1507,6 +1511,30 @@
     }
   },
 
+  "model_pressure": {
+    "eyebrow": "MODEL PRESSURE",
+    "title": "模型压力",
+    "description": "各对外模型的实时压力：在途并发与最近 {{window}} 秒完成请求窗口。",
+    "load_failed": "加载失败：{{message}}",
+    "empty_title": "暂无模型数据",
+    "empty_description": "还没有已注册模型，或近期没有请求。",
+    "model": "模型",
+    "in_flight": "在途",
+    "requests_per_second": "请求/秒",
+    "output_tps": "输出 tok/s",
+    "error_rate": "错误率",
+    "avg_latency": "平均延迟",
+    "avg_ttft": "平均首字",
+    "supply": "供给(可用/冷却)",
+    "providers": "提供商",
+    "supply_value": "{{serving}} / {{cooling}}"
+  },
+  "access_keys": {
+    "eyebrow": "ACCESS KEYS",
+    "title": "访问密钥",
+    "description": "为订阅用户签发、限额和吊销访问密钥。",
+    "open_full_page": "新窗口打开"
+  },
   "usage_monitor": {
     "eyebrow": "实时计量",
     "title": "用量监控",
