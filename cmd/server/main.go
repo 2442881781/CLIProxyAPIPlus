@@ -605,12 +605,16 @@ func main() {
 	// Register the shared token store once so all components use the same persistence backend.
 	if usePostgresStore {
 		sdkAuth.RegisterTokenStore(pgStoreInst)
+		storeaccess.SetPersister(pgStoreInst)
 	} else if useObjectStore {
 		sdkAuth.RegisterTokenStore(objectStoreInst)
+		storeaccess.SetPersister(nil)
 	} else if useGitStore {
 		sdkAuth.RegisterTokenStore(gitStoreInst)
+		storeaccess.SetPersister(nil)
 	} else {
 		sdkAuth.RegisterTokenStore(sdkAuth.NewFileTokenStore())
+		storeaccess.SetPersister(nil)
 	}
 
 	// Register built-in access providers before constructing services.

@@ -23,6 +23,8 @@ const (
 	defaultConfigTable   = "config_store"
 	defaultAuthTable     = "auth_store"
 	defaultCooldownTable = "cooldown_store"
+	defaultAccessTable   = "access_store"
+	defaultAccessKey     = "access-keys"
 	defaultConfigKey     = "config"
 )
 
@@ -33,6 +35,7 @@ type PostgresStoreConfig struct {
 	ConfigTable   string
 	AuthTable     string
 	CooldownTable string
+	AccessTable   string
 	SpoolDir      string
 }
 
@@ -63,6 +66,9 @@ func NewPostgresStore(ctx context.Context, cfg PostgresStoreConfig) (*PostgresSt
 	}
 	if cfg.CooldownTable == "" {
 		cfg.CooldownTable = defaultCooldownTable
+	}
+	if cfg.AccessTable == "" {
+		cfg.AccessTable = defaultAccessTable
 	}
 
 	spoolRoot := strings.TrimSpace(cfg.SpoolDir)
@@ -160,6 +166,17 @@ func (s *PostgresStore) EnsureSchema(ctx context.Context) error {
 		)
 	`, cooldownTable)); err != nil {
 		return fmt.Errorf("postgres store: create cooldown table: %w", err)
+	}
+	accessTable := s.fullTableName(s.cfg.AccessTable)
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			id TEXT PRIMARY KEY,
+			content JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`, accessTable)); err != nil {
+		return fmt.Errorf("postgres store: create access table: %w", err)
 	}
 	return nil
 }
@@ -441,6 +458,43 @@ func (s *PostgresStore) PersistConfig(ctx context.Context) error {
 	return s.persistConfig(ctx, data)
 }
 
+// LoadAccessStore returns the managed access-key document from PostgreSQL.
+// A nil payload means the table has not been seeded yet.
+func (s *PostgresStore) LoadAccessStore(ctx context.Context) ([]byte, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("postgres store: not initialized")
+	}
+	query := fmt.Sprintf("SELECT content FROM %s WHERE id = $1", s.fullTableName(s.cfg.AccessTable))
+	var content []byte
+	if err := s.db.QueryRowContext(ctx, query, defaultAccessKey).Scan(&content); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("postgres store: load access store: %w", err)
+	}
+	return content, nil
+}
+
+// SaveAccessStore persists the managed access-key document in PostgreSQL.
+func (s *PostgresStore) SaveAccessStore(ctx context.Context, data []byte) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("postgres store: not initialized")
+	}
+	if !json.Valid(data) {
+		return fmt.Errorf("postgres store: access store contains invalid JSON")
+	}
+	query := fmt.Sprintf(`
+		INSERT INTO %s (id, content, created_at, updated_at)
+		VALUES ($1, $2, NOW(), NOW())
+		ON CONFLICT (id)
+		DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()
+	`, s.fullTableName(s.cfg.AccessTable))
+	if _, err := s.db.ExecContext(ctx, query, defaultAccessKey, json.RawMessage(data)); err != nil {
+		return fmt.Errorf("postgres store: save access store: %w", err)
+	}
+	return nil
+}
+
 // syncConfigFromDatabase writes the database-stored config to disk or seeds the database from template.
 func (s *PostgresStore) syncConfigFromDatabase(ctx context.Context, exampleConfigPath string) error {
 	query := fmt.Sprintf("SELECT content FROM %s WHERE id = $1", s.fullTableName(s.cfg.ConfigTable))
@@ -485,6 +539,15 @@ func (s *PostgresStore) syncConfigFromDatabase(ctx context.Context, exampleConfi
 
 // syncAuthFromDatabase populates the local auth directory from PostgreSQL data.
 func (s *PostgresStore) syncAuthFromDatabase(ctx context.Context) error {
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", s.fullTableName(s.cfg.AuthTable))
+	var count int
+	if err := s.db.QueryRowContext(ctx, countQuery).Scan(&count); err != nil {
+		return fmt.Errorf("postgres store: count auth records: %w", err)
+	}
+	if count == 0 {
+		return s.seedAuthFromLocal(ctx)
+	}
+
 	query := fmt.Sprintf("SELECT id, content FROM %s", s.fullTableName(s.cfg.AuthTable))
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
@@ -523,6 +586,25 @@ func (s *PostgresStore) syncAuthFromDatabase(ctx context.Context) error {
 		return fmt.Errorf("postgres store: iterate auth rows: %w", err)
 	}
 	return nil
+}
+
+func (s *PostgresStore) seedAuthFromLocal(ctx context.Context) error {
+	return filepath.WalkDir(s.authDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+			return nil
+		}
+		relID, err := s.relativeAuthID(path)
+		if err != nil {
+			return err
+		}
+		if err = s.upsertAuthRecord(ctx, relID, path); err != nil {
+			return fmt.Errorf("postgres store: seed auth %s: %w", relID, err)
+		}
+		return nil
+	})
 }
 
 func (s *PostgresStore) syncAuthFile(ctx context.Context, relID, path string) error {

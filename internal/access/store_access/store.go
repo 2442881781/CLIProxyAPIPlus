@@ -5,6 +5,7 @@
 package storeaccess
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -121,6 +122,14 @@ type Store struct {
 	lastStat  time.Time
 	dirty     bool
 	now       func() time.Time // injectable clock; nil means time.Now
+	persister Persister
+}
+
+// Persister stores the managed access-key document in a durable backend.
+// A nil payload from LoadAccessStore means the backend has not been seeded.
+type Persister interface {
+	LoadAccessStore(ctx context.Context) ([]byte, error)
+	SaveAccessStore(ctx context.Context, data []byte) error
 }
 
 var (
@@ -129,7 +138,23 @@ var (
 
 	providersRefresherMu sync.Mutex
 	providersRefresher   func()
+	persisterMu          sync.RWMutex
+	defaultPersister     Persister
 )
+
+// SetPersister configures the durable backend used by subsequently configured stores.
+func SetPersister(p Persister) {
+	persisterMu.Lock()
+	defaultPersister = p
+	persisterMu.Unlock()
+}
+
+func currentPersister() Persister {
+	persisterMu.RLock()
+	p := defaultPersister
+	persisterMu.RUnlock()
+	return p
+}
 
 // SetProvidersRefresher installs a hook invoked whenever the store-backed auth
 // provider's registration state changes, so a running access manager can
@@ -160,7 +185,7 @@ func Configure(authDir string) (*Store, error) {
 			}
 		}
 	}
-	store := &Store{path: path, managed: true}
+	store := &Store{path: path, managed: true, persister: currentPersister()}
 	if err := store.loadLocked(); err != nil {
 		defaultStoreMu.Unlock()
 		return nil, err
@@ -216,13 +241,31 @@ func (s *Store) loadLocked() error {
 	s.keys = make(map[string]*AccessKey)
 	s.byHash = make(map[string]*AccessKey)
 	s.groups = make(map[string]*Group)
-	data, err := os.ReadFile(s.path)
+	var data []byte
+	var err error
+	loadedFromBackend := false
+	if s.persister != nil {
+		data, err = s.persister.LoadAccessStore(context.Background())
+		if err != nil {
+			return fmt.Errorf("load access key store backend: %w", err)
+		}
+		loadedFromBackend = len(data) > 0
+	}
+	seedBackend := s.persister != nil && len(data) == 0
+	if len(data) == 0 {
+		data, err = os.ReadFile(s.path)
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			s.loaded = true
 			return nil
 		}
 		return fmt.Errorf("read access key store: %w", err)
+	}
+	if loadedFromBackend {
+		if err = writeStoreFile(s.path, data); err != nil {
+			return fmt.Errorf("mirror access key store: %w", err)
+		}
 	}
 	var file storeFile
 	if errUnmarshal := json.Unmarshal(data, &file); errUnmarshal != nil {
@@ -254,6 +297,11 @@ func (s *Store) loadLocked() error {
 		s.fileMod = info.ModTime()
 	}
 	s.loaded = true
+	if seedBackend {
+		if err = s.persister.SaveAccessStore(context.Background(), data); err != nil {
+			return fmt.Errorf("seed access key store backend: %w", err)
+		}
+	}
 	s.syncProviderLocked()
 	return nil
 }
@@ -314,21 +362,33 @@ func (s *Store) persistLocked() error {
 	if err != nil {
 		return fmt.Errorf("marshal access key store: %w", err)
 	}
-	if errDir := os.MkdirAll(filepath.Dir(s.path), 0o700); errDir != nil {
-		return fmt.Errorf("create access key store dir: %w", errDir)
+	if errWrite := writeStoreFile(s.path, data); errWrite != nil {
+		return errWrite
 	}
-	tmp := s.path + ".tmp"
-	if errWrite := os.WriteFile(tmp, data, 0o600); errWrite != nil {
-		return fmt.Errorf("write access key store: %w", errWrite)
-	}
-	if errRename := os.Rename(tmp, s.path); errRename != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename access key store: %w", errRename)
+	if s.persister != nil {
+		if errPersist := s.persister.SaveAccessStore(context.Background(), data); errPersist != nil {
+			return fmt.Errorf("persist access key store backend: %w", errPersist)
+		}
 	}
 	if info, err := os.Stat(s.path); err == nil {
 		s.fileMod = info.ModTime()
 	}
 	s.syncProviderLocked()
+	return nil
+}
+
+func writeStoreFile(path string, data []byte) error {
+	if errDir := os.MkdirAll(filepath.Dir(path), 0o700); errDir != nil {
+		return fmt.Errorf("create access key store dir: %w", errDir)
+	}
+	tmp := path + ".tmp"
+	if errWrite := os.WriteFile(tmp, data, 0o600); errWrite != nil {
+		return fmt.Errorf("write access key store: %w", errWrite)
+	}
+	if errRename := os.Rename(tmp, path); errRename != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename access key store: %w", errRename)
+	}
 	return nil
 }
 
