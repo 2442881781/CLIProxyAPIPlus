@@ -172,6 +172,249 @@
   line-height: 1.5;
 }
 
+.modelPicker {
+  position: relative;
+}
+
+.modelPickerTrigger {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--input-bg, var(--bg-primary));
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+
+  &:hover,
+  &[aria-expanded='true'] {
+    border-color: var(--primary-color);
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--primary-color) 35%, transparent);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+}
+
+.modelPickerValue,
+.modelPickerPlaceholder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelPickerValue {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.modelPickerPlaceholder {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.modelTags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.modelTag {
+  min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--primary-color) 26%, var(--border-color));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary-color) 9%, transparent);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+
+  > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  button {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+
+    &:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+  }
+}
+
+.modelClear {
+  padding: 4px 7px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--primary-color);
+  }
+}
+
+.modelPickerPanel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-primary);
+  box-shadow: var(--floating-shadow);
+}
+
+.modelSearch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  color: var(--text-tertiary);
+
+  &:focus-within {
+    border-color: var(--primary-color);
+  }
+
+  input {
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+  }
+}
+
+.modelPickerToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 10px 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+
+  > div {
+    display: flex;
+    gap: 10px;
+  }
+
+  button {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--primary-color);
+    font-size: 11px;
+    cursor: pointer;
+
+    &:disabled {
+      color: var(--text-tertiary);
+      cursor: default;
+    }
+  }
+}
+
+.modelOptions {
+  max-height: 250px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-color);
+}
+
+.modelOption {
+  width: 100%;
+  padding: 8px 11px;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  > div {
+    min-width: 0;
+
+    span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+  }
+}
+
+.modelCustomOption {
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--primary-color);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+}
+
+.modelPickerMessage,
+.modelPickerError {
+  padding: 16px 12px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.modelPickerError {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-color);
+  color: var(--warning-color, #b45309);
+  text-align: left;
+}
+
 .gridTwo {
   display: grid;
   grid-template-columns: 1fr 1fr;
