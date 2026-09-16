@@ -516,6 +516,15 @@ if [[ "${LEGACY_MIGRATION}" -eq 1 ]]; then
   log "legacy service remains active as the blue slot until cutover"
 fi
 
+if [[ ! -f "${PGSTORE_ENV_FILE}" ]]; then
+  chown -R cliproxy:cliproxy "${NEXT_AUTH}"
+  find "${NEXT_AUTH}" -type d -exec chmod 0750 {} +
+  find "${NEXT_AUTH}" -type f -exec chmod 0600 {} +
+  while IFS= read -r state_file; do
+    [[ "$(stat -c '%U:%G %a' "${state_file}")" == "cliproxy:cliproxy 600" ]] || fail "invalid auth state ownership: ${state_file}"
+  done < <(find "${NEXT_AUTH}" -type f -print)
+fi
+
 log "starting inactive slot ${NEXT_SLOT} on ${NEXT_PORT}"
 systemctl start "${NEXT_SERVICE}"
 if ! wait_ready "${NEXT_SERVICE}" "${NEXT_PORT}"; then
