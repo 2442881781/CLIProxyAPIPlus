@@ -146,6 +146,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	if errResolvePluginsDir := cfg.ResolvePluginsDir(); errResolvePluginsDir != nil && cfg.Plugins.Enabled {
 		return nil, errResolvePluginsDir
 	}
+	if errOverride := ApplyRuntimeOverrides(&cfg, os.Getenv(PortOverrideEnv), os.Getenv(AuthDirOverrideEnv)); errOverride != nil {
+		return nil, errOverride
+	}
 
 	// Sanitize Gemini API key configuration and migrate legacy entries.
 	cfg.SanitizeGeminiKeys()
