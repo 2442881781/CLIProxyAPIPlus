@@ -29,6 +29,8 @@ import {
   IconSidebarUsage,
   IconKey,
   IconModelCluster,
+  IconNetwork,
+  IconServer,
   IconSidebarStore,
   IconSidebarSystem,
   IconChevronDown,
@@ -63,6 +65,8 @@ const sidebarIcons: Record<string, ReactNode> = {
   usageMonitor: <IconSidebarUsage size={18} />,
   modelPressure: <IconModelCluster size={18} />,
   accessKeys: <IconKey size={18} />,
+  accessGroups: <IconNetwork size={18} />,
+  serverMonitor: <IconServer size={18} />,
   plugins: <IconSidebarPlugins size={18} />,
   pluginStore: <IconSidebarStore size={18} />,
   config: <IconSidebarConfig size={18} />,
@@ -631,6 +635,12 @@ export function MainLayout() {
           metaKey: 'nav_meta.access_keys',
           icon: sidebarIcons.accessKeys,
         },
+        {
+          path: '/access-groups',
+          labelKey: 'nav.access_groups',
+          metaKey: 'nav_meta.access_groups',
+          icon: sidebarIcons.accessGroups,
+        },
       ],
     },
     {
@@ -654,6 +664,12 @@ export function MainLayout() {
           labelKey: 'nav.model_pressure',
           metaKey: 'nav_meta.model_pressure',
           icon: sidebarIcons.modelPressure,
+        },
+        {
+          path: '/server-monitor',
+          labelKey: 'nav.server_monitor',
+          metaKey: 'nav_meta.server_monitor',
+          icon: sidebarIcons.serverMonitor,
         },
         {
           path: '/logs',

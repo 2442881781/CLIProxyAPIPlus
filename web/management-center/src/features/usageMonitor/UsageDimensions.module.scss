@@ -1,0 +1,136 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.tabBody {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.error {
+  padding: 12px 14px;
+  border-radius: $radius-md;
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  background: rgba(220, 38, 38, 0.08);
+  color: var(--danger-color);
+  font-size: 13px;
+}
+
+.loading {
+  padding: 60px 20px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.tableCard {
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-lg;
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+}
+
+.tableScroll {
+  overflow-x: auto;
+
+  table {
+    width: 100%;
+    min-width: 760px;
+    border-collapse: collapse;
+  }
+
+  th,
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  th {
+    color: var(--text-tertiary);
+    background: var(--bg-secondary);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  td {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  code {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+}
+
+.clickableRow {
+  cursor: pointer;
+
+  &:hover td {
+    background: var(--bg-hover);
+  }
+}
+
+.detailRow td {
+  padding: 14px;
+  background: var(--bg-secondary);
+  white-space: normal;
+}
+
+.totalCell {
+  color: var(--text-primary) !important;
+  font-weight: 800;
+}
+
+.badCell {
+  color: var(--danger-color) !important;
+  font-weight: 700;
+}
+
+.dimGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.dimBlock {
+  h4 {
+    margin: 0 0 8px;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+
+    th,
+    td {
+      padding: 6px 8px;
+      font-size: 11px;
+    }
+
+    th:first-child,
+    td:first-child {
+      padding-left: 0;
+    }
+  }
+}
+
+.dimEmpty {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}

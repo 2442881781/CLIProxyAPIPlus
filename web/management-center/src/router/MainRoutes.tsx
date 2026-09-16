@@ -9,6 +9,8 @@ import { QuotaPage } from '@/features/quota/QuotaPage';
 import { UsageMonitorPage } from '@/features/usageMonitor/UsageMonitorPage';
 import { ModelPressurePage } from '@/features/modelPressure/ModelPressurePage';
 import { AccessKeysPage } from '@/features/accessKeys/AccessKeysPage';
+import { AccessGroupsPage } from '@/features/accessGroups/AccessGroupsPage';
+import { ServerMonitorPage } from '@/features/serverMonitor/ServerMonitorPage';
 import { PluginResourcePage } from '@/features/plugins/PluginResourcePage';
 import { PluginsPage } from '@/features/plugins/PluginsPage';
 import { PluginStorePage } from '@/features/plugins/PluginStorePage';
@@ -32,6 +34,8 @@ const createMainRoutes = (supportsPlugin: boolean) => [
   { path: '/usage-monitor', element: <UsageMonitorPage /> },
   { path: '/model-pressure', element: <ModelPressurePage /> },
   { path: '/access-keys', element: <AccessKeysPage /> },
+  { path: '/access-groups', element: <AccessGroupsPage /> },
+  { path: '/server-monitor', element: <ServerMonitorPage /> },
   ...(supportsPlugin
     ? [
         { path: '/plugin-pages/:pluginId/:menuIndex', element: <PluginResourcePage /> },
