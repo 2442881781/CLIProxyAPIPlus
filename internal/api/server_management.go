@@ -106,6 +106,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage-monitor", s.mgmt.GetUsageMonitor)
 		mgmt.DELETE("/usage-monitor", s.mgmt.ResetUsageMonitor)
 		mgmt.GET("/rates", s.mgmt.GetRates)
+		mgmt.GET("/model-pressure", s.mgmt.GetModelPressure)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
 		mgmt.PUT("/gemini-api-key", s.mgmt.PutGeminiKeys)

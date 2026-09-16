@@ -7,6 +7,7 @@ import (
 	"time"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 func discardStreamChunks(ch <-chan cliproxyexecutor.StreamChunk) {
@@ -462,4 +463,47 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		lastErr = &Error{Code: "auth_not_found", Message: "no upstream model available"}
 	}
 	return nil, preferredExecutionAttemptError(lastErr, upstreamErr)
+}
+
+// attachModelPressureScope keeps the model in-flight gauge open until the
+// returned stream is fully drained or the request context is cancelled.
+// The scope releases before the output channel closes so observers never see
+// a closed stream with in-flight still held.
+func attachModelPressureScope(ctx context.Context, result *cliproxyexecutor.StreamResult, scope *coreusage.PressureScope) *cliproxyexecutor.StreamResult {
+	if result == nil {
+		scope.End()
+		return nil
+	}
+	var done <-chan struct{}
+	if ctx != nil {
+		done = ctx.Done()
+	}
+	in := result.Chunks
+	out := make(chan cliproxyexecutor.StreamChunk)
+	go func() {
+		defer close(out)
+		defer scope.End()
+	Forward:
+		for {
+			select {
+			case chunk, ok := <-in:
+				if !ok {
+					return
+				}
+				select {
+				case out <- chunk:
+				case <-done:
+					break Forward
+				}
+			case <-done:
+				break Forward
+			}
+		}
+		// The client is gone: stop forwarding but keep draining until the inner
+		// stream actually ends, so closing out still signals that all stream
+		// bookkeeping (result recording) has completed.
+		for range in {
+		}
+	}()
+	return &cliproxyexecutor.StreamResult{Headers: result.Headers, Chunks: out}
 }

@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 type usageQueueRecord []byte
@@ -85,6 +88,83 @@ func (h *Handler) GetRates(c *gin.Context) {
 		resp["keys"] = store.KeyRates()
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// modelPressureRow is one client-facing model's pressure view: the exact
+// in-flight gauge and 60s completed-request window from the tracker, plus the
+// registry's authoritative supply breakdown.
+type modelPressureRow struct {
+	coreusage.ModelPressureRow
+	ServingAuths       int      `json:"serving_auths"`
+	SuspendedAuths     int      `json:"suspended_auths"`
+	QuotaExceededAuths int      `json:"quota_exceeded_auths"`
+	Providers          []string `json:"providers,omitempty"`
+}
+
+// GetModelPressure returns per-model pressure keyed by the client-facing
+// model name. in_flight is exact; rate/error/latency fields are real event
+// sums over a sliding 60s window; supply counts mirror the same registry
+// projections the auth selector uses. Process-local, memory-only.
+func (h *Handler) GetModelPressure(c *gin.Context) {
+	if h == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler unavailable"})
+		return
+	}
+	reg := registry.GetGlobalRegistry()
+	supply := func(model string) registry.ModelSupplyStats {
+		if reg == nil {
+			return registry.ModelSupplyStats{}
+		}
+		return reg.GetModelSupplyStats(model)
+	}
+
+	merged := make(map[string]*modelPressureRow)
+	order := make([]string, 0)
+	for _, snap := range coreusage.DefaultModelPressure().Snapshot() {
+		row := &modelPressureRow{ModelPressureRow: snap}
+		s := supply(snap.Model)
+		row.SuspendedAuths = s.Suspended
+		row.QuotaExceededAuths = s.QuotaExceeded
+		row.ServingAuths = max(s.Registered-s.Suspended-s.QuotaExceeded, 0)
+		row.Providers = s.Providers
+		merged[snap.Model] = row
+		order = append(order, snap.Model)
+	}
+	if reg != nil {
+		for _, model := range reg.RegisteredModelIDs() {
+			if _, ok := merged[model]; ok {
+				continue
+			}
+			s := supply(model)
+			row := &modelPressureRow{
+				ModelPressureRow:   coreusage.ModelPressureRow{Model: model},
+				SuspendedAuths:     s.Suspended,
+				QuotaExceededAuths: s.QuotaExceeded,
+				ServingAuths:       max(s.Registered-s.Suspended-s.QuotaExceeded, 0),
+				Providers:          s.Providers,
+			}
+			merged[model] = row
+			order = append(order, model)
+		}
+	}
+	rows := make([]modelPressureRow, 0, len(order))
+	for _, model := range order {
+		rows = append(rows, *merged[model])
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].InFlight != rows[j].InFlight {
+			return rows[i].InFlight > rows[j].InFlight
+		}
+		if rows[i].TotalTokensPerSecond != rows[j].TotalTokensPerSecond {
+			return rows[i].TotalTokensPerSecond > rows[j].TotalTokensPerSecond
+		}
+		return rows[i].Model < rows[j].Model
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"window_seconds": coreusage.RateWindowSeconds,
+		"models":         rows,
+	})
 }
 
 // ResetUsageMonitor clears all token usage aggregates, including the persisted snapshot.

@@ -124,6 +124,8 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	pressureScope := coreusage.DefaultModelPressure().Begin(authSelectionModelFromOptions(opts, req.Model))
+	defer pressureScope.End()
 	if m.HomeEnabled() {
 		resp, errHome := m.executeHome(ctx, normalized, req, opts, false)
 		return resp, unwrapExecutionBoundaryError(errHome)
@@ -183,6 +185,8 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	pressureScope := coreusage.DefaultModelPressure().Begin(authSelectionModelFromOptions(opts, req.Model))
+	defer pressureScope.End()
 	if m.HomeEnabled() {
 		resp, errHome := m.executeHome(ctx, normalized, req, opts, true)
 		return resp, unwrapExecutionBoundaryError(errHome)
@@ -240,6 +244,13 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 	if len(normalized) == 0 {
 		return nil, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	pressureScope := coreusage.DefaultModelPressure().Begin(authSelectionModelFromOptions(opts, req.Model))
+	releaseToStream := false
+	defer func() {
+		if !releaseToStream {
+			pressureScope.End()
+		}
+	}()
 
 	defaultRequestRetry, maxRetryCredentials, maxWait := m.retrySettings()
 
@@ -255,7 +266,8 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 		roundOpts := withAttemptedAuthTracker(opts, roundAttempted)
 		result, errStream := m.executeStreamMixedOnce(ctx, normalized, req, roundOpts, maxRetryCredentials, &homeRetryLimit, attempt, defaultRequestRetry)
 		if errStream == nil {
-			return result, nil
+			releaseToStream = true
+			return attachModelPressureScope(ctx, result, pressureScope), nil
 		}
 		if hasUpstreamExecutionAttempt(errStream) {
 			preferredUpstreamErr = errStream
@@ -303,12 +315,14 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 			if result, ok, errCredits := m.tryAntigravityCreditsExecuteStream(ctx, req, opts); errCredits != nil {
 				return nil, errCredits
 			} else if ok {
-				return result, nil
+				releaseToStream = true
+				return attachModelPressureScope(ctx, result, pressureScope), nil
 			}
 		}
 		var bootstrapErr *streamBootstrapError
 		if errors.As(lastErr, &bootstrapErr) && bootstrapErr != nil {
-			return streamErrorResult(bootstrapErr.Headers(), lastErr), nil
+			releaseToStream = true
+			return attachModelPressureScope(ctx, streamErrorResult(bootstrapErr.Headers(), lastErr), pressureScope), nil
 		}
 		return nil, lastErr
 	}
