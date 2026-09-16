@@ -62,6 +62,41 @@ func TestServerStats_Shape(t *testing.T) {
 	} else if hasHost {
 		t.Fatalf("host section should be omitted on %s: %v", runtime.GOOS, host)
 	}
+
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		disks, ok := body["disks"].([]any)
+		if !ok || len(disks) == 0 {
+			t.Fatalf("disks missing on %s: %v", runtime.GOOS, body)
+		}
+		first, _ := disks[0].(map[string]any)
+		for _, field := range []string{"mount", "total_bytes", "avail_bytes", "used_percent"} {
+			if _, ok := first[field]; !ok {
+				t.Fatalf("disk row missing field %q: %v", field, first)
+			}
+		}
+	}
+}
+
+func TestServerStats_DiskDedupe(t *testing.T) {
+	// Given two paths on the same filesystem device
+	// Then only one disk row is emitted (first path wins)
+	fake := func(path string) (device uint64, total, avail int64, ok bool) {
+		switch path {
+		case "/", "/app/data":
+			return 100, 1000, 400, true // same device
+		case "/other":
+			return 200, 500, 100, true
+		default:
+			return 0, 0, 0, false
+		}
+	}
+	rows := collectDiskStats([]string{"/", "/app/data", "/other", "/missing"}, fake)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (same-device dedupe + missing skipped): %v", len(rows), rows)
+	}
+	if rows[0]["used_percent"] != float64(60) {
+		t.Fatalf("used_percent = %v, want 60", rows[0]["used_percent"])
+	}
 }
 
 func TestServerStats_RuntimeCounters(t *testing.T) {

@@ -2012,6 +2012,10 @@
     "load": "Load avg",
     "host_mem_detail": "Memory used",
     "host_mem_of": "of {{total}}",
-    "num_cpu": "CPU cores"
+    "num_cpu": "CPU cores",
+    "disk_section": "Disks",
+    "disk_label": "Disk {{mount}}",
+    "disk_avail_of": "avail of {{total}}",
+    "disk_full_warning": "Disk nearly full: {{mounts}}"
   }
 }

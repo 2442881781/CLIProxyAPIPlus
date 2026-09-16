@@ -81,6 +81,8 @@ export function ServerMonitorPage() {
     host && host.memTotalBytes > 0
       ? ((host.memTotalBytes - host.memAvailableBytes) / host.memTotalBytes) * 100
       : undefined;
+  const disks = stats?.disks ?? [];
+  const fullDisks = disks.filter((disk) => disk.usedPercent >= 90);
 
   const processCards: Array<[string, string, string?]> = stats
     ? [
@@ -126,6 +128,16 @@ export function ServerMonitorPage() {
         </div>
       )}
 
+      {fullDisks.length > 0 && (
+        <div className={styles.error} role="alert">
+          {t('server_monitor.disk_full_warning', {
+            mounts: fullDisks
+              .map((disk) => `${disk.mount} (${formatPercent(disk.usedPercent)})`)
+              .join(', '),
+          })}
+        </div>
+      )}
+
       {loading && !stats ? (
         <div className={styles.loading}>{t('common.loading')}</div>
       ) : stats ? (
@@ -134,6 +146,13 @@ export function ServerMonitorPage() {
             <Gauge percent={stats.processCpuPercent} label={t('server_monitor.process_cpu')} />
             <Gauge percent={host?.cpuPercent} label={t('server_monitor.host_cpu')} />
             <Gauge percent={memUsedPercent} label={t('server_monitor.host_memory')} />
+            {disks.map((disk) => (
+              <Gauge
+                key={disk.mount}
+                percent={disk.usedPercent}
+                label={t('server_monitor.disk_label', { mount: disk.mount })}
+              />
+            ))}
           </section>
 
           <section aria-label={t('server_monitor.process_section')}>
@@ -179,6 +198,27 @@ export function ServerMonitorPage() {
             <div className={styles.notice} role="status">
               {t('server_monitor.host_unavailable')}
             </div>
+          )}
+
+          {disks.length > 0 && (
+            <section aria-label={t('server_monitor.disk_section')}>
+              <h2 className={styles.sectionTitle}>{t('server_monitor.disk_section')}</h2>
+              <div className={styles.kpis}>
+                {disks.map((disk) => (
+                  <article key={disk.mount} className={styles.kpi}>
+                    <span>{t('server_monitor.disk_label', { mount: disk.mount })}</span>
+                    <strong>{formatFileSize(disk.availBytes)}</strong>
+                    <small>
+                      {t('server_monitor.disk_avail_of', {
+                        total: formatFileSize(disk.totalBytes),
+                      })}
+                      {' · '}
+                      {formatPercent(disk.usedPercent)}
+                    </small>
+                  </article>
+                ))}
+              </div>
+            </section>
           )}
         </>
       ) : null}

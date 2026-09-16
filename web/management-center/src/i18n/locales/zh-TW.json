@@ -2038,6 +2038,10 @@
     "load": "系統負載",
     "host_mem_detail": "已用記憶體",
     "host_mem_of": "共 {{total}}",
-    "num_cpu": "CPU 核數"
+    "num_cpu": "CPU 核數",
+    "disk_section": "磁碟",
+    "disk_label": "磁碟 {{mount}}",
+    "disk_avail_of": "共 {{total}} 可用",
+    "disk_full_warning": "磁碟即將寫滿：{{mounts}}"
   }
 }

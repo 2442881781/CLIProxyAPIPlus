@@ -1,4 +1,4 @@
-import type { ServerStats, ServerStatsHost } from '@/types';
+import type { ServerDiskStat, ServerStats, ServerStatsHost } from '@/types';
 import { apiClient } from './client';
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -30,6 +30,16 @@ const normalizeHost = (value: unknown): ServerStatsHost | undefined => {
   };
 };
 
+const normalizeDisk = (value: unknown): ServerDiskStat => {
+  const raw = asRecord(value);
+  return {
+    mount: typeof raw.mount === 'string' && raw.mount ? raw.mount : '/',
+    totalBytes: asNumber(raw.total_bytes ?? raw.totalBytes),
+    availBytes: asNumber(raw.avail_bytes ?? raw.availBytes),
+    usedPercent: asNumber(raw.used_percent ?? raw.usedPercent),
+  };
+};
+
 export const normalizeServerStats = (value: unknown): ServerStats => {
   const raw = asRecord(value);
   return {
@@ -46,6 +56,7 @@ export const normalizeServerStats = (value: unknown): ServerStats => {
     processCpuSeconds: asOptionalNumber(raw.process_cpu_seconds ?? raw.processCpuSeconds),
     processCpuPercent: asOptionalNumber(raw.process_cpu_percent ?? raw.processCpuPercent),
     host: normalizeHost(raw.host),
+    disks: Array.isArray(raw.disks) ? raw.disks.map(normalizeDisk) : undefined,
   };
 };
 

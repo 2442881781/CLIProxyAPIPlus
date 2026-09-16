@@ -91,6 +91,13 @@ export interface ServerStatsHost {
   numCpu: number;
 }
 
+export interface ServerDiskStat {
+  mount: string;
+  totalBytes: number;
+  availBytes: number;
+  usedPercent: number;
+}
+
 export interface ServerStats {
   uptimeSeconds: number;
   goroutines: number;
@@ -105,4 +112,5 @@ export interface ServerStats {
   processCpuSeconds?: number;
   processCpuPercent?: number;
   host?: ServerStatsHost;
+  disks?: ServerDiskStat[];
 }

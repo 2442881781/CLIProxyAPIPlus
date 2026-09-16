@@ -2001,6 +2001,10 @@
     "load": "Load average",
     "host_mem_detail": "Памяти занято",
     "host_mem_of": "из {{total}}",
-    "num_cpu": "Ядер CPU"
+    "num_cpu": "Ядер CPU",
+    "disk_section": "Диски",
+    "disk_label": "Диск {{mount}}",
+    "disk_avail_of": "свободно из {{total}}",
+    "disk_full_warning": "Диск почти заполнен: {{mounts}}"
   }
 }

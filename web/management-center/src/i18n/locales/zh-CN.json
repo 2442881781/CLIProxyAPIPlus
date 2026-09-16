@@ -2012,6 +2012,10 @@
     "load": "系统负载",
     "host_mem_detail": "已用内存",
     "host_mem_of": "共 {{total}}",
-    "num_cpu": "CPU 核数"
+    "num_cpu": "CPU 核数",
+    "disk_section": "磁盘",
+    "disk_label": "磁盘 {{mount}}",
+    "disk_avail_of": "共 {{total}} 可用",
+    "disk_full_warning": "磁盘即将写满：{{mounts}}"
   }
 }

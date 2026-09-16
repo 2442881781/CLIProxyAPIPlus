@@ -137,6 +137,43 @@ func countFds() int {
 	return len(entries)
 }
 
+// diskStatProbe reports the filesystem device, capacity, and free bytes for
+// the filesystem containing path. Platform-specific implementations live in
+// server_stats_disk_*.go; ok=false means unavailable.
+type diskStatProbe func(path string) (device uint64, total, avail int64, ok bool)
+
+// collectDiskStats samples each path once per underlying filesystem, skipping
+// duplicates by device id and paths the probe cannot read.
+func collectDiskStats(paths []string, probe diskStatProbe) []gin.H {
+	seen := make(map[uint64]bool)
+	rows := make([]gin.H, 0, len(paths))
+	for _, path := range paths {
+		device, total, avail, ok := probe(path)
+		if !ok || total <= 0 || seen[device] {
+			continue
+		}
+		seen[device] = true
+		used := total - avail
+		rows = append(rows, gin.H{
+			"mount":        path,
+			"total_bytes":  total,
+			"avail_bytes":  avail,
+			"used_percent": clampPercent(float64(used) / float64(total) * 100),
+		})
+	}
+	return rows
+}
+
+// diskWatchPaths returns the mount points worth watching: the root filesystem
+// plus the process working directory (where auths/ and logs are written).
+func diskWatchPaths() []string {
+	paths := []string{"/"}
+	if wd, err := os.Getwd(); err == nil && wd != "/" {
+		paths = append(paths, wd)
+	}
+	return paths
+}
+
 // SetRuntimeStatsProvider injects the server's live in-flight counters.
 func (h *Handler) SetRuntimeStatsProvider(fn func() (activeRequests, activeWebSockets int64)) {
 	h.statsMu.Lock()
@@ -167,6 +204,10 @@ func (h *Handler) GetServerStats(c *gin.Context) {
 		"num_cpu":           runtime.NumCPU(),
 		"active_requests":   active,
 		"active_websockets": websockets,
+	}
+
+	if disks := collectDiskStats(diskWatchPaths(), statfsDiskProbe); len(disks) > 0 {
+		body["disks"] = disks
 	}
 
 	if runtime.GOOS != "linux" {
