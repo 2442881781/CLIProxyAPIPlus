@@ -5,12 +5,9 @@ import {
   QINIU_CLOUD_BASE_URL_OPTIONS,
   QINIU_CLOUD_PROVIDER_NAME,
 } from '../src/features/providers/qiniuCloud';
-import {
-  APIKEY_FUN_OPENAI_BASE_URL,
-  APIKEY_FUN_PROVIDER_NAME,
-  buildApiKeyFunRaw,
-} from '../src/features/providers/sponsor';
 import { normalizeConfigResponse } from '../src/services/api/transformers';
+
+const QINIU_OPENAI_BASE_URL = QINIU_CLOUD_BASE_URL_OPTIONS[0].openaiBaseUrl;
 
 const openAIConfig = (name: string, baseUrl: string) => ({
   openaiCompatibility: [
@@ -40,23 +37,14 @@ const mixedOpenAIConfig = (name: string, officialBaseUrl: string) => ({
 });
 
 describe('sponsor custom endpoint isolation', () => {
-  test('keeps APIKEY.FUN-named custom endpoints in the generic OpenAI group', () => {
-    expect(buildApiKeyFunRaw(customOpenAIConfig(APIKEY_FUN_PROVIDER_NAME)).openai).toEqual([]);
-  });
-
-  test('keeps Qiniu-named custom endpoints in the generic OpenAI group', () => {
+  test('keeps sponsor-named custom endpoints in the generic OpenAI group', () => {
     expect(buildQiniuCloudRaw(customOpenAIConfig(QINIU_CLOUD_PROVIDER_NAME)).openai).toEqual([]);
   });
 
   test('keeps same-name custom entries outside sponsor delete targets', () => {
     expect(
-      buildApiKeyFunRaw(
-        mixedOpenAIConfig(APIKEY_FUN_PROVIDER_NAME, APIKEY_FUN_OPENAI_BASE_URL)
-      ).openai.map((item) => item.index)
-    ).toEqual([0]);
-    expect(
       buildQiniuCloudRaw(
-        mixedOpenAIConfig(QINIU_CLOUD_PROVIDER_NAME, QINIU_CLOUD_BASE_URL_OPTIONS[0].openaiBaseUrl)
+        mixedOpenAIConfig(QINIU_CLOUD_PROVIDER_NAME, QINIU_OPENAI_BASE_URL)
       ).openai.map((item) => item.index)
     ).toEqual([0]);
   });
@@ -66,35 +54,31 @@ describe('sponsor custom endpoint isolation', () => {
       'openai-compatibility': [
         { 'base-url': 'https://invalid.example.com/v1' },
         {
-          name: APIKEY_FUN_PROVIDER_NAME,
-          'base-url': APIKEY_FUN_OPENAI_BASE_URL,
+          name: QINIU_CLOUD_PROVIDER_NAME,
+          'base-url': QINIU_OPENAI_BASE_URL,
           'api-key-entries': [{ 'api-key': 'official-a' }],
         },
         {
-          name: APIKEY_FUN_PROVIDER_NAME,
+          name: QINIU_CLOUD_PROVIDER_NAME,
           'base-url': 'https://gateway.example.com/v1',
           'api-key-entries': [{ 'api-key': 'custom-key' }],
         },
         {
-          name: APIKEY_FUN_PROVIDER_NAME,
-          'base-url': APIKEY_FUN_OPENAI_BASE_URL,
+          name: QINIU_CLOUD_PROVIDER_NAME,
+          'base-url': QINIU_OPENAI_BASE_URL,
           'api-key-entries': [{ 'api-key': 'official-b' }],
         },
       ],
     });
 
     expect(config.openaiCompatibility?.map((item) => item.sourceIndex)).toEqual([1, 2, 3]);
-    expect(buildApiKeyFunRaw(config).openai.map((item) => item.index)).toEqual([1, 3]);
+    expect(buildQiniuCloudRaw(config).openai.map((item) => item.index)).toEqual([1, 3]);
     expect(openaiToResource(config.openaiCompatibility![1], 1).originalIndex).toBe(2);
   });
 
   test('still aggregates each sponsor official OpenAI endpoint', () => {
     expect(
-      buildApiKeyFunRaw(openAIConfig('custom-name', APIKEY_FUN_OPENAI_BASE_URL)).openai.length
-    ).toBe(1);
-    expect(
-      buildQiniuCloudRaw(openAIConfig('custom-name', QINIU_CLOUD_BASE_URL_OPTIONS[0].openaiBaseUrl))
-        .openai.length
+      buildQiniuCloudRaw(openAIConfig('custom-name', QINIU_OPENAI_BASE_URL)).openai.length
     ).toBe(1);
   });
 });

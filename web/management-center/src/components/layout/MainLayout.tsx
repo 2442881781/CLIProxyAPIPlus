@@ -25,11 +25,12 @@ import {
   IconSidebarOauth,
   IconSidebarPlugins,
   IconSidebarProviders,
-  IconSidebarQuickStart,
   IconSidebarQuota,
   IconSidebarUsage,
   IconKey,
   IconModelCluster,
+  IconNetwork,
+  IconServer,
   IconSidebarStore,
   IconSidebarSystem,
   IconChevronDown,
@@ -49,7 +50,6 @@ import {
   resolvePluginAssetURL,
   type PluginResourceEntry,
 } from '@/features/plugins/pluginResources';
-import { APIKEY_FUN_DISPLAY_NAME, hasApiKeyFunConfig } from '@/features/providers/sponsor';
 import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { LANGUAGE_LABEL_KEYS, LANGUAGE_ORDER } from '@/utils/constants';
 import { isSupportedLanguage } from '@/utils/language';
@@ -58,7 +58,6 @@ import type { Theme } from '@/types';
 
 const sidebarIcons: Record<string, ReactNode> = {
   dashboard: <IconSidebarDashboard size={18} />,
-  quickStart: <IconSidebarQuickStart size={18} />,
   aiProviders: <IconSidebarProviders size={18} />,
   authFiles: <IconSidebarAuthFiles size={18} />,
   oauth: <IconSidebarOauth size={18} />,
@@ -66,6 +65,8 @@ const sidebarIcons: Record<string, ReactNode> = {
   usageMonitor: <IconSidebarUsage size={18} />,
   modelPressure: <IconModelCluster size={18} />,
   accessKeys: <IconKey size={18} />,
+  accessGroups: <IconNetwork size={18} />,
+  serverMonitor: <IconServer size={18} />,
   plugins: <IconSidebarPlugins size={18} />,
   pluginStore: <IconSidebarStore size={18} />,
   config: <IconSidebarConfig size={18} />,
@@ -324,7 +325,6 @@ export function MainLayout() {
 
   const fetchConfig = useConfigStore((state) => state.fetchConfig);
   const clearCache = useConfigStore((state) => state.clearCache);
-  const config = useConfigStore((state) => state.config);
 
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
@@ -589,15 +589,6 @@ export function MainLayout() {
       })
     : [];
 
-  const isApiKeyFunConfigured = hasApiKeyFunConfig(config);
-  const quickStartNavItem: SidebarNavLinkItem = {
-    path: '/quick-start',
-    label: isApiKeyFunConfigured ? APIKEY_FUN_DISPLAY_NAME : undefined,
-    labelKey: isApiKeyFunConfigured ? undefined : 'nav.quick_start',
-    metaKey: 'nav_meta.quick_start',
-    icon: sidebarIcons.quickStart,
-  };
-
   const navGroups: SidebarNavGroup[] = [
     {
       id: 'operate',
@@ -609,7 +600,6 @@ export function MainLayout() {
           metaKey: 'nav_meta.dashboard',
           icon: sidebarIcons.dashboard,
         },
-        ...(!isApiKeyFunConfigured ? [quickStartNavItem] : []),
       ],
     },
     {
@@ -645,7 +635,12 @@ export function MainLayout() {
           metaKey: 'nav_meta.access_keys',
           icon: sidebarIcons.accessKeys,
         },
-        ...(isApiKeyFunConfigured ? [quickStartNavItem] : []),
+        {
+          path: '/access-groups',
+          labelKey: 'nav.access_groups',
+          metaKey: 'nav_meta.access_groups',
+          icon: sidebarIcons.accessGroups,
+        },
       ],
     },
     {
@@ -669,6 +664,12 @@ export function MainLayout() {
           labelKey: 'nav.model_pressure',
           metaKey: 'nav_meta.model_pressure',
           icon: sidebarIcons.modelPressure,
+        },
+        {
+          path: '/server-monitor',
+          labelKey: 'nav.server_monitor',
+          metaKey: 'nav_meta.server_monitor',
+          icon: sidebarIcons.serverMonitor,
         },
         {
           path: '/logs',

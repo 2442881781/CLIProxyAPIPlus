@@ -13,12 +13,11 @@ export type ProviderBrand =
   | 'claude'
   | 'vertex'
   | 'openaiCompatibility'
-  | 'apikeyFun'
   | 'fennoAI'
   | 'qiniuCloud'
   | 'kimi';
 
-export type SponsorProviderBrand = 'apikeyFun' | 'fennoAI' | 'qiniuCloud' | 'kimi';
+export type SponsorProviderBrand = 'fennoAI' | 'qiniuCloud' | 'kimi';
 
 export const PROVIDER_SORT_BY_VALUES = ['name', 'priority', 'recent-success'] as const;
 export type ProviderSortBy = (typeof PROVIDER_SORT_BY_VALUES)[number];
@@ -34,13 +33,6 @@ export type ProviderResourceSelector =
   | { brand: 'claude'; apiKey: string; baseUrl?: string; index: number }
   | { brand: 'vertex'; apiKey: string; baseUrl?: string; index: number }
   | { brand: 'openaiCompatibility'; name: string; index: number }
-  | {
-      brand: 'apikeyFun';
-      openaiIndices: number[];
-      claudeIndices: number[];
-      codexIndices: number[];
-      geminiIndices: number[];
-    }
   | {
       brand: 'fennoAI';
       openaiIndices: number[];
@@ -197,6 +189,6 @@ export interface ProviderEntryFormInput {
   /** OpenAI persists this; Gemini/Claude use it for one-off connectivity tests. */
   testModel?: string;
   apiKeyEntries?: ApiKeyEntryInput[];
-  /** APIKEY.FUN stores one grouped key per platform protocol. */
+  /** Sponsor providers store one grouped key per platform protocol. */
   sponsorKeyEntries?: SponsorKeyEntryInput[];
 }

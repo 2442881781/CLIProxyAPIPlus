@@ -61,6 +61,9 @@ type Handler struct {
 	pluginStoreHTTPClient   pluginstore.HTTPDoer
 	pluginStoreRateLimiter  *pluginstore.GitHubRateLimiter
 	pluginReleases          pluginReleaseCache
+	runtimeStats            func() (activeRequests, activeWebSockets int64)
+	statsMu                 sync.Mutex
+	lastCPUSample           *cpuSample
 }
 
 type configReloadSnapshot struct {
