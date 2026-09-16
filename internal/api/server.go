@@ -103,6 +103,12 @@ type Server struct {
 
 	exampleAPIKeySafeModeEnabled bool
 	exampleAPIKeySafeModeActive  atomic.Bool
+
+	deploymentReady      atomic.Bool
+	deploymentDraining   atomic.Bool
+	activeRequests       atomic.Int64
+	activeWebSockets     atomic.Int64
+	deploymentControlKey string
 }
 
 // NewServer creates and initializes a new API server instance.
@@ -182,7 +188,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		pluginHost:          optionState.pluginHost,
 
 		exampleAPIKeySafeModeEnabled: optionState.exampleAPIKeySafeMode,
+		deploymentControlKey:         deploymentControlToken(),
 	}
+	engine.Use(s.deploymentLifecycleMiddleware())
 	s.wsAuthEnabled.Store(cfg.WebsocketAuth)
 	s.exampleAPIKeySafeModeActive.Store(s.exampleAPIKeySafeModeRequired(cfg))
 	s.handlers.SetPluginHost(optionState.pluginHost)
@@ -277,6 +285,8 @@ func (s *Server) Start() error {
 	if errListen != nil {
 		return fmt.Errorf("failed to start HTTP server: %v", errListen)
 	}
+	s.deploymentReady.Store(true)
+	defer s.deploymentReady.Store(false)
 
 	useTLS := s.cfg != nil && s.cfg.TLS.Enable
 	if useTLS {

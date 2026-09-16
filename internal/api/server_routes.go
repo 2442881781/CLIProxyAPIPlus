@@ -59,6 +59,36 @@ func (s *Server) setupRoutes() {
 	s.engine.GET("/healthz", healthzHandler)
 	s.engine.HEAD("/healthz", healthzHandler)
 
+	readyzHandler := func(c *gin.Context) {
+		if !s.deploymentReady.Load() || s.deploymentDraining.Load() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not ready"})
+			return
+		}
+		if c.Request.Method == http.MethodHead {
+			c.Status(http.StatusOK)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ready"})
+	}
+	s.engine.GET("/readyz", readyzHandler)
+	s.engine.HEAD("/readyz", readyzHandler)
+	s.engine.GET("/v0/deployment/status", func(c *gin.Context) {
+		if !s.authorizeDeploymentControl(c) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusOK, s.deploymentStatus())
+	})
+	s.engine.POST("/v0/deployment/drain", func(c *gin.Context) {
+		if !s.authorizeDeploymentControl(c) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		s.deploymentDraining.Store(true)
+		c.Header("Connection", "close")
+		c.JSON(http.StatusOK, s.deploymentStatus())
+	})
+
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
 	s.engine.GET("/access-keys.html", func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", accessKeysPageHTML)

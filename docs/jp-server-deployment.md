@@ -1,17 +1,41 @@
-# Japan Server Deployment
+# Japan Server Blue-Green Deployment
 
-The Japan server uses a small pull-and-build deployment flow designed for the
-existing systemd installation:
+The Japan server uses an Nginx-fronted, two-slot deployment flow:
 
-- service: `cliproxy.service`
-- binary: `/opt/cliproxy/cli-proxy-api`
-- persistent deployment state: `/var/lib/cliproxy/deploy`
+```text
+client -> Nginx :8317 -> blue  127.0.0.1:18317
+                       or green 127.0.0.1:18318
+```
+
+Only one slot receives new traffic. The previous slot remains alive after an
+Nginx reload until its in-flight HTTP, SSE, and WebSocket connections drain or
+the configured drain deadline expires.
+
+## Layout
+
+- services: `cliproxy-blue.service`, `cliproxy-green.service`
+- slot binaries: `/opt/cliproxy/slots/{blue,green}/cli-proxy-api`
+- shared config: `/etc/cliproxy/config.yaml`
+- slot state: `/var/lib/cliproxy/deploy/slots/{blue,green}/auths`
+- active slot marker: `/var/lib/cliproxy/deploy/active-slot`
+- Nginx upstream: `/etc/nginx/conf.d/cliproxy-upstream.conf`
 - source transport branch: `github-deploy/deploy-jp`
-- health check: `http://127.0.0.1:18317/healthz`
+- deploy command: `/usr/local/sbin/cliproxy-deploy`
 
-The server script keeps the Go toolchain, module cache, build cache, source
-checkout, deployed commit, checksum, and recent binary backups. Builds use
-CGO so the existing Go plugins continue to load.
+Each process receives its port and auth directory through runtime-only
+environment overrides. This keeps `/etc/cliproxy/config.yaml` unchanged and
+ensures hot reloads preserve the slot-specific state directory.
+
+## Application lifecycle endpoints
+
+- `GET /healthz`: process liveness
+- `GET /readyz`: traffic eligibility; returns 503 while draining
+- `GET /v0/deployment/status`: active HTTP/SSE and WebSocket counts
+- `POST /v0/deployment/drain`: reject new work and begin draining
+
+The deployment endpoints require a per-host control token and loopback source
+address. The token is stored in `/run/cliproxy/deploy-control-token` and is not
+proxied through Nginx for normal use.
 
 ## Publish source
 
@@ -22,43 +46,49 @@ snapshot:
 ./scripts/publish-jp-deploy.sh
 ```
 
-The GitHub credential used by this checkout cannot update workflow files. The
-publisher therefore creates a transport commit that keeps the destination
-repository's `.github/workflows` directory while copying the current source
-tree. The commit records the real source revision in a `Source-Commit` trailer.
+The publisher creates a transport commit that preserves the destination
+repository's `.github/workflows` directory and records the real source revision
+in a `Source-Commit` trailer.
 
-Environment overrides:
-
-```bash
-CLIPROXY_DEPLOY_REMOTE=github-deploy \
-CLIPROXY_DEPLOY_BRANCH=deploy-jp \
-CLIPROXY_DEPLOY_BASE_BRANCH=main \
-./scripts/publish-jp-deploy.sh HEAD
-```
-
-## Deploy on the server
-
-Install `scripts/cliproxy-server-deploy.sh` as
-`/usr/local/sbin/cliproxy-deploy`, then run:
+## Deploy
 
 ```bash
 sudo cliproxy-deploy
 ```
 
-The first run downloads the pinned Go toolchain. Later runs fetch only the
-latest deployment ref and reuse Go module/build caches.
-
 The deployment sequence is:
 
-1. acquire a deployment lock;
-2. fetch the deployment branch;
-3. build a CGO-enabled Linux binary with version metadata;
-4. copy the current binary into `/opt/cliproxy/releases`;
-5. atomically replace the executable and restart systemd;
-6. wait for `/healthz`;
-7. verify that the new process did not report plugin load failures;
-8. automatically restore the backup on failure;
-9. keep the latest five release backups by default.
+1. acquire the deployment lock;
+2. fetch the deployment branch and build a CGO-enabled Linux binary;
+3. clone current active state into the inactive slot;
+4. merge any usage or credential changes recorded while that slot previously
+   drained;
+5. start and validate the inactive slot on its private port;
+6. verify `/readyz` and plugin loading;
+7. atomically switch the Nginx upstream and reload Nginx;
+8. verify both the private endpoint and public Nginx route;
+9. tell the previous slot to drain;
+10. stop it after all tracked requests and WebSockets finish, or after the drain
+    deadline;
+11. retain its final state for the next three-way merge.
+
+Nginx reload behavior preserves established downstream connections on old Nginx
+workers. Those connections continue to the previous backend while new
+connections use the new slot. Nginx does not migrate WebSockets between slots.
+
+## State safety
+
+The slots never share writable auth state. At cutover, the new slot receives a
+clone of current state. When a previously drained slot is reused, the helper
+`scripts/cliproxy-merge-state.py` performs a three-way merge:
+
+- access-key and usage-monitor counters are merged as additive deltas;
+- credential and cooldown files use a conservative change-aware merge;
+- runtime logs are not merged.
+
+This is temporary active/standby overlap, not active-active operation.
+
+## Configuration
 
 Useful overrides:
 
@@ -66,11 +96,31 @@ Useful overrides:
 CLIPROXY_DEPLOY_REF=deploy-jp \
 CLIPROXY_DEPLOY_GO_VERSION=1.26.0 \
 CLIPROXY_DEPLOY_KEEP_RELEASES=5 \
+CLIPROXY_DEPLOY_DRAIN_TIMEOUT=7200 \
+CLIPROXY_DEPLOY_DRAIN_POLL_INTERVAL=2 \
 sudo cliproxy-deploy
 ```
 
-To deploy another ref explicitly:
+`CLIPROXY_DEPLOY_DRAIN_TIMEOUT` is the hard deadline in seconds for an ordinary
+blue-green update. Reaching it can interrupt an in-flight stream or WebSocket,
+so keep it long enough for normal agent turns.
+
+The one-time migration from the legacy `cliproxy.service` cannot use the new
+drain endpoint. It instead waits for existing TCP connections to disappear,
+up to `CLIPROXY_DEPLOY_LEGACY_DRAIN_TIMEOUT` (default 120 seconds), before
+stopping the legacy service.
+
+## Rollback
+
+Before the old slot is stopped, a failed post-cutover health check rewrites the
+Nginx upstream to the previous slot and reloads Nginx. Recent replaced slot
+binaries are retained under `/opt/cliproxy/releases`.
+
+Operational checks:
 
 ```bash
-sudo cliproxy-deploy <branch-or-tag>
+cat /var/lib/cliproxy/deploy/active-slot
+systemctl status cliproxy-blue.service cliproxy-green.service
+curl -fsS http://127.0.0.1:8317/readyz
+nginx -t
 ```
