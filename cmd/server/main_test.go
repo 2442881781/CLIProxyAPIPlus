@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -183,5 +185,19 @@ func TestHomeConfigPayloadPortApplication(t *testing.T) {
 				t.Fatalf("parsed.Port = %d, want %d", parsed.Port, tt.wantPort)
 			}
 		})
+	}
+}
+
+func TestLoadPluginBootstrapConfigAppliesRuntimeOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if errWrite := os.WriteFile(path, []byte("port: 18317\nauth-dir: /auths\n"), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	t.Setenv(config.PortOverrideEnv, "18318")
+	t.Setenv(config.AuthDirOverrideEnv, "/slots/green/auths")
+	cfg := loadPluginBootstrapConfig(path)
+	if cfg == nil || cfg.Port != 18318 || cfg.AuthDir != "/slots/green/auths" {
+		t.Fatalf("bootstrap config = %#v", cfg)
 	}
 }

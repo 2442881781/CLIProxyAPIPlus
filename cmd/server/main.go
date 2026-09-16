@@ -829,11 +829,17 @@ func loadPluginBootstrapConfig(path string) *config.Config {
 		}
 		cfg := &config.Config{}
 		cfg.NormalizePluginsConfig()
+		if errOverride := config.ApplyRuntimeOverrides(cfg, os.Getenv(config.PortOverrideEnv), os.Getenv(config.AuthDirOverrideEnv)); errOverride != nil {
+			log.Warnf("failed to apply plugin bootstrap runtime overrides: %v", errOverride)
+		}
 		return cfg
 	}
 	if len(strings.TrimSpace(string(raw))) == 0 {
 		cfg := &config.Config{}
 		cfg.NormalizePluginsConfig()
+		if errOverride := config.ApplyRuntimeOverrides(cfg, os.Getenv(config.PortOverrideEnv), os.Getenv(config.AuthDirOverrideEnv)); errOverride != nil {
+			log.Warnf("failed to apply plugin bootstrap runtime overrides: %v", errOverride)
+		}
 		return cfg
 	}
 	cfg, errParseConfig := config.ParseConfigBytes(raw)
@@ -842,6 +848,9 @@ func loadPluginBootstrapConfig(path string) *config.Config {
 		cfg = &config.Config{}
 		cfg.NormalizePluginsConfig()
 		return cfg
+	}
+	if errOverride := config.ApplyRuntimeOverrides(cfg, os.Getenv(config.PortOverrideEnv), os.Getenv(config.AuthDirOverrideEnv)); errOverride != nil {
+		log.Warnf("failed to apply plugin bootstrap runtime overrides: %v", errOverride)
 	}
 	return cfg
 }

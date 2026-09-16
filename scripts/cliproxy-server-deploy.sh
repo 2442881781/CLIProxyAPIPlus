@@ -237,7 +237,7 @@ wait_ready() {
 check_plugins() {
   local service="$1" pid
   pid="$(systemctl show -p MainPID --value "${service}")"
-  if [[ -n "${pid}" ]] && journalctl -u "${service}" "_PID=${pid}" --no-pager | grep -q 'failed to load plugin'; then
+  if [[ -n "${pid}" ]] && journalctl -u "${service}" "_PID=${pid}" --no-pager | grep -Eq 'failed to load plugin|plugin\.register failed|returned invalid metadata or no capabilities'; then
     return 1
   fi
   return 0
@@ -436,6 +436,8 @@ if ! curl -fsS -H 'Upgrade: websocket' -H 'Connection: upgrade' "http://127.0.0.
 fi
 printf '%s\n' "${NEXT_SLOT}" >"${ACTIVE_SLOT_FILE}.new"
 mv -f "${ACTIVE_SLOT_FILE}.new" "${ACTIVE_SLOT_FILE}"
+systemctl enable "${NEXT_SERVICE}" >/dev/null
+systemctl disable "${ACTIVE_SERVICE}" >/dev/null 2>&1 || true
 
 log "draining previous slot ${ACTIVE_SLOT}"
 if [[ "${LEGACY_MIGRATION}" -eq 1 ]]; then
