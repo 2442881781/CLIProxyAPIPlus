@@ -144,11 +144,12 @@ func SetProvidersRefresher(f func()) {
 // it again with the same directory is a no-op.
 func Configure(authDir string) (*Store, error) {
 	defaultStoreMu.Lock()
-	defer defaultStoreMu.Unlock()
 	dir := strings.TrimSpace(authDir)
 	path := filepath.Join(dir, StoreFileName)
 	if defaultStore != nil && defaultStore.path == path {
-		return defaultStore, nil
+		store := defaultStore
+		defaultStoreMu.Unlock()
+		return store, nil
 	}
 	if legacy := filepath.Join(dir, legacyStoreFileName); dir != "" {
 		if _, errStat := os.Stat(path); os.IsNotExist(errStat) {
@@ -161,11 +162,13 @@ func Configure(authDir string) (*Store, error) {
 	}
 	store := &Store{path: path, managed: true}
 	if err := store.loadLocked(); err != nil {
+		defaultStoreMu.Unlock()
 		return nil, err
 	}
-	store.syncProviderLocked()
 	defaultStore = store
-	return defaultStore, nil
+	defaultStoreMu.Unlock()
+	store.syncProviderLocked()
+	return store, nil
 }
 
 // DefaultStore returns the configured shared store, or nil when Configure has

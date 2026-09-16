@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 )
 
 func setupAccessKeyRouter(t *testing.T) *gin.Engine {
@@ -244,5 +247,18 @@ func TestAccessKeyUsageEndpoints(t *testing.T) {
 	}
 	if rec, _ := doReq(t, r, "GET", "/access-groups/usage?name=nope", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown group should 404, got %d", rec.Code)
+	}
+}
+
+func TestAccessKeyStoreRecoversFromConfiguredAuthDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, storeaccess.StoreFileName), []byte(`{"keys":[],"groups":[{"name":"deepseek"}]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	h := &Handler{cfg: &config.Config{AuthDir: dir}}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	store := h.accessKeyStore(ctx)
+	if store == nil || store.GetGroup("deepseek") == nil {
+		t.Fatalf("accessKeyStore() = %#v, want configured store with deepseek group", store)
 	}
 }

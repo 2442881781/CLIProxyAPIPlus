@@ -13,6 +13,14 @@ import (
 
 func (h *Handler) accessKeyStore(c *gin.Context) *storeaccess.Store {
 	store := storeaccess.DefaultStore()
+	if h != nil && h.cfg != nil {
+		var err error
+		store, err = storeaccess.Configure(h.cfg.AuthDir)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "access key store unavailable"})
+			return nil
+		}
+	}
 	if store == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "access key store unavailable"})
 		return nil
