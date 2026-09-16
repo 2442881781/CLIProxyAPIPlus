@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -57,6 +58,9 @@ func collectDiskStats(parts []disk.PartitionStat, usage func(string) (*disk.Usag
 	seen := make(map[string]bool)
 	rows := make([]gin.H, 0, len(parts))
 	for _, part := range parts {
+		if isDiskImageMount(part) {
+			continue
+		}
 		if seen[part.Device] {
 			continue
 		}
@@ -75,6 +79,15 @@ func collectDiskStats(parts []disk.PartitionStat, usage func(string) (*disk.Usag
 		})
 	}
 	return rows
+}
+
+// isDiskImageMount excludes read-only package images such as Snap mounts.
+// SquashFS images and loop devices normally report 100% usage by design and
+// are not writable filesystems that can run out of free space.
+func isDiskImageMount(part disk.PartitionStat) bool {
+	return strings.EqualFold(part.Fstype, "squashfs") ||
+		strings.HasPrefix(part.Device, "/dev/loop") ||
+		part.Mountpoint == "/snap" || strings.HasPrefix(part.Mountpoint, "/snap/")
 }
 
 // SetRuntimeStatsProvider injects the server's live in-flight counters.

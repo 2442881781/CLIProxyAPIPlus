@@ -112,6 +112,27 @@ func TestServerStats_DiskDedupe(t *testing.T) {
 	}
 }
 
+func TestServerStats_DiskImagesExcluded(t *testing.T) {
+	// Snap package images are read-only and report 100% usage by design.
+	parts := []disk.PartitionStat{
+		{Device: "/dev/vda1", Mountpoint: "/", Fstype: "ext4"},
+		{Device: "/dev/loop0", Mountpoint: "/snap/core20/1434", Fstype: "squashfs"},
+		{Device: "/dev/loop1", Mountpoint: "/mnt/image", Fstype: "ext4"},
+		{Device: "/dev/snap-image", Mountpoint: "/snap/custom/1", Fstype: "ext4"},
+	}
+	usage := func(mount string) (*disk.UsageStat, error) {
+		return &disk.UsageStat{Path: mount, Total: 1000, Free: 0, UsedPercent: 100}, nil
+	}
+
+	rows := collectDiskStats(parts, usage)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want only the writable root filesystem: %v", len(rows), rows)
+	}
+	if rows[0]["device"] != "/dev/vda1" {
+		t.Fatalf("device = %v, want /dev/vda1", rows[0]["device"])
+	}
+}
+
 func TestServerStats_RuntimeCounters(t *testing.T) {
 	// Given the injected provider returns active_requests=7, active_websockets=3
 	// Then the response echoes exactly those values
