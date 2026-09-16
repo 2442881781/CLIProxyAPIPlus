@@ -51,6 +51,12 @@ AGENTS.override.md
 .agent/*
 .agents
 .pi
+!.pi/
+.pi/*
+!.pi/skills/
+.pi/skills/*
+!.pi/skills/cliproxy-jp-deploy/
+!.pi/skills/cliproxy-jp-deploy/**
 .agents/*
 .opencode/*
 .idea/*

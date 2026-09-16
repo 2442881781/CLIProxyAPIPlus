@@ -1863,3 +1863,57 @@ func (r *ModelRegistry) GetModelsForClient(clientID string) []*ModelInfo {
 	models, _ := r.GetModelsAndEpochForClient(clientID)
 	return models
 }
+
+// ModelSupplyStats reports how many registered credentials can serve a model
+// versus how many are currently suspended or quota-exceeded. It reads the same
+// projections the selector uses, so monitoring and routing share one authority.
+type ModelSupplyStats struct {
+	Registered    int
+	Suspended     int
+	QuotaExceeded int
+	Providers     []string
+}
+
+// GetModelSupplyStats returns the supply breakdown for one model ID.
+// A zero value is returned for unknown models.
+func (r *ModelRegistry) GetModelSupplyStats(modelID string) ModelSupplyStats {
+	var stats ModelSupplyStats
+	if r == nil {
+		return stats
+	}
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	registration, exists := r.models[modelID]
+	if !exists || registration == nil {
+		return stats
+	}
+	now := time.Now()
+	stats.Registered = registration.Count
+	stats.Suspended = len(registration.SuspendedClients)
+	for _, quotaTime := range registration.QuotaExceededClients {
+		if quotaTime != nil && now.Sub(*quotaTime) < modelQuotaExceededWindow {
+			stats.QuotaExceeded++
+		}
+	}
+	for provider := range registration.Providers {
+		stats.Providers = append(stats.Providers, provider)
+	}
+	sort.Strings(stats.Providers)
+	return stats
+}
+
+// RegisteredModelIDs lists every model ID currently registered, including
+// ones whose clients are all suspended (unavailable models still have supply).
+func (r *ModelRegistry) RegisteredModelIDs() []string {
+	if r == nil {
+		return nil
+	}
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	ids := make([]string, 0, len(r.models))
+	for id := range r.models {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}

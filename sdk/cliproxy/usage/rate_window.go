@@ -7,19 +7,30 @@ const RateWindowSeconds = 60
 
 // Rate is a point-in-time throughput snapshot: per-second averages over the
 // whole window. Output tokens/sec is the LLM-conventional "TPS" figure.
+// ErrorRate is failed requests / window requests; latency figures are
+// averages over the events that reported them.
 type Rate struct {
 	RequestsPerSecond     float64 `json:"requests_per_second"`
 	InputTokensPerSecond  float64 `json:"input_tokens_per_second"`
 	OutputTokensPerSecond float64 `json:"output_tokens_per_second"`
 	TotalTokensPerSecond  float64 `json:"total_tokens_per_second"`
+	FailedPerSecond       float64 `json:"failed_per_second"`
+	ErrorRate             float64 `json:"error_rate"`
+	AvgLatencyMS          int64   `json:"avg_latency_ms"`
+	AvgTTFTMS             int64   `json:"avg_ttft_ms"`
 }
 
 type rateBucket struct {
-	sec   int64
-	reqs  int64
-	in    int64
-	out   int64
-	total int64
+	sec       int64
+	reqs      int64
+	in        int64
+	out       int64
+	total     int64
+	failed    int64
+	latencyMS int64
+	latencyN  int64
+	ttftMS    int64
+	ttftN     int64
 }
 
 // RateWindow is a ring of per-second buckets covering the last
@@ -33,6 +44,11 @@ type RateWindow struct {
 // older than the newest bucket occupying their ring slot are dropped rather
 // than clobbering fresher data.
 func (w *RateWindow) Add(now time.Time, input, output, total int64) {
+	w.AddEvent(now, input, output, total, false, 0, 0)
+}
+
+// AddEvent is Add plus failure and latency dimensions for the same request.
+func (w *RateWindow) AddEvent(now time.Time, input, output, total int64, failed bool, latency, ttft time.Duration) {
 	if w == nil {
 		return
 	}
@@ -52,6 +68,17 @@ func (w *RateWindow) Add(now time.Time, input, output, total int64) {
 	b.in += input
 	b.out += output
 	b.total += total
+	if failed {
+		b.failed++
+	}
+	if latency > 0 {
+		b.latencyMS += latency.Milliseconds()
+		b.latencyN++
+	}
+	if ttft > 0 {
+		b.ttftMS += ttft.Milliseconds()
+		b.ttftN++
+	}
 }
 
 // Rate averages all in-window buckets. Buckets stamped in the future or
@@ -63,7 +90,7 @@ func (w *RateWindow) Rate(now time.Time) Rate {
 	}
 	nowSec := now.Unix()
 	oldest := nowSec - RateWindowSeconds
-	var reqs, in, out, total int64
+	var reqs, in, out, total, failed, latencyMS, latencyN, ttftMS, ttftN int64
 	for i := range w.buckets {
 		b := &w.buckets[i]
 		if b.sec <= oldest || b.sec > nowSec {
@@ -73,10 +100,25 @@ func (w *RateWindow) Rate(now time.Time) Rate {
 		in += b.in
 		out += b.out
 		total += b.total
+		failed += b.failed
+		latencyMS += b.latencyMS
+		latencyN += b.latencyN
+		ttftMS += b.ttftMS
+		ttftN += b.ttftN
 	}
 	r.RequestsPerSecond = float64(reqs) / RateWindowSeconds
 	r.InputTokensPerSecond = float64(in) / RateWindowSeconds
 	r.OutputTokensPerSecond = float64(out) / RateWindowSeconds
 	r.TotalTokensPerSecond = float64(total) / RateWindowSeconds
+	r.FailedPerSecond = float64(failed) / RateWindowSeconds
+	if reqs > 0 {
+		r.ErrorRate = float64(failed) / float64(reqs)
+	}
+	if latencyN > 0 {
+		r.AvgLatencyMS = latencyMS / latencyN
+	}
+	if ttftN > 0 {
+		r.AvgTTFTMS = ttftMS / ttftN
+	}
 	return r
 }
