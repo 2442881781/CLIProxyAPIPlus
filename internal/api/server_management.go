@@ -174,6 +174,11 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/vertex-api-key", s.mgmt.PatchVertexCompatKey)
 		mgmt.DELETE("/vertex-api-key", s.mgmt.DeleteVertexCompatKey)
 
+		mgmt.GET("/oauth-allowed-models", s.mgmt.GetOAuthAllowedModels)
+		mgmt.PUT("/oauth-allowed-models", s.mgmt.PutOAuthAllowedModels)
+		mgmt.PATCH("/oauth-allowed-models", s.mgmt.PatchOAuthAllowedModels)
+		mgmt.DELETE("/oauth-allowed-models", s.mgmt.DeleteOAuthAllowedModels)
+
 		mgmt.GET("/oauth-excluded-models", s.mgmt.GetOAuthExcludedModels)
 		mgmt.PUT("/oauth-excluded-models", s.mgmt.PutOAuthExcludedModels)
 		mgmt.PATCH("/oauth-excluded-models", s.mgmt.PatchOAuthExcludedModels)
@@ -192,6 +197,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
 		mgmt.GET("/auth-files/models", s.mgmt.GetAuthFileModels)
 		mgmt.GET("/model-definitions/:channel", s.mgmt.GetStaticModelDefinitions)
+		mgmt.GET("/provider-models/:provider", s.mgmt.GetProviderModels)
 		mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
 		mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
 		mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)

@@ -7,6 +7,7 @@ import { normalizeModelList } from '@/utils/models';
 import { normalizeApiBase } from '@/utils/connection';
 import { apiCallApi, getApiCallErrorMessage } from './apiCall';
 import { isRecord } from '@/utils/helpers';
+import { apiClient } from './client';
 
 const DEFAULT_CLAUDE_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
@@ -81,6 +82,11 @@ const resolveBearerTokenFromAuthorization = (headers: Record<string, string>): s
   return match?.[1]?.trim() || '';
 };
 
+export const normalizeProviderModels = (payload: unknown) => {
+  const record = isRecord(payload) ? payload : {};
+  return normalizeModelList(record.models ?? payload, { dedupe: true });
+};
+
 export const modelsApi = {
   /**
    * Fetch available models from /v1/models endpoint (for system info page)
@@ -101,6 +107,13 @@ export const modelsApi = {
     });
     const payload = response.data?.data ?? response.data?.models ?? response.data;
     return normalizeModelList(payload, { dedupe: true });
+  },
+
+  async fetchProviderModels(provider: string) {
+    const normalized = provider.trim().toLowerCase();
+    if (!normalized) return [];
+    const payload = await apiClient.get(`/provider-models/${encodeURIComponent(normalized)}`);
+    return normalizeProviderModels(payload);
   },
 
   /**

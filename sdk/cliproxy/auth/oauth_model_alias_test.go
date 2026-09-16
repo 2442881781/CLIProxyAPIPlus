@@ -429,3 +429,16 @@ func TestApplyOAuthModelAliasWithResult_NoForceMappingPreservesRequestedModelInO
 		t.Fatalf("OriginalAlias = %q want requested model when force-mapping off", res.OriginalAlias)
 	}
 }
+
+func TestModelAliasChannelPluginOwnedAPIKey(t *testing.T) {
+	auth := &Auth{
+		Provider: " OpenCode-Go ",
+		Attributes: map[string]string{
+			AttributeAPIKey:      "secret",
+			AttributePluginOwned: "true",
+		},
+	}
+	if got := modelAliasChannel(auth); got != "opencode-go" {
+		t.Fatalf("modelAliasChannel() = %q, want %q", got, "opencode-go")
+	}
+}

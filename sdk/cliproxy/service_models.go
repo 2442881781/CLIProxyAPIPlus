@@ -46,6 +46,7 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 	if compatDetected {
 		provider = "openai-compatibility"
 	}
+	allowed := s.oauthAllowedModels(provider, authKind)
 	excluded := s.oauthExcludedModels(provider, authKind)
 	// The synthesizer pre-merges per-account and global exclusions into the "excluded_models" attribute.
 	// If this attribute is present, it represents the complete list of exclusions and overrides the global config.
@@ -54,7 +55,7 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 			excluded = strings.Split(val, ",")
 		}
 	}
-	if s.tryRegisterPluginModelsForAuth(ctx, a, provider, authKind, excluded) {
+	if s.tryRegisterPluginModelsForAuth(ctx, a, provider, authKind, allowed, excluded) {
 		return
 	}
 	if ctx.Err() != nil {
@@ -264,6 +265,7 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 	if ctx.Err() != nil {
 		return
 	}
+	models = applyAllowedModels(models, allowed)
 	models = applyOAuthModelAliasForAuth(s.cfg, provider, authKind, a.Attributes, models)
 	if ctx.Err() != nil {
 		return
@@ -530,6 +532,50 @@ func resolveConfigCodexStyleKey(auth *coreauth.Auth, entries []config.CodexKey, 
 	return nil
 }
 
+func (s *Service) oauthAllowedModels(provider, authKind string) []string {
+	cfg := s.cfg
+	if cfg == nil {
+		return nil
+	}
+	authKindKey := strings.ToLower(strings.TrimSpace(authKind))
+	providerKey := strings.ToLower(strings.TrimSpace(provider))
+	if authKindKey == "apikey" && !s.isPluginProvider(providerKey) {
+		return nil
+	}
+	return cfg.OAuthAllowedModels[providerKey]
+}
+
+func applyAllowedModels(models []*ModelInfo, allowed []string) []*ModelInfo {
+	if len(models) == 0 || len(allowed) == 0 {
+		return models
+	}
+
+	patterns := make([]string, 0, len(allowed))
+	for _, item := range allowed {
+		if trimmed := strings.ToLower(strings.TrimSpace(item)); trimmed != "" {
+			patterns = append(patterns, trimmed)
+		}
+	}
+	if len(patterns) == 0 {
+		return models
+	}
+
+	filtered := make([]*ModelInfo, 0, len(models))
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		modelID := strings.ToLower(strings.TrimSpace(model.ID))
+		for _, pattern := range patterns {
+			if matchWildcard(pattern, modelID) {
+				filtered = append(filtered, model)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
 func (s *Service) oauthExcludedModels(provider, authKind string) []string {
 	cfg := s.cfg
 	if cfg == nil {
@@ -537,10 +583,18 @@ func (s *Service) oauthExcludedModels(provider, authKind string) []string {
 	}
 	authKindKey := strings.ToLower(strings.TrimSpace(authKind))
 	providerKey := strings.ToLower(strings.TrimSpace(provider))
-	if authKindKey == "apikey" {
+	if authKindKey == "apikey" && !s.isPluginProvider(providerKey) {
 		return nil
 	}
 	return cfg.OAuthExcludedModels[providerKey]
+}
+
+func (s *Service) isPluginProvider(provider string) bool {
+	providerKey := strings.ToLower(strings.TrimSpace(provider))
+	if providerKey == "" {
+		return false
+	}
+	return pluginHostHasAuthProvider(s.pluginHost, providerKey)
 }
 
 func applyExcludedModels(models []*ModelInfo, excluded []string) []*ModelInfo {
@@ -934,7 +988,7 @@ func applyOAuthModelAliasForAuth(cfg *config.Config, provider, authKind string, 
 	if len(models) == 0 {
 		return models
 	}
-	channel := coreauth.OAuthModelAliasChannel(provider, authKind)
+	channel := modelAliasChannelForAuth(provider, authKind, attributes)
 	if channel == "" {
 		return models
 	}
@@ -943,6 +997,16 @@ func applyOAuthModelAliasForAuth(cfg *config.Config, provider, authKind string, 
 		return models
 	}
 	return applyOAuthModelAliasEntries(aliases, models)
+}
+
+func modelAliasChannelForAuth(provider, authKind string, attributes map[string]string) string {
+	providerKey := strings.ToLower(strings.TrimSpace(provider))
+	if strings.EqualFold(strings.TrimSpace(authKind), coreauth.AuthKindAPIKey) &&
+		(strings.EqualFold(strings.TrimSpace(attributes[coreauth.AttributePluginOwned]), "true") ||
+			strings.EqualFold(strings.TrimSpace(attributes[coreauth.AttributePluginVirtual]), "true")) {
+		return providerKey
+	}
+	return coreauth.OAuthModelAliasChannel(providerKey, authKind)
 }
 
 func oauthModelAliasesForAuth(cfg *config.Config, channel string, attributes map[string]string) []config.OAuthModelAlias {

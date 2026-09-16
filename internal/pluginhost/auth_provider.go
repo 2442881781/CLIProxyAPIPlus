@@ -26,6 +26,7 @@ func (h *Host) hostConfigSummaryLocked() pluginapi.HostConfigSummary {
 		AuthDir:          strings.TrimSpace(cfg.AuthDir),
 		ProxyURL:         strings.TrimSpace(cfg.ProxyURL),
 		ForceModelPrefix: cfg.ForceModelPrefix,
+		AllowedModels:    cloneStringSliceMap(cfg.OAuthAllowedModels),
 		OAuthModelAlias:  pluginOAuthModelAliases(cfg.OAuthModelAlias),
 		ExcludedModels:   cloneStringSliceMap(cfg.OAuthExcludedModels),
 	}
@@ -591,6 +592,8 @@ func pluginAuthDataToCoreAuth(data pluginapi.AuthData, path, fileName string, au
 		UpdatedAt:        now,
 		NextRefreshAfter: data.NextRefreshAfter,
 	}
+	coreauth.MarkPluginOwnedAuth(auth)
+
 	return auth
 }
 

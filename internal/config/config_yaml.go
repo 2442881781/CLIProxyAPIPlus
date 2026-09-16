@@ -52,6 +52,7 @@ func SaveConfigPreserveComments(configFile string, cfg *Config) error {
 	removeRemovedIntegrationKeys(original.Content[0])
 	removeLegacyGenerativeLanguageKeys(original.Content[0])
 
+	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-allowed-models")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-excluded-models")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-model-alias")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-request-scoped-errors")
@@ -688,10 +689,10 @@ func pruneMappingToGeneratedKeys(dstRoot, srcRoot *yaml.Node, keyPath ...string)
 	}
 	srcIdx := findMapKeyIndex(srcRoot, key)
 	if srcIdx < 0 {
-		// Keep an explicit empty mapping for oauth-model-alias and oauth-request-scoped-errors when previously present.
+		// Keep explicit empty mappings for model policy and request-scoped error maps when previously present.
 		// When users delete the last channel via the management API,
 		// we want that deletion to persist across hot reloads and restarts.
-		if key == "oauth-model-alias" || key == "oauth-request-scoped-errors" {
+		if key == "oauth-allowed-models" || key == "oauth-model-alias" || key == "oauth-request-scoped-errors" {
 			dstRoot.Content[dstIdx+1] = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 			return
 		}

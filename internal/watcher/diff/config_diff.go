@@ -403,6 +403,10 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 		}
 	}
 
+	if entries, _ := DiffOAuthAllowedModelChanges(oldCfg.OAuthAllowedModels, newCfg.OAuthAllowedModels); len(entries) > 0 {
+		changes = append(changes, entries...)
+	}
+
 	if entries, _ := DiffOAuthExcludedModelChanges(oldCfg.OAuthExcludedModels, newCfg.OAuthExcludedModels); len(entries) > 0 {
 		changes = append(changes, entries...)
 	}

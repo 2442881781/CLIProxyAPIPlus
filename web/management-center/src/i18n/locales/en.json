@@ -102,7 +102,6 @@
     "oauth": "OAuth Login",
     "quota_management": "Quota Management",
     "usage_monitor": "Usage Monitor",
-
     "model_pressure": "Model Pressure",
     "access_keys": "Access Keys",
     "plugins": "Plugins",
@@ -127,7 +126,6 @@
     "oauth": "OAuth authorization",
     "quota_management": "API keys & limits",
     "usage_monitor": "Tokens by provider and model",
-
     "model_pressure": "Live concurrency & rates per model",
     "access_keys": "Subscriber keys & groups",
     "plugins": "Plugin toggles & config",
@@ -1495,7 +1493,6 @@
     "reset_confirm_button": "Confirm reset",
     "reset_success": "{{quota}} has been reset",
     "reset_failed": "Reset failed: {{message}}",
-
     "plan": "Plan",
     "monthly_credits": "Monthly credits",
     "used_percent": "{{value}}% used",
@@ -1514,7 +1511,6 @@
       "mcp": "MCP monthly quota"
     }
   },
-
   "model_pressure": {
     "eyebrow": "MODEL PRESSURE",
     "title": "Model Pressure",
@@ -1598,7 +1594,6 @@
     "no_group_usage": "No groups",
     "group_models": "Model allowlist"
   },
-
   "providersPage": {
     "header": {
       "title": "AI Providers",
@@ -1701,6 +1696,27 @@
           "name": "Devin / Cognition",
           "description": "Built into CLIProxyAPI; OAuth login registers its models and quota automatically."
         }
+      },
+      "modelPolicy": {
+        "eyebrow": "Provider model policy",
+        "description": "Limit models available from this provider and map client-facing model IDs to upstream models.",
+        "summaryHint": "Configure allowed models and aliases from the dynamic model catalog without changing plugin configuration.",
+        "allowedTitle": "Allowed models",
+        "allowedHint": "An empty list is unrestricted. Custom model IDs and * wildcards such as gpt-* are supported.",
+        "unrestricted": "Make unrestricted",
+        "unrestrictedHint": "Models are unrestricted; the full provider catalog is available.",
+        "searchPlaceholder": "Search models or enter a custom pattern",
+        "addCustom": "Add custom value",
+        "removeAllowed": "Remove {{model}}",
+        "loading": "Loading model catalog…",
+        "empty": "No matching models. You can add a custom value.",
+        "catalogError": "The model catalog could not be loaded. Custom model IDs and wildcards are still supported.",
+        "aliasTitle": "Model aliases",
+        "aliasHint": "Expose client-friendly model IDs and map them to upstream models.",
+        "keepOriginal": "Keep original ID",
+        "forceMapping": "Force mapping",
+        "addAlias": "Add alias",
+        "restrictedCount": "Restricted to {{count}} models or patterns."
       }
     },
     "table": {

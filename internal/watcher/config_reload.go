@@ -114,7 +114,9 @@ func (w *Watcher) reloadConfig() bool {
 
 	var affectedOAuthProviders []string
 	if oldConfig != nil {
-		_, affectedOAuthProviders = diff.DiffOAuthExcludedModelChanges(oldConfig.OAuthExcludedModels, newConfig.OAuthExcludedModels)
+		_, allowedProviders := diff.DiffOAuthAllowedModelChanges(oldConfig.OAuthAllowedModels, newConfig.OAuthAllowedModels)
+		_, excludedProviders := diff.DiffOAuthExcludedModelChanges(oldConfig.OAuthExcludedModels, newConfig.OAuthExcludedModels)
+		affectedOAuthProviders = append(allowedProviders, excludedProviders...)
 	}
 
 	util.SetLogLevel(newConfig)

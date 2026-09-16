@@ -342,6 +342,56 @@ func NormalizeHeaders(headers map[string]string) map[string]string {
 	return clean
 }
 
+// NormalizeAllowedModels trims and deduplicates model allowlist patterns.
+// It preserves user-facing case and the order of first occurrences while comparing case-insensitively.
+func NormalizeAllowedModels(models []string) []string {
+	if len(models) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	out := make([]string, 0, len(models))
+	for _, raw := range models {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// NormalizeOAuthAllowedModels cleans provider -> allowed models mappings by normalizing provider keys
+// and applying model allowlist normalization to each entry.
+func NormalizeOAuthAllowedModels(entries map[string][]string) map[string][]string {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(entries))
+	for provider, models := range entries {
+		key := strings.ToLower(strings.TrimSpace(provider))
+		if key == "" {
+			continue
+		}
+		normalized := NormalizeAllowedModels(models)
+		if len(normalized) == 0 {
+			continue
+		}
+		out[key] = normalized
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // NormalizeExcludedModels trims, lowercases, and deduplicates model exclusion patterns.
 // It preserves the order of first occurrences and drops empty entries.
 func NormalizeExcludedModels(models []string) []string {

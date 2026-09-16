@@ -202,6 +202,8 @@ type HostConfigSummary struct {
 	ProxyURL string
 	// ForceModelPrefix reports whether model aliases should keep provider prefixes.
 	ForceModelPrefix bool
+	// AllowedModels maps providers to configured model allowlist patterns.
+	AllowedModels map[string][]string
 	// OAuthModelAlias maps providers to configured model aliases.
 	OAuthModelAlias map[string][]ModelAlias
 	// ExcludedModels maps providers to model names hidden by host configuration.

@@ -102,7 +102,6 @@
     "oauth": "OAuth 登录",
     "quota_management": "配额管理",
     "usage_monitor": "用量监控",
-
     "model_pressure": "模型压力",
     "access_keys": "访问密钥",
     "plugins": "插件管理",
@@ -127,7 +126,6 @@
     "oauth": "OAuth 授权登录",
     "quota_management": "API Key 与限额",
     "usage_monitor": "按提供商和模型统计 Token",
-
     "model_pressure": "各模型实时并发与速率",
     "access_keys": "订阅用户的密钥与分组",
     "plugins": "插件启停与配置",
@@ -1495,7 +1493,6 @@
     "reset_confirm_button": "确认使用",
     "reset_success": "{{quota}}已重置",
     "reset_failed": "重置失败：{{message}}",
-
     "plan": "套餐",
     "monthly_credits": "月度余额",
     "used_percent": "已用 {{value}}%",
@@ -1514,7 +1511,6 @@
       "mcp": "MCP 每月额度"
     }
   },
-
   "model_pressure": {
     "eyebrow": "MODEL PRESSURE",
     "title": "模型压力",
@@ -1598,7 +1594,6 @@
     "no_group_usage": "暂无分组",
     "group_models": "模型白名单"
   },
-
   "providersPage": {
     "header": {
       "title": "AI 提供商",
@@ -1701,6 +1696,27 @@
           "name": "Devin / Cognition",
           "description": "CLIProxyAPI 内置 Provider；OAuth 登录后会自动注册模型和额度。"
         }
+      },
+      "modelPolicy": {
+        "eyebrow": "提供商模型策略",
+        "description": "限制该提供商可用的模型，并把客户端模型名称映射到真实上游模型。",
+        "summaryHint": "通过动态模型目录配置允许的模型和模型映射；不修改插件自身配置。",
+        "allowedTitle": "允许的模型",
+        "allowedHint": "空列表表示不限制。支持自定义模型名和 * 通配符，例如 gpt-*。",
+        "unrestricted": "设为不限制",
+        "unrestrictedHint": "当前不限制模型；提供商目录中的全部模型均可用。",
+        "searchPlaceholder": "搜索模型或输入自定义模式",
+        "addCustom": "添加自定义值",
+        "removeAllowed": "移除 {{model}}",
+        "loading": "正在加载模型目录…",
+        "empty": "没有匹配的模型；可添加自定义值。",
+        "catalogError": "模型目录加载失败，仍可输入自定义模型名或通配符。",
+        "aliasTitle": "模型映射",
+        "aliasHint": "为客户端提供友好的模型名，并映射到真实上游模型。",
+        "keepOriginal": "保留原模型名",
+        "forceMapping": "强制映射",
+        "addAlias": "添加映射",
+        "restrictedCount": "已限制为 {{count}} 个模型或模式。"
       }
     },
     "table": {

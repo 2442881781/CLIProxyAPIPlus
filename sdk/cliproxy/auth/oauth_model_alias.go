@@ -464,6 +464,9 @@ func modelAliasChannel(auth *Auth) string {
 	}
 	provider := strings.ToLower(strings.TrimSpace(auth.Provider))
 	authKind := auth.AuthKind()
+	if authKind == AuthKindAPIKey && (IsPluginOwnedAuth(auth) || IsPluginVirtualAuth(auth)) {
+		return provider
+	}
 	return OAuthModelAliasChannel(provider, authKind)
 }
 

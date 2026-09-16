@@ -107,10 +107,30 @@ type Auth struct {
 
 const (
 	AttributeAuthIndexSeed   = "auth_index_seed"
+	AttributePluginOwned     = "plugin_owned"
 	AttributePluginVirtual   = "plugin_virtual"
 	AttributeVirtualSource   = "virtual_source"
 	pluginVirtualAttrEnabled = "true"
 )
+
+// MarkPluginOwnedAuth marks an auth record produced by a plugin auth provider.
+func MarkPluginOwnedAuth(auth *Auth) {
+	if auth == nil {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	auth.Attributes[AttributePluginOwned] = pluginVirtualAttrEnabled
+}
+
+// IsPluginOwnedAuth reports whether an auth record was produced by a plugin auth provider.
+func IsPluginOwnedAuth(auth *Auth) bool {
+	if auth == nil || len(auth.Attributes) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(auth.Attributes[AttributePluginOwned]), pluginVirtualAttrEnabled)
+}
 
 // MarkPluginVirtualAuth marks an auth that was expanded from a plugin-owned source file.
 func MarkPluginVirtualAuth(auth *Auth, sourcePath string, ordinal int) {

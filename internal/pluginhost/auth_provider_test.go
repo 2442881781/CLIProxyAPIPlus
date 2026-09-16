@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
@@ -536,5 +537,16 @@ func TestPluginTokenStorageRejectsEmptyPayload(t *testing.T) {
 	}
 	if errSave := storage.SaveTokenToFile(filepath.Join(t.TempDir(), "auth.json")); errSave == nil {
 		t.Fatal("SaveTokenToFile() error = nil, want empty payload error")
+	}
+}
+
+func TestPluginAuthDataMarksAuthAsPluginOwned(t *testing.T) {
+	auth := pluginAuthDataToCoreAuth(pluginapi.AuthData{
+		Provider:   "plugin-provider",
+		ID:         "auth-1",
+		Attributes: map[string]string{"api_key": "secret"},
+	}, "", "", "")
+	if auth == nil || !coreauth.IsPluginOwnedAuth(auth) {
+		t.Fatalf("plugin auth = %#v, want plugin-owned marker", auth)
 	}
 }
