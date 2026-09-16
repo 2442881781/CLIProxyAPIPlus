@@ -294,12 +294,13 @@ func (h *Handler) GetAccessKeyUsage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "access key not found"})
 		return
 	}
+	rate, _ := store.KeyRate(entry.ID)
 	c.JSON(http.StatusOK, gin.H{
 		"id":         entry.ID,
 		"name":       entry.Name,
 		"key_prefix": entry.KeyPrefix,
 		"group":      entry.Group,
-		"usage":      storeaccess.UsageSummary(entry.Usage, false),
+		"usage":      storeaccess.UsageSummary(entry.Usage, false, rate),
 		"models":     sortedDimRows(entry.Usage.Models, "model"),
 		"daily":      sortedDimRows(entry.Usage.Daily, "day"),
 		"auths":      sortedDimRows(entry.Usage.Auths, "auth"),

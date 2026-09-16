@@ -74,6 +74,7 @@ func (s *Server) setupRoutes() {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid access key"})
 			return
 		}
+		keyRate, _ := store.KeyRate(entry.ID)
 		resp := gin.H{
 			"name":                 entry.Name,
 			"key_prefix":           entry.KeyPrefix,
@@ -84,7 +85,7 @@ func (s *Server) setupRoutes() {
 			"quota":                entry.Quota,
 			"rate_limit":           entry.RateLimit,
 			"effective_rate_limit": store.EffectiveRateLimit(entry),
-			"usage":                storeaccess.UsageSummary(entry.Usage, false),
+			"usage":                storeaccess.UsageSummary(entry.Usage, false, keyRate),
 		}
 		if grp := store.GroupFor(entry); grp != nil {
 			resp["group"] = gin.H{

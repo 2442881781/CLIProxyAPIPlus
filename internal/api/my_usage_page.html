@@ -94,6 +94,7 @@ async function load(key){
     + stat('累计 Token', fmt(u.total_tokens), fmt(u.requests||0)+' 次请求')
     + stat('本周期用量', fmt(periodUsed), periodLabel(q.period)+'限额 '+(limit>0?fmt(limit):'不限'))
     + stat('请求成功率', (u.requests>0?Math.round((1-(u.failed||0)/u.requests)*100):100)+'%', '失败 '+fmt(u.failed||0)+' 次')
+    + stat('当前速率', ((u.rates&&u.rates.output_tokens_per_second)||0).toFixed(1)+' tok/s', ((u.rates&&u.rates.requests_per_second)||0).toFixed(2)+' 次/s · 近 60s')
     + stat('最近使用', u.last_used_at?fmtDate(u.last_used_at):'从未使用', '')
     + '</div>';
   if(limit>0){

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -107,12 +108,13 @@ type Usage struct {
 type Store struct {
 	mu        sync.RWMutex
 	path      string
-	keys      map[string]*AccessKey    // by id
-	byHash    map[string]*AccessKey    // by sha256 hex
-	groups    map[string]*Group        // by name
-	inflight  map[string]int64         // in-flight requests per group (memory only)
-	groupRate map[string]*tokenBucket  // shared rpm bucket per group (memory only)
-	keyRate   map[string]*keyRateState // per-key buckets + in-flight (memory only)
+	keys      map[string]*AccessKey            // by id
+	byHash    map[string]*AccessKey            // by sha256 hex
+	groups    map[string]*Group                // by name
+	inflight  map[string]int64                 // in-flight requests per group (memory only)
+	groupRate map[string]*tokenBucket          // shared rpm bucket per group (memory only)
+	keyRate   map[string]*keyRateState         // per-key buckets + in-flight (memory only)
+	keyTPS    map[string]*coreusage.RateWindow // per-key live throughput gauge (memory only)
 	loaded    bool
 	managed   bool // true only for the Configure()-installed shared store
 	fileMod   time.Time
@@ -646,6 +648,7 @@ func (s *Store) RecordUsage(key string, ev UsageEvent) bool {
 	s.recordDetailLocked(entry, ev, now)
 	s.recordGroupUsageLocked(entry, ev.Tokens, ev.Failed, now)
 	s.chargeKeyTPMLocked(entry, ev.Tokens, now)
+	s.keyRateWindowLocked(entry.ID).Add(now, ev.InputTokens, ev.OutputTokens, ev.Tokens)
 	s.dirty = true
 	return true
 }
