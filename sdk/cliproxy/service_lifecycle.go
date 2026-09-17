@@ -81,6 +81,9 @@ func (s *Service) Run(ctx context.Context) error {
 		if errLoad := s.coreManager.Load(ctx); errLoad != nil {
 			log.Warnf("failed to load auth store: %v", errLoad)
 		}
+		if errLoadQuota := s.coreManager.LoadProviderQuotas(ctx); errLoadQuota != nil {
+			log.Warnf("failed to load provider quota store: %v", errLoadQuota)
+		}
 		s.registerConfigAPIKeyAuths(coreauth.WithSkipPersist(ctx), s.cfg)
 		if s.cfg.SaveCooldownStatus {
 			if errRestoreCooldown := s.coreManager.RestoreCooldownStates(ctx); errRestoreCooldown != nil {
@@ -94,6 +97,7 @@ func (s *Service) Run(ctx context.Context) error {
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(ctx, interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
+		s.startProviderQuotaRefresh(ctx)
 	}
 
 	if !homeEnabled {
@@ -285,6 +289,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 		// legacy refresh loop removed; only stopping core auth manager below
 
+		s.stopProviderQuotaRefresh()
 		if s.watcherCancel != nil {
 			s.watcherCancel()
 		}

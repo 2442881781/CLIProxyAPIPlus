@@ -6,6 +6,7 @@ package cliproxy
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api"
@@ -93,6 +94,12 @@ type Service struct {
 
 	// cooldownStateStore persists runtime cooldown state when enabled.
 	cooldownStateStore coreauth.CooldownStateStore
+
+	providerQuotaRefreshMu      sync.Mutex
+	providerQuotaRefreshCtx     context.Context
+	providerQuotaRefreshCancel  context.CancelFunc
+	providerQuotaRefreshDone    chan struct{}
+	providerQuotaRefreshRunning atomic.Bool
 
 	// pluginHost owns dynamic plugin lifecycle and runtime capability adapters.
 	pluginHost *pluginhost.Host

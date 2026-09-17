@@ -18,6 +18,7 @@ import (
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	log "github.com/sirupsen/logrus"
 )
 
 type executorManager interface {
@@ -26,9 +27,15 @@ type executorManager interface {
 	UnregisterExecutor(provider string)
 }
 
+type staticCandidateManager interface {
+	Register(context.Context, *coreauth.Auth) (*coreauth.Auth, error)
+	Remove(context.Context, string)
+}
+
 type executorRegistration struct {
-	provider string
-	adapter  *executorAdapter
+	provider        string
+	adapter         *executorAdapter
+	staticCandidate bool
 }
 
 func (h *Host) RegisterExecutors(manager executorManager, modelRegistry modelProviderRegistry) {
@@ -99,7 +106,9 @@ func (h *Host) RegisterExecutors(manager executorManager, modelRegistry modelPro
 		}
 
 		nextProviders[provider] = struct{}{}
-		executorRegistrations = append(executorRegistrations, newExecutorAdapterRegistration(h, record, provider, executor))
+		executorRegistration := newExecutorAdapterRegistration(h, record, provider, executor)
+		executorRegistration.staticCandidate = executorScopeAllowsStaticModels(record.plugin.Capabilities) && len(selectedModels[record.id]) > 0
+		executorRegistrations = append(executorRegistrations, executorRegistration)
 		appendModelsForProvider(providerModels, provider, selectedModels[record.id])
 		if len(selectedModels[record.id]) > 0 {
 			clientID := pluginExecutorModelClientID(record.id, provider)
@@ -111,14 +120,18 @@ func (h *Host) RegisterExecutors(manager executorManager, modelRegistry modelPro
 			nextModelClients[clientID] = struct{}{}
 		}
 	}
-	h.commitExecutorState(snap, manager, modelRegistry, providerModels, executorRegistrations, nextProviders, modelClientRegistrations, nextModelClients)
+	h.commitExecutorState(context.Background(), snap, manager, modelRegistry, providerModels, executorRegistrations, nextProviders, modelClientRegistrations, nextModelClients)
+}
+
+func pluginStaticAuthID(provider string) string {
+	return "plugin-static:" + strings.ToLower(strings.TrimSpace(provider))
 }
 
 func pluginExecutorModelClientID(pluginID, provider string) string {
 	return "plugin:" + pluginID + ":" + provider + ":executor"
 }
 
-func (h *Host) commitExecutorState(snap *Snapshot, manager executorManager, modelRegistry modelRegistry, providerModels map[string][]*registry.ModelInfo, registrations []executorRegistration, nextProviders map[string]struct{}, modelClientRegistrations []modelClientRegistration, nextModelClients map[string]struct{}) {
+func (h *Host) commitExecutorState(ctx context.Context, snap *Snapshot, manager executorManager, modelRegistry modelRegistry, providerModels map[string][]*registry.ModelInfo, registrations []executorRegistration, nextProviders map[string]struct{}, modelClientRegistrations []modelClientRegistration, nextModelClients map[string]struct{}) {
 	if h == nil || manager == nil {
 		return
 	}
@@ -153,10 +166,9 @@ func (h *Host) commitExecutorState(snap *Snapshot, manager executorManager, mode
 	h.executorModelClientIDs = nextModelClients
 
 	for _, registration := range registrations {
-		if registration.adapter == nil || registration.provider == "" {
-			continue
+		if registration.adapter != nil && registration.provider != "" {
+			manager.RegisterExecutor(registration.adapter)
 		}
-		manager.RegisterExecutor(registration.adapter)
 	}
 	for _, provider := range staleProviders {
 		existing, okExecutor := manager.Executor(provider)
@@ -167,8 +179,46 @@ func (h *Host) commitExecutorState(snap *Snapshot, manager executorManager, mode
 	}
 	h.mu.Unlock()
 
+	staticProviders := make(map[string]struct{}, len(registrations))
+	for _, registration := range registrations {
+		if registration.staticCandidate {
+			staticProviders[registration.provider] = struct{}{}
+		}
+	}
+	removedStaticProviders := make(map[string]struct{})
+	if candidateManager, okCandidateManager := manager.(staticCandidateManager); okCandidateManager {
+		for provider := range nextProviders {
+			if _, static := staticProviders[provider]; !static {
+				candidateManager.Remove(coreauth.WithSkipPersist(ctx), pluginStaticAuthID(provider))
+				removedStaticProviders[provider] = struct{}{}
+			}
+		}
+		for _, provider := range staleProviders {
+			candidateManager.Remove(coreauth.WithSkipPersist(ctx), pluginStaticAuthID(provider))
+			removedStaticProviders[provider] = struct{}{}
+		}
+		for provider := range staticProviders {
+			candidate := &coreauth.Auth{
+				ID:         pluginStaticAuthID(provider),
+				Provider:   provider,
+				Status:     coreauth.StatusActive,
+				Attributes: map[string]string{},
+			}
+			coreauth.MarkPluginStaticAuth(candidate)
+			if _, errRegister := candidateManager.Register(coreauth.WithSkipPersist(ctx), candidate); errRegister != nil {
+				log.WithField("provider", provider).WithError(errRegister).Warn("pluginhost: failed to register static plugin routing candidate")
+			}
+		}
+	}
+
 	if modelRegistry == nil {
 		return
+	}
+	for provider := range removedStaticProviders {
+		modelRegistry.UnregisterClient(pluginStaticAuthID(provider))
+	}
+	for provider := range staticProviders {
+		modelRegistry.RegisterClient(pluginStaticAuthID(provider), provider, providerModels[provider])
 	}
 	for _, registration := range modelClientRegistrations {
 		modelRegistry.RegisterClient(registration.clientID, registration.provider, registration.models)
@@ -213,7 +263,6 @@ func (h *Host) snapshotModelRegistrations() []pluginModelRegistration {
 	})
 	return registrations
 }
-
 func (h *Host) modelRegistration(pluginID string) pluginModelRegistration {
 	if h == nil {
 		return pluginModelRegistration{}
@@ -998,6 +1047,9 @@ func (a *executorAdapter) HttpRequest(ctx context.Context, auth *coreauth.Auth, 
 }
 
 func buildExecutorRequest(host *Host, provider string, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) pluginapi.ExecutorRequest {
+	if coreauth.IsPluginStaticAuth(auth) {
+		auth = nil
+	}
 	return pluginapi.ExecutorRequest{
 		AuthID:          authID(auth),
 		AuthProvider:    authProvider(auth),

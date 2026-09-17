@@ -275,6 +275,9 @@ func (b *Builder) Build() (*Service, error) {
 		coreManager = coreauth.NewManager(tokenStore, newRoutingSelector(routingState), nil)
 		appliedRoutingState = &routingState
 	}
+	if provider, ok := sdkAuth.GetTokenStore().(coreauth.ProviderQuotaStoreProvider); ok {
+		coreManager.SetProviderQuotaStore(provider.ProviderQuotaStore())
+	}
 	// Attach a default RoundTripper provider so providers can opt-in per-auth transports.
 	coreManager.SetRoundTripperProvider(newDefaultRoundTripperProvider())
 	coreManager.SetConfig(b.cfg)
@@ -307,6 +310,7 @@ func (b *Builder) Build() (*Service, error) {
 	service.serverOptions = append(service.serverOptions,
 		api.WithPostAuthPersistHook(service.runtimeAuthSyncHook()),
 		api.WithPluginHost(pluginHost),
+		api.WithProviderQuotaRefreshHook(service.RefreshProviderQuotas),
 		api.WithConfigReloadHook(func(_ context.Context, _ *config.Config) {
 			service.reloadConfigFromWatcher()
 		}),

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/providerquota"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
@@ -302,32 +303,19 @@ func (h *Handler) observePluginQuota(c *gin.Context, auth *coreauth.Auth, quota 
 	if h == nil || h.authManager == nil || auth == nil {
 		return
 	}
-	remaining, ok := normalizedQuotaRemainingFraction(quota)
+	remainingPercent, ok := providerquota.RemainingPercent(quota)
 	if !ok {
 		return
 	}
-	signals := map[string]string{"normalized_quota_remaining_percent": strconv.FormatFloat(remaining*100, 'f', 6, 64)}
-	if _, errObserve := h.authManager.ObserveQuota(c.Request.Context(), auth.ID, time.Now(), signals); errObserve != nil {
+	signals := map[string]string{"normalized_quota_remaining_percent": strconv.FormatFloat(remainingPercent, 'f', 6, 64)}
+	if _, errObserve := h.authManager.ObserveProviderCredentialQuota(c.Request.Context(), auth.ID, time.Now(), signals); errObserve != nil {
 		log.WithError(errObserve).Warnf("failed to record quota observation for credential %s", auth.Index)
 	}
 }
 
 func normalizedQuotaRemainingFraction(quota pluginapi.QuotaFetchResponse) (float64, bool) {
-	remaining := 1.0
-	found := false
-	for _, group := range quota.Groups {
-		for _, bucket := range group.Buckets {
-			value := bucket.RemainingFraction
-			if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 1 {
-				continue
-			}
-			if !found || value < remaining {
-				remaining = value
-			}
-			found = true
-		}
-	}
-	return remaining, found
+	remainingPercent, ok := providerquota.RemainingPercent(quota)
+	return remainingPercent / 100, ok
 }
 
 // ResetPluginQuota handles DELETE /v0/management/plugins/:id/quota and POST /v0/management/plugins/:id/quota/reset

@@ -18,7 +18,7 @@ export type QuotaTabId = 'all' | QuotaProviderType;
 /** Page size also bounds upstream concurrency for Refresh all. */
 export const QUOTA_PAGE_SIZE = 20;
 
-/** Successful quota snapshots remain fresh for five minutes across reloads. */
+/** Successful in-memory snapshots remain fresh for five minutes within the current page session. */
 export const QUOTA_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /** Card sorting: provider grouping by default, or soonest recovery first. */

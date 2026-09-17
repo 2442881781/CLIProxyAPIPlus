@@ -433,3 +433,19 @@ func (h *Host) callQuotaReset(ctx context.Context, record capabilityRecord, prov
 	}
 	return resetResp, true, nil
 }
+
+// FetchCredentialQuota implements auth.ProviderQuotaFetcher using active
+// plugin QuotaProvider capabilities.
+func (h *Host) FetchCredentialQuota(ctx context.Context, auth *coreauth.Auth) (pluginapi.QuotaFetchResponse, bool, error) {
+	if h == nil || auth == nil {
+		return pluginapi.QuotaFetchResponse{}, false, nil
+	}
+	auth.EnsureIndex()
+	return h.FetchQuota(ctx, pluginapi.QuotaFetchRequest{
+		AuthIndex:  auth.Index,
+		AuthID:     auth.ID,
+		Provider:   auth.Provider,
+		Metadata:   auth.Metadata,
+		Attributes: auth.Attributes,
+	})
+}

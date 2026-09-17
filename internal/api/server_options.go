@@ -26,6 +26,7 @@ type serverOptionConfig struct {
 	postAuthPersistHook   auth.PostAuthHook
 	pluginHost            *pluginhost.Host
 	configReloadHook      func(context.Context, *config.Config)
+	quotaRefreshHook      func(context.Context, string) error
 	exampleAPIKeySafeMode bool
 }
 
@@ -125,6 +126,13 @@ func WithPluginHost(host *pluginhost.Host) ServerOption {
 func WithConfigReloadHook(hook func(context.Context, *config.Config)) ServerOption {
 	return func(cfg *serverOptionConfig) {
 		cfg.configReloadHook = hook
+	}
+}
+
+// WithProviderQuotaRefreshHook registers the service-level provider quota refresher.
+func WithProviderQuotaRefreshHook(hook func(context.Context, string) error) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.quotaRefreshHook = hook
 	}
 }
 
