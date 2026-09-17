@@ -59,6 +59,7 @@ import type { Theme } from '@/types';
 const sidebarIcons: Record<string, ReactNode> = {
   dashboard: <IconSidebarDashboard size={18} />,
   aiProviders: <IconSidebarProviders size={18} />,
+  modelRoutes: <IconModelCluster size={18} />,
   authFiles: <IconSidebarAuthFiles size={18} />,
   oauth: <IconSidebarOauth size={18} />,
   quota: <IconSidebarQuota size={18} />,
@@ -613,6 +614,12 @@ export function MainLayout() {
           icon: sidebarIcons.aiProviders,
         },
         {
+          path: '/model-routes',
+          labelKey: 'nav.model_routes',
+          metaKey: 'nav_meta.model_routes',
+          icon: sidebarIcons.modelRoutes,
+        },
+        {
           path: '/auth-files',
           labelKey: 'nav.auth_files',
           metaKey: 'nav_meta.auth_files',
@@ -738,6 +745,11 @@ export function MainLayout() {
         if (normalizedPath.startsWith('/auth-files/oauth-model-alias')) return authFilesIndex + 0.2;
         return authFilesIndex + 0.05;
       }
+    }
+
+    const modelRoutesIndex = navOrder.indexOf('/model-routes');
+    if (modelRoutesIndex !== -1 && normalizedPath.startsWith('/model-routes/')) {
+      return modelRoutesIndex + 0.1;
     }
 
     const exactIndex = navOrder.indexOf(normalizedPath);

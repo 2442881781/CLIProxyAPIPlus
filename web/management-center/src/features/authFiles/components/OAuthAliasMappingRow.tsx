@@ -72,6 +72,13 @@ export function OAuthAliasMappingRow({
           onChange={(value) => onChange('fork', value)}
           disabled={disabled}
         />
+        <ToggleSwitch
+          label={t('oauth_model_alias.force_mapping_label')}
+          labelPosition="left"
+          checked={Boolean(entry.forceMapping)}
+          onChange={(value) => onChange('forceMapping', value)}
+          disabled={disabled}
+        />
         <Button
           variant="ghost"
           size="sm"

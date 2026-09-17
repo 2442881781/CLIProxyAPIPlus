@@ -25,7 +25,6 @@ import { AuthFileModelsModal } from '@/features/authFiles/components/AuthFileMod
 import { AuthFilesToolbar } from '@/features/authFiles/components/AuthFilesToolbar';
 import { BatchActionBar } from '@/features/authFiles/components/BatchActionBar';
 import { OAuthExcludedCard } from '@/features/authFiles/components/OAuthExcludedCard';
-import { OAuthModelAliasCard } from '@/features/authFiles/components/OAuthModelAliasCard';
 import { ProviderTabs } from '@/features/authFiles/components/ProviderTabs';
 import { VaultHeader } from '@/features/authFiles/components/VaultHeader';
 import { VaultPulse } from '@/features/authFiles/components/VaultPulse';
@@ -92,7 +91,6 @@ export function AuthFilesPage() {
     compact: DEFAULT_COMPACT_PAGE_SIZE,
   });
   const [pageSizeInput, setPageSizeInput] = useState('9');
-  const [viewMode, setViewMode] = useState<'diagram' | 'list'>('list');
   const [sortMode, setSortMode] = useState<AuthFilesSortMode>('default');
   const [uiStateHydrated, setUiStateHydrated] = useState(false);
 
@@ -149,19 +147,9 @@ export function AuthFilesPage() {
   const {
     excluded,
     excludedError,
-    modelAlias,
-    modelAliasError,
-    allProviderModels,
     loadExcluded,
-    loadModelAlias,
     deleteExcluded,
-    deleteModelAlias,
-    handleMappingUpdate,
-    handleDeleteLink,
-    handleToggleFork,
-    handleRenameAlias,
-    handleDeleteAlias,
-  } = useAuthFilesOauth({ viewMode, files });
+  } = useAuthFilesOauth({ viewMode: 'list', files });
 
   const {
     prefixProxyEditor,
@@ -353,8 +341,8 @@ export function AuthFilesPage() {
   const initialLoadDoneRef = useRef(false);
 
   const handleHeaderRefresh = useCallback(async () => {
-    await Promise.all([loadFiles({ background: true }), loadExcluded(), loadModelAlias()]);
-  }, [loadFiles, loadExcluded, loadModelAlias]);
+    await Promise.all([loadFiles({ background: true }), loadExcluded()]);
+  }, [loadFiles, loadExcluded]);
 
   useHeaderRefresh(handleHeaderRefresh);
 
@@ -363,8 +351,7 @@ export function AuthFilesPage() {
     void loadFiles(initialLoadDoneRef.current ? { background: true } : undefined);
     initialLoadDoneRef.current = true;
     loadExcluded();
-    loadModelAlias();
-  }, [isCurrentLayer, loadFiles, loadExcluded, loadModelAlias]);
+  }, [isCurrentLayer, loadFiles, loadExcluded]);
 
   useInterval(
     () => {
@@ -510,21 +497,6 @@ export function AuthFilesPage() {
       }
       const nextSearch = params.toString();
       navigate(`/auth-files/oauth-excluded${nextSearch ? `?${nextSearch}` : ''}`, {
-        state: { fromAuthFiles: true },
-      });
-    },
-    [filter, navigate]
-  );
-
-  const openModelAliasEditor = useCallback(
-    (provider?: string) => {
-      const providerValue = (provider || (filter !== 'all' ? String(filter) : '')).trim();
-      const params = new URLSearchParams();
-      if (providerValue) {
-        params.set('provider', providerValue);
-      }
-      const nextSearch = params.toString();
-      navigate(`/auth-files/oauth-model-alias${nextSearch ? `?${nextSearch}` : ''}`, {
         state: { fromAuthFiles: true },
       });
     },
@@ -744,24 +716,6 @@ export function AuthFilesPage() {
           onAdd={() => openExcludedEditor()}
           onEdit={openExcludedEditor}
           onDelete={deleteExcluded}
-        />
-
-        <OAuthModelAliasCard
-          disableControls={disableControls}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          onRetry={loadModelAlias}
-          onAdd={() => openModelAliasEditor()}
-          onEditProvider={openModelAliasEditor}
-          onDeleteProvider={deleteModelAlias}
-          modelAliasError={modelAliasError}
-          modelAlias={modelAlias}
-          allProviderModels={allProviderModels}
-          onUpdate={handleMappingUpdate}
-          onDeleteLink={handleDeleteLink}
-          onToggleFork={handleToggleFork}
-          onRenameAlias={handleRenameAlias}
-          onDeleteAlias={handleDeleteAlias}
         />
       </div>
 
