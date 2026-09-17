@@ -66,4 +66,11 @@ func TestProviderQuotaRanksStaticPluginCandidateAgainstOrdinaryAuth(t *testing.T
 	if selected == nil || selected.ID != staticCandidate.ID || provider != "commandcode" {
 		t.Fatalf("selection = %#v, %q; want static CommandCode candidate", selected, provider)
 	}
+	diagnostics := manager.RecentRoutingDiagnostics(1)
+	if len(diagnostics) != 1 {
+		t.Fatalf("routing diagnostics len = %d, want 1", len(diagnostics))
+	}
+	if diagnostics[0].SelectedProvider != "commandcode" || diagnostics[0].SelectionReason != "highest_remaining_quota" {
+		t.Fatalf("routing diagnostic = %+v, want CommandCode highest quota", diagnostics[0])
+	}
 }

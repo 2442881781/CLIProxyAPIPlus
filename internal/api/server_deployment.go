@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -27,7 +28,7 @@ func (s *Server) deploymentLifecycleMiddleware() gin.HandlerFunc {
 		}
 
 		path := c.Request.URL.Path
-		if path == "/healthz" || path == "/readyz" || path == "/v0/deployment/status" || path == "/v0/deployment/drain" {
+		if path == "/healthz" || path == "/readyz" || path == "/v0/deployment/status" || path == "/v0/deployment/drain" || path == "/v0/deployment/routing-diagnostics" {
 			c.Next()
 			return
 		}
@@ -64,6 +65,24 @@ func (s *Server) deploymentStatus() deploymentStatus {
 		ActiveRequests:   s.activeRequests.Load(),
 		ActiveWebSockets: s.activeWebSockets.Load(),
 	}
+}
+
+func (s *Server) routingDiagnostics(c *gin.Context) {
+	if !s.authorizeDeploymentControl(c) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	limit := 32
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if parsed, errParse := strconv.Atoi(raw); errParse == nil && parsed > 0 && parsed <= 128 {
+			limit = parsed
+		}
+	}
+	if s.handlers == nil || s.handlers.AuthManager == nil {
+		c.JSON(http.StatusOK, gin.H{"diagnostics": []any{}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"diagnostics": s.handlers.AuthManager.RecentRoutingDiagnostics(limit)})
 }
 
 func (s *Server) authorizeDeploymentControl(c *gin.Context) bool {

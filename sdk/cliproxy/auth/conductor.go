@@ -158,6 +158,8 @@ type Manager struct {
 	providerOffsets             map[string]int
 	homeDispatchBundle          atomic.Pointer[HomeDispatchBundle]
 	homeInFlightPublisherConfig atomic.Pointer[HomeInFlightPublisherConfig]
+	routingDiagnosticsMu        sync.Mutex
+	routingDiagnostics          []RoutingDiagnostic
 
 	// Retry controls request retry behavior.
 	requestRetry        atomic.Int32

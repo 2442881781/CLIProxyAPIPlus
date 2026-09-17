@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 func TestDeploymentReadinessAndDrain(t *testing.T) {
@@ -151,5 +153,55 @@ func TestDeploymentControlLoadsTokenFileAfterServerStart(t *testing.T) {
 	server.engine.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+func TestRoutingDiagnosticsRequiresLoopbackAndToken(t *testing.T) {
+	server := newTestServerWithOptions(t)
+	server.deploymentControlKey = "deploy-secret"
+
+	for _, testCase := range []struct {
+		name       string
+		remoteAddr string
+		token      string
+	}{
+		{name: "missing token", remoteAddr: "127.0.0.1:12345"},
+		{name: "wrong token", remoteAddr: "127.0.0.1:12345", token: "wrong"},
+		{name: "non-loopback", remoteAddr: "192.0.2.10:12345", token: "deploy-secret"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/v0/deployment/routing-diagnostics", nil)
+			req.RemoteAddr = testCase.remoteAddr
+			req.Header.Set(deploymentControlHeader, testCase.token)
+			server.engine.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+			}
+		})
+	}
+}
+
+func TestRoutingDiagnosticsReturnsSafeSnapshot(t *testing.T) {
+	server := newTestServerWithOptions(t)
+	server.deploymentControlKey = "deploy-secret"
+	server.handlers.AuthManager = coreauth.NewManager(nil, nil, nil)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v0/deployment/routing-diagnostics?limit=1", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set(deploymentControlHeader, "deploy-secret")
+	server.engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	var payload struct {
+		Diagnostics []coreauth.RoutingDiagnostic `json:"diagnostics"`
+	}
+	if errDecode := json.Unmarshal(recorder.Body.Bytes(), &payload); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if len(payload.Diagnostics) != 0 {
+		t.Fatalf("diagnostics len = %d, want 0", len(payload.Diagnostics))
 	}
 }
