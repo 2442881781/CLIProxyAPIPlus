@@ -25,7 +25,9 @@ const (
 	defaultCooldownTable      = "cooldown_store"
 	defaultAccessTable        = "access_store"
 	defaultProviderQuotaTable = "provider_quota_store"
+	defaultUsageTable         = "usage_store"
 	defaultAccessKey          = "access-keys"
+	defaultUsageKey           = "usage-monitor"
 	defaultConfigKey          = "config"
 )
 
@@ -38,6 +40,7 @@ type PostgresStoreConfig struct {
 	CooldownTable      string
 	AccessTable        string
 	ProviderQuotaTable string
+	UsageTable         string
 	SpoolDir           string
 }
 
@@ -75,6 +78,9 @@ func NewPostgresStore(ctx context.Context, cfg PostgresStoreConfig) (*PostgresSt
 	}
 	if cfg.ProviderQuotaTable == "" {
 		cfg.ProviderQuotaTable = defaultProviderQuotaTable
+	}
+	if cfg.UsageTable == "" {
+		cfg.UsageTable = defaultUsageTable
 	}
 
 	spoolRoot := strings.TrimSpace(cfg.SpoolDir)
@@ -195,6 +201,17 @@ func (s *PostgresStore) EnsureSchema(ctx context.Context) error {
 		)
 	`, providerQuotaTable)); err != nil {
 		return fmt.Errorf("postgres store: create provider quota table: %w", err)
+	}
+	usageTable := s.fullTableName(s.cfg.UsageTable)
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			id TEXT PRIMARY KEY,
+			content JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`, usageTable)); err != nil {
+		return fmt.Errorf("postgres store: create usage table: %w", err)
 	}
 	return nil
 }
@@ -509,6 +526,43 @@ func (s *PostgresStore) SaveAccessStore(ctx context.Context, data []byte) error 
 	`, s.fullTableName(s.cfg.AccessTable))
 	if _, err := s.db.ExecContext(ctx, query, defaultAccessKey, json.RawMessage(data)); err != nil {
 		return fmt.Errorf("postgres store: save access store: %w", err)
+	}
+	return nil
+}
+
+// LoadUsageMonitor returns the persisted usage monitor snapshot. A nil payload
+// means the backend has not been seeded yet.
+func (s *PostgresStore) LoadUsageMonitor(ctx context.Context) ([]byte, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("postgres store: not initialized")
+	}
+	query := fmt.Sprintf("SELECT content FROM %s WHERE id = $1", s.fullTableName(s.cfg.UsageTable))
+	var content []byte
+	if err := s.db.QueryRowContext(ctx, query, defaultUsageKey).Scan(&content); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("postgres store: load usage monitor: %w", err)
+	}
+	return content, nil
+}
+
+// SaveUsageMonitor persists the usage monitor snapshot in PostgreSQL.
+func (s *PostgresStore) SaveUsageMonitor(ctx context.Context, data []byte) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("postgres store: not initialized")
+	}
+	if !json.Valid(data) {
+		return fmt.Errorf("postgres store: usage monitor contains invalid JSON")
+	}
+	query := fmt.Sprintf(`
+		INSERT INTO %s (id, content, created_at, updated_at)
+		VALUES ($1, $2, NOW(), NOW())
+		ON CONFLICT (id)
+		DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()
+	`, s.fullTableName(s.cfg.UsageTable))
+	if _, err := s.db.ExecContext(ctx, query, defaultUsageKey, json.RawMessage(data)); err != nil {
+		return fmt.Errorf("postgres store: save usage monitor: %w", err)
 	}
 	return nil
 }
