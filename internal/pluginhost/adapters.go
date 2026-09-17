@@ -276,6 +276,7 @@ func (h *Host) RegisterModels(ctx context.Context, modelRegistry modelRegistry) 
 			model.ID = strings.TrimSpace(model.ID)
 			models = append(models, model)
 		}
+		models = h.projectConfiguredModelAliases(record.id, provider, models)
 		if len(models) == 0 {
 			continue
 		}
