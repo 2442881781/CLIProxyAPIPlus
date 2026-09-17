@@ -41,7 +41,6 @@
   .field { display:flex; flex-direction:column; gap:4px; }
   label { font-size:12px; color:var(--text-secondary); }
   input,select { padding:8px 10px; border:1px solid var(--border-color); border-radius:8px; font-size:13px; min-width:160px; background:var(--bg-tertiary); color:var(--text-primary); }
-	.key-group-select { min-width:120px; max-width:180px; padding:6px 8px; }
   input:focus,select:focus { outline:none; border-color:var(--border-hover); }
   button { padding:8px 16px; border:none; border-radius:8px; font-size:13px; cursor:pointer; background:var(--primary-color); color:var(--primary-contrast); }
   button:hover { background:var(--primary-hover); }
@@ -63,8 +62,12 @@
   .actions button { margin-right:6px; }
   #toast { position:fixed; top:20px; right:20px; padding:12px 18px; border-radius:10px; color:#fff; font-size:13px; display:none; z-index:99; box-shadow:var(--floating-shadow); }
   #toast.ok { background:var(--success-color); } #toast.err { background:var(--error-color); }
-  #keyModal { position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; align-items:center; justify-content:center; z-index:50; }
-  #keyModal .box { background:var(--floating-surface); border-radius:14px; padding:28px; max-width:520px; width:92%; box-shadow:var(--floating-shadow); }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; align-items:center; justify-content:center; z-index:50; }
+  .modal .box { background:var(--floating-surface); border-radius:14px; padding:28px; max-width:520px; width:92%; box-shadow:var(--floating-shadow); }
+  #editKeyModal .box { max-width:760px; }
+  .modal-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
+  .modal-actions button { margin:0; }
+  .edit-note { margin-top:14px; font-size:12px; color:var(--text-tertiary); }
   #keyModal .k { word-break:break-all; background:var(--bg-tertiary); padding:14px; border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:13px; margin:14px 0; }
   #login { max-width:360px; margin:15vh auto; }
 </style>
@@ -99,7 +102,7 @@
 
   <div class="card">
     <table>
-      <thead><tr><th>名称</th><th>Key</th><th>分组</th><th>状态</th><th>用量 / 限额</th><th>模型</th><th>过期</th><th class="actions">操作</th></tr></thead>
+      <thead><tr><th>名称</th><th>Key</th><th>分组</th><th>状态</th><th>用量 / 限额</th><th>有效模型</th><th>过期</th><th class="actions">操作</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
   </div>
@@ -130,12 +133,36 @@
   </div>
 </div>
 
-<div id="keyModal"><div class="box">
+<div id="keyModal" class="modal"><div class="box">
   <h1 style="font-size:18px">Key 已创建 — 只显示这一次</h1>
   <div class="k" id="newKey"></div>
   <button onclick="copyKey()">复制 Key</button>
   <button class="ghost" onclick="copyUsageLink()">复制用量链接</button>
   <button class="ghost" onclick="closeModal()">关闭</button>
+</div></div>
+
+<div id="editKeyModal" class="modal"><div class="box">
+  <h1 style="font-size:18px">编辑访问 Key</h1>
+  <p class="sub" id="e_prefix"></p>
+  <input id="e_id" type="hidden">
+  <div class="row">
+    <div class="field"><label>名称</label><input id="e_name" placeholder="例如：张三"></div>
+    <div class="field"><label>分组</label><select id="e_group"><option value="">（无分组）</option></select></div>
+    <div class="field"><label>Token 限额</label><input id="e_quota" type="number" min="0" placeholder="0 = 不限"></div>
+    <div class="field"><label>周期</label><select id="e_period"><option value="">总量</option><option value="daily">每日</option><option value="monthly">每月</option></select></div>
+    <div class="field"><label>Key 模型白名单</label><input id="e_models" placeholder="空=继承分组/全部" style="min-width:240px"></div>
+    <div class="field"><label>过期时间</label><input id="e_exp" type="datetime-local"></div>
+  </div>
+  <p class="edit-note" id="e_effective_models"></p>
+  <div class="modal-actions">
+    <button onclick="saveKeyEdit()">保存修改</button>
+    <button id="e_toggle" class="ghost" onclick="toggleEditingKey()">禁用</button>
+    <button class="ghost" onclick="resetEditingKeyUsage()">清零用量</button>
+    <button class="ghost" onclick="rotateEditingKey()">轮换 Key</button>
+    <button class="danger" onclick="deleteEditingKey()">删除 Key</button>
+    <button class="ghost" onclick="closeKeyEdit()">关闭</button>
+  </div>
+  <p class="edit-note">出于安全原因，服务器不保存旧 Key 明文。需要重新复制时请轮换 Key，旧 Key 会立即失效。</p>
 </div></div>
 
 <script>
@@ -195,17 +222,27 @@ async function copyText(text) {
 }
 
 let GROUPS = [];
+let KEYS = [];
 function groupOptions(current) {
   return '<option value="">（无分组）</option>' + GROUPS.map(g =>
     `<option value="${esc(g.name)}" ${g.name===current?'selected':''}>${esc(g.name)}</option>`
   ).join('');
 }
-function refreshKeyGroupSelects() {
-  document.querySelectorAll('.key-group-select').forEach(select => {
-    const current = select.dataset.current || '';
-    select.innerHTML = groupOptions(current);
-    select.value = current;
-  });
+function groupByName(name) { return GROUPS.find(g => g.name === name); }
+function effectiveModels(key) {
+  const own = key.allowed_models || [];
+  const group = groupByName(key.group);
+  const grouped = group ? (group.allowed_models || []) : [];
+  if (own.length && grouped.length) {
+    const exact = own.filter(model => grouped.includes(model));
+    return exact.length ? exact : own.map(model => `${model}（还受分组限制）`);
+  }
+  return own.length ? own : grouped;
+}
+function displayModels(key) {
+  const models = effectiveModels(key);
+  if (models.length) return esc(models.join(', '));
+  return '<span class="muted">全部</span>';
 }
 
 function login() {
@@ -221,26 +258,23 @@ function login() {
 function load() {
   api('GET','/access-keys').then(d => {
     const keys = d['access-keys'] || [];
+	KEYS = keys;
     document.getElementById('tbody').innerHTML = keys.map(k => {
       const q = k.quota || {}, u = k.usage || {};
       const limit = q.token_limit > 0 ? fmt(q.token_limit) + (q.period ? ' / ' + ({daily:'日',monthly:'月'}[q.period]||q.period) : '') : '不限';
       const used = fmt(u.period_key ? u.period_tokens : u.total_tokens);
       const over = q.token_limit > 0 && (u.period_key ? u.period_tokens : u.total_tokens) >= q.token_limit;
-      const models = (k.allowed_models||[]).length ? k.allowed_models.join(', ') : '<span class="muted">全部</span>';
       const exp = k.expires_at ? k.expires_at.slice(0,10) : '<span class="muted">—</span>';
       return `<tr>
         <td>${esc(k.name)||'<span class="muted">(未命名)</span>'}<br><span class="muted mono">${esc(k.id)}</span></td>
         <td class="mono">${esc(k.key_prefix)}…</td>
-        <td><select class="key-group-select" data-id="${esc(k.id)}" data-current="${esc(k.group||'')}" onchange="setKeyGroup(this.dataset.id,this.value)">${groupOptions(k.group||'')}</select></td>
+        <td>${k.group ? esc(k.group) : '<span class="muted">—</span>'}</td>
         <td>${k.disabled ? '<span class="tag off">已禁用</span>' : over ? '<span class="tag off">超额</span>' : '<span class="tag on">启用</span>'}</td>
         <td>${used} / ${limit}<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
-        <td class="mono" style="font-size:11px">${esc(models==='<span class="muted">全部</span>'?'':models)}${models.startsWith('<')?models:''}</td>
+        <td class="mono" style="font-size:11px">${displayModels(k)}</td>
         <td>${exp}</td>
         <td class="actions">
-          <button class="ghost" onclick="toggleKey('${k.id}',${!k.disabled})">${k.disabled?'启用':'禁用'}</button>
-          <button class="ghost" onclick="resetUsage('${k.id}')">清零</button>
-          <button class="ghost" onclick="rotateKey('${k.id}')">轮换</button>
-          <button class="danger" onclick="delKey('${k.id}')">删除</button>
+		  <button class="ghost" onclick="openKeyEdit('${k.id}')">编辑</button>
         </td></tr>`;
     }).join('') || '<tr><td colspan="8" class="muted" style="text-align:center;padding:30px">暂无 key</td></tr>';
   }).catch(e => toast('加载失败: ' + e.message));
@@ -256,7 +290,11 @@ function loadGroups() {
     const cur = sel.value;
     sel.innerHTML = '<option value="">（无分组）</option>' + groups.map(g => `<option value="${esc(g.name)}">${esc(g.name)}</option>`).join('');
     sel.value = cur;
-	refreshKeyGroupSelects();
+	const editGroup = document.getElementById('e_group');
+	const editCurrent = editGroup.value;
+	editGroup.innerHTML = groupOptions(editCurrent);
+	editGroup.value = editCurrent;
+	renderKeys();
     document.getElementById('gbody').innerHTML = groups.map(g => {
       const u = g.usage || {};
       const auths = (g.allowed_auths||[]).length ? g.allowed_auths.join(', ') : '<span class="muted">全部</span>';
@@ -278,6 +316,27 @@ function loadGroups() {
     AUTHS = d.auths || [];
     renderAuthPicker([]);
   }).catch(() => { document.getElementById('g_auths').textContent = '账号列表加载失败'; });
+}
+
+function renderKeys() {
+  if (!KEYS.length) return;
+  document.getElementById('tbody').innerHTML = KEYS.map(k => {
+    const q = k.quota || {}, u = k.usage || {};
+    const limit = q.token_limit > 0 ? fmt(q.token_limit) + (q.period ? ' / ' + ({daily:'日',monthly:'月'}[q.period]||q.period) : '') : '不限';
+    const used = fmt(u.period_key ? u.period_tokens : u.total_tokens);
+    const over = q.token_limit > 0 && (u.period_key ? u.period_tokens : u.total_tokens) >= q.token_limit;
+    const exp = k.expires_at ? k.expires_at.slice(0,10) : '<span class="muted">—</span>';
+    return `<tr>
+      <td>${esc(k.name)||'<span class="muted">(未命名)</span>'}<br><span class="muted mono">${esc(k.id)}</span></td>
+      <td class="mono">${esc(k.key_prefix)}…</td>
+      <td>${k.group ? esc(k.group) : '<span class="muted">—</span>'}</td>
+      <td>${k.disabled ? '<span class="tag off">已禁用</span>' : over ? '<span class="tag off">超额</span>' : '<span class="tag on">启用</span>'}</td>
+      <td>${used} / ${limit}<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
+      <td class="mono" style="font-size:11px">${displayModels(k)}</td>
+      <td>${exp}</td>
+      <td class="actions"><button class="ghost" onclick="openKeyEdit('${k.id}')">编辑</button></td>
+    </tr>`;
+  }).join('');
 }
 
 function renderAuthPicker(checked) {
@@ -331,16 +390,77 @@ function createKey() {
     load();
   }).catch(e => toast('创建失败: ' + e.message));
 }
-function toggleKey(id, en) { api('PATCH','/access-keys?id='+id,{disabled:!en}).then(load).catch(e=>toast(e.message)); }
-function setKeyGroup(id, group) {
-  api('PATCH','/access-keys?id='+encodeURIComponent(id),{group}).then(() => {
-    toast(group ? `已加入「${group}」` : '已移出分组',1);
-    load();
-  }).catch(e => { toast('分组保存失败: ' + e.message); load(); });
+function editingKey() { return KEYS.find(k => k.id === document.getElementById('e_id').value); }
+function toLocalDateTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0,16);
 }
-function resetUsage(id) { if(confirm('清零该 key 的用量计数？')) api('PATCH','/access-keys?id='+id,{reset_usage:true}).then(()=>{toast('已清零',1);load();}).catch(e=>toast(e.message)); }
-function rotateKey(id) { if(confirm('轮换后旧 key 立即失效，继续？')) api('POST','/access-keys/rotate?id='+id,{}).then(d=>{document.getElementById('newKey').textContent=d.key;document.getElementById('keyModal').style.display='flex';load();}).catch(e=>toast(e.message)); }
-function delKey(id) { if(confirm('删除后该 key 立即失效且不可恢复，继续？')) api('DELETE','/access-keys?id='+id).then(()=>{toast('已删除',1);load();}).catch(e=>toast(e.message)); }
+function updateEffectiveModelNote() {
+  const key = editingKey() || {};
+  const draft = {...key,
+    group: document.getElementById('e_group').value,
+    allowed_models: document.getElementById('e_models').value.split(',').map(s=>s.trim()).filter(Boolean)
+  };
+  const models = effectiveModels(draft);
+  document.getElementById('e_effective_models').textContent = models.length
+    ? `保存后有效模型：${models.join(', ')}`
+    : '保存后有效模型：全部（Key 和分组均未限制）';
+}
+function openKeyEdit(id) {
+  const key = KEYS.find(k => k.id === id);
+  if (!key) return;
+  const quota = key.quota || {};
+  document.getElementById('e_id').value = key.id;
+  document.getElementById('e_prefix').textContent = `${key.key_prefix}… · ${key.id}`;
+  document.getElementById('e_name').value = key.name || '';
+  document.getElementById('e_group').innerHTML = groupOptions(key.group || '');
+  document.getElementById('e_group').value = key.group || '';
+  document.getElementById('e_quota').value = quota.token_limit || '';
+  document.getElementById('e_period').value = quota.period || '';
+  document.getElementById('e_models').value = (key.allowed_models || []).join(', ');
+  document.getElementById('e_exp').value = toLocalDateTime(key.expires_at);
+  document.getElementById('e_toggle').textContent = key.disabled ? '启用' : '禁用';
+  updateEffectiveModelNote();
+  document.getElementById('editKeyModal').style.display = 'flex';
+}
+function closeKeyEdit() { document.getElementById('editKeyModal').style.display='none'; }
+function saveKeyEdit() {
+  const id = document.getElementById('e_id').value;
+  const models = document.getElementById('e_models').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const expiry = document.getElementById('e_exp').value;
+  api('PATCH','/access-keys?id='+encodeURIComponent(id),{
+    name: document.getElementById('e_name').value.trim(),
+    group: document.getElementById('e_group').value,
+    allowed_models: models,
+    expires_at: expiry ? new Date(expiry).toISOString() : '',
+    quota: {
+      token_limit: parseInt(document.getElementById('e_quota').value)||0,
+      period: document.getElementById('e_period').value
+    }
+  }).then(() => { toast('Key 已保存',1); closeKeyEdit(); load(); }).catch(e=>toast('保存失败: '+e.message));
+}
+function toggleEditingKey() {
+  const key = editingKey();
+  if (!key) return;
+  api('PATCH','/access-keys?id='+encodeURIComponent(key.id),{disabled:!key.disabled}).then(() => {
+    toast(key.disabled?'Key 已启用':'Key 已禁用',1); closeKeyEdit(); load();
+  }).catch(e=>toast(e.message));
+}
+function resetEditingKeyUsage() {
+  const key = editingKey();
+  if (key && confirm('清零该 Key 的全部用量统计？')) api('PATCH','/access-keys?id='+encodeURIComponent(key.id),{reset_usage:true}).then(()=>{toast('已清零',1);closeKeyEdit();load();}).catch(e=>toast(e.message));
+}
+function rotateEditingKey() {
+  const key = editingKey();
+  if (key && confirm('轮换后旧 Key 立即失效，继续？')) api('POST','/access-keys/rotate?id='+encodeURIComponent(key.id),{}).then(d=>{closeKeyEdit();document.getElementById('newKey').textContent=d.key;document.getElementById('keyModal').style.display='flex';load();}).catch(e=>toast(e.message));
+}
+function deleteEditingKey() {
+  const key = editingKey();
+  if (key && confirm('删除后该 Key 立即失效且不可恢复，继续？')) api('DELETE','/access-keys?id='+encodeURIComponent(key.id)).then(()=>{toast('已删除',1);closeKeyEdit();load();}).catch(e=>toast(e.message));
+}
 async function copyKey() {
 	const copied = await copyText(document.getElementById('newKey').textContent);
 	toast(copied ? 'Key 已复制' : '复制失败，请手动选择 Key', copied);
@@ -373,6 +493,8 @@ if (EMBEDDED) {
 syncTheme();
 if (MGMT) { document.getElementById('login').style.display='none'; document.getElementById('main').style.display=''; load(); }
 document.getElementById('mgmtKey').addEventListener('keydown', e => { if (e.key==='Enter') login(); });
+document.getElementById('e_group').addEventListener('change', updateEffectiveModelNote);
+document.getElementById('e_models').addEventListener('input', updateEffectiveModelNote);
 </script>
 </body>
 </html>
