@@ -442,3 +442,33 @@ func TestModelAliasChannelPluginOwnedAPIKey(t *testing.T) {
 		t.Fatalf("modelAliasChannel() = %q, want %q", got, "opencode-go")
 	}
 }
+
+func TestForcePluginResponseModelUsesClientRequestedModel(t *testing.T) {
+	auth := &Auth{
+		Provider: "commandcode",
+		Attributes: map[string]string{
+			AttributePluginOwned: "true",
+		},
+	}
+	result := forcePluginResponseModel(auth, "deepseek-v4.1-flash", OAuthModelAliasResult{
+		UpstreamModel: "deepseek/deepseek-v4.1-flash",
+	})
+	if !result.ForceMapping {
+		t.Fatal("ForceMapping = false, want true")
+	}
+	if result.OriginalAlias != "deepseek-v4.1-flash" {
+		t.Fatalf("OriginalAlias = %q, want client model", result.OriginalAlias)
+	}
+	if result.UpstreamModel != "deepseek/deepseek-v4.1-flash" {
+		t.Fatalf("UpstreamModel = %q, want provider model", result.UpstreamModel)
+	}
+}
+
+func TestForcePluginResponseModelLeavesRegularAuthUnchanged(t *testing.T) {
+	auth := &Auth{Provider: "codex"}
+	input := OAuthModelAliasResult{UpstreamModel: "gpt-5.6-sol"}
+	result := forcePluginResponseModel(auth, "public-model", input)
+	if result != input {
+		t.Fatalf("result = %#v, want %#v", result, input)
+	}
+}
