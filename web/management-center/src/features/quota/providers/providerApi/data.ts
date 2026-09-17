@@ -329,7 +329,8 @@ const parseDevinQuota = (file: AuthFileItem, t: TFunction): ProviderQuotaData =>
 
 const snapshotSourceToQuotaData = (
   source: ProviderQuotaSourceSnapshot,
-  t: TFunction
+  t: TFunction,
+  fallbackReason = ''
 ): ProviderQuotaData => {
   const windows = (source.quota?.groups ?? []).flatMap((group) =>
     (group.buckets ?? []).map((bucket, index) => {
@@ -343,7 +344,11 @@ const snapshotSourceToQuotaData = (
       );
     })
   );
-  if (windows.length === 0) throw new Error(source.last_error || t('provider_quota.empty_data'));
+  if (windows.length === 0) {
+    throw new Error(
+      source.last_error?.trim() || fallbackReason.trim() || t('provider_quota.empty_data')
+    );
+  }
   return { windows };
 };
 
@@ -353,17 +358,33 @@ const fetchServerProviderQuota = async (
   t: TFunction
 ): Promise<ProviderQuotaData> => {
   let snapshot: ProviderQuotaSnapshot;
+  let refreshError: unknown;
   try {
     snapshot = await providerQuotasApi.refresh(provider);
-  } catch {
-    const current = (await providerQuotasApi.list()).find((item) => item.provider === provider);
-    if (!current) throw new Error(t('provider_quota.empty_data'));
+  } catch (error: unknown) {
+    // Keep the server's reason: the request layer turns the response body's
+    // `error` field into the thrown message, so surfacing it beats the generic
+    // "no quota data" text that used to hide every refresh failure.
+    refreshError = error;
+    let current: ProviderQuotaSnapshot | undefined;
+    try {
+      current = (await providerQuotasApi.list()).find((item) => item.provider === provider);
+    } catch {
+      current = undefined;
+    }
+    if (!current) {
+      throw error instanceof Error ? error : new Error(t('provider_quota.empty_data'));
+    }
     snapshot = current;
   }
   const source = (snapshot.sources ?? []).find((item) => item.label === file.name.split(' · ')[0]);
   const resolved = source ?? snapshot.sources?.find((item) => item.observed_at && !item.last_error);
-  if (!resolved) throw new Error(snapshot.last_error || t('provider_quota.empty_data'));
-  return snapshotSourceToQuotaData(resolved, t);
+  const refreshReason = refreshError instanceof Error ? refreshError.message.trim() : '';
+  if (!resolved) {
+    const reason = (snapshot.last_error ?? '').trim() || refreshReason;
+    throw new Error(reason || t('provider_quota.empty_data'));
+  }
+  return snapshotSourceToQuotaData(resolved, t, refreshReason);
 };
 
 const fetchCommandCode = (file: AuthFileItem, t: TFunction): Promise<ProviderQuotaData> =>

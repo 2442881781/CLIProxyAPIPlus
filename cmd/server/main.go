@@ -406,6 +406,7 @@ func main() {
 		if err == nil {
 			cfg.AuthDir = pgStoreInst.AuthDir()
 			log.Infof("postgres-backed token store enabled, workspace path: %s", pgStoreInst.WorkDir())
+			log.Infof("effective config source: postgres (mirrored to %s); the --config file only bootstraps an empty store", configFilePath)
 		}
 	} else if useObjectStore {
 		if objectStoreLocalPath == "" {
@@ -473,6 +474,7 @@ func main() {
 			}
 			cfg.AuthDir = objectStoreInst.AuthDir()
 			log.Infof("object-backed token store enabled, bucket: %s", objectStoreBucket)
+			log.Infof("effective config source: object store (mirrored to %s); the --config file only bootstraps an empty store", configFilePath)
 		}
 	} else if useGitStore {
 		if gitStoreLocalPath == "" {
@@ -517,6 +519,7 @@ func main() {
 		if err == nil {
 			cfg.AuthDir = gitStoreInst.AuthDir()
 			log.Infof("git-backed token store enabled, repository path: %s", gitStoreRoot)
+			log.Infof("effective config source: git store (mirrored to %s); the --config file is not used", configFilePath)
 		}
 	} else if configPath != "" {
 		configFilePath = configPath

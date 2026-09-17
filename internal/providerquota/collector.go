@@ -114,7 +114,7 @@ type quotaSource struct {
 
 func commandCodeSources(cfg *config.Config) []quotaSource {
 	node, ok := pluginConfigNode(cfg, commandCodePluginID)
-	if !ok || !mappingBool(node, "enabled", false) {
+	if !ok || !pluginPoolEnabled(node) {
 		return nil
 	}
 	baseURL := strings.TrimRight(mappingString(node, "base_url"), "/")
@@ -155,7 +155,7 @@ func commandCodeSources(cfg *config.Config) []quotaSource {
 
 func openCodeSources(cfg *config.Config) []quotaSource {
 	node, ok := pluginConfigNode(cfg, openCodePluginID)
-	if !ok || !mappingBool(node, "enabled", false) {
+	if !ok || !pluginPoolEnabled(node) {
 		return nil
 	}
 	baseURL := strings.TrimRight(mappingString(node, "base-url"), "/")
@@ -386,14 +386,19 @@ func mappingString(node *yaml.Node, key string) string {
 	return strings.TrimSpace(decoded)
 }
 
-func mappingBool(node *yaml.Node, key string, fallback bool) bool {
-	value := mappingValue(node, key)
+// pluginPoolEnabled reports whether a configured credential pool should be
+// collected. It mirrors the quota page's rule (`enabled !== false`): only an
+// explicit boolean false disables a pool. A legacy or credential-only section
+// without an `enabled` key still reports quota, so the panel and the collector
+// always agree on which pools exist.
+func pluginPoolEnabled(node *yaml.Node) bool {
+	value := mappingValue(node, "enabled")
 	if value == nil {
-		return fallback
+		return true
 	}
 	var decoded bool
 	if errDecode := value.Decode(&decoded); errDecode != nil {
-		return fallback
+		return true
 	}
 	return decoded
 }
