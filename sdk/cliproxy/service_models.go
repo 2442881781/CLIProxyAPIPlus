@@ -576,6 +576,75 @@ func applyAllowedModels(models []*ModelInfo, allowed []string) []*ModelInfo {
 	return filtered
 }
 
+func applyPluginAllowedModels(models []*ModelInfo, allowed []string, provider string) []*ModelInfo {
+	if len(models) == 0 || len(allowed) == 0 {
+		return models
+	}
+	provider = strings.Trim(strings.ToLower(strings.TrimSpace(provider)), "/")
+	if provider == "" {
+		return applyAllowedModels(models, allowed)
+	}
+	prefix := provider + "/"
+	patterns := make([]string, 0, len(allowed))
+	for _, item := range allowed {
+		if trimmed := strings.ToLower(strings.TrimSpace(item)); trimmed != "" {
+			patterns = append(patterns, trimmed)
+		}
+	}
+	if len(patterns) == 0 {
+		return models
+	}
+	filtered := make([]*ModelInfo, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		if model == nil {
+			continue
+		}
+		originalID := strings.TrimSpace(model.ID)
+		lowerID := strings.ToLower(originalID)
+		publicID := originalID
+		prefixed := strings.HasPrefix(lowerID, prefix)
+		if prefixed {
+			publicID = strings.TrimSpace(originalID[len(prefix):])
+		}
+		matched := false
+		canonicalMatch := false
+		for _, pattern := range patterns {
+			if matchWildcard(pattern, lowerID) {
+				matched = true
+			}
+			if prefixed && publicID != "" && matchWildcard(pattern, strings.ToLower(publicID)) {
+				matched = true
+				canonicalMatch = true
+			}
+		}
+		if !matched {
+			continue
+		}
+		outputID := originalID
+		output := model
+		if canonicalMatch {
+			outputID = publicID
+			clone := cloneModelInfoForCatalogRoute(model)
+			clone.ID = outputID
+			if clone.MetadataModelID == "" {
+				clone.MetadataModelID = originalID
+			}
+			output = &clone
+		}
+		key := strings.ToLower(outputID)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		filtered = append(filtered, output)
+	}
+	return filtered
+}
+
 func (s *Service) oauthExcludedModels(provider, authKind string) []string {
 	cfg := s.cfg
 	if cfg == nil {

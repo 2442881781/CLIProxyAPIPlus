@@ -53,3 +53,39 @@ func TestApplyOAuthModelAliasForPluginAPIKey(t *testing.T) {
 		t.Fatalf("plugin API-key aliases not applied: %#v", got)
 	}
 }
+
+func TestApplyPluginAllowedModelsNormalizesProviderPrefix(t *testing.T) {
+	models := []*ModelInfo{
+		{ID: "opencode-go/deepseek-v4.1-flash"},
+		{ID: "opencode-go/glm-5.3-flash"},
+	}
+	filtered := applyPluginAllowedModels(models, []string{"deepseek-v4.1-flash"}, "opencode-go")
+	if len(filtered) != 1 {
+		t.Fatalf("filtered models len = %d, want 1: %#v", len(filtered), filtered)
+	}
+	if filtered[0].ID != "deepseek-v4.1-flash" {
+		t.Fatalf("public model ID = %q, want canonical ID", filtered[0].ID)
+	}
+	if filtered[0].MetadataModelID != "opencode-go/deepseek-v4.1-flash" {
+		t.Fatalf("metadata model ID = %q, want prefixed upstream ID", filtered[0].MetadataModelID)
+	}
+}
+
+func TestApplyPluginAllowedModelsKeepsExactCatalogMatch(t *testing.T) {
+	models := []*ModelInfo{{ID: "deepseek-v4.1-flash"}}
+	filtered := applyPluginAllowedModels(models, []string{"deepseek-*"}, "opencode-go")
+	if len(filtered) != 1 || filtered[0] != models[0] {
+		t.Fatalf("exact catalog match changed: %#v", filtered)
+	}
+}
+
+func TestApplyPluginAllowedModelsCombinesExactAndCanonicalMatches(t *testing.T) {
+	models := []*ModelInfo{
+		{ID: "native-model"},
+		{ID: "opencode-go/deepseek-v4.1-flash"},
+	}
+	filtered := applyPluginAllowedModels(models, []string{"native-model", "deepseek-v4.1-flash"}, "opencode-go")
+	if len(filtered) != 2 || filtered[0].ID != "native-model" || filtered[1].ID != "deepseek-v4.1-flash" {
+		t.Fatalf("combined plugin allowlist matches = %#v", filtered)
+	}
+}
