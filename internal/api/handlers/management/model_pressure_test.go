@@ -143,3 +143,30 @@ func TestModelPressureEndpoint_SupplyCounts(t *testing.T) {
 		t.Fatalf("suspended_auths = %v, want 1", row["suspended_auths"])
 	}
 }
+
+func TestModelPressureEndpoint_HidesIdleModels(t *testing.T) {
+	// Given a registered model that nobody requested and a model with a
+	// recent completed request
+	// Then only the requested model is listed
+	tracker := coreusage.NewModelPressureTracker()
+	t.Cleanup(coreusage.SetDefaultModelPressureForTesting(tracker))
+
+	idle := "mp-idle-" + uuid.NewString()
+	registerPressureClient(t, "claude", idle)
+
+	active := "mp-active-" + uuid.NewString()
+	registerPressureClient(t, "claude", active)
+	tracker.Observe(active, coreusage.ModelPressureEvent{TotalTokens: 5})
+
+	r := setupModelPressureRouter(t)
+	rec, body := doReq(t, r, "GET", "/model-pressure", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if row := pressureRowFor(body, idle); row != nil {
+		t.Fatalf("idle registered model %q must not be listed: %v", idle, row)
+	}
+	if row := pressureRowFor(body, active); row == nil {
+		t.Fatalf("model %q with recent activity missing: %s", active, rec.Body.String())
+	}
+}

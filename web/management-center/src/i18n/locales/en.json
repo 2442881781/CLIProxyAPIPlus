@@ -1528,7 +1528,7 @@
     "description": "Live pressure per public model: in-flight requests plus a {{window}}s completed-request window.",
     "load_failed": "Failed to load: {{message}}",
     "empty_title": "No model data",
-    "empty_description": "No registered models yet, or no recent traffic.",
+    "empty_description": "No model has been requested recently.",
     "model": "Model",
     "in_flight": "In-flight",
     "requests_per_second": "Req/s",

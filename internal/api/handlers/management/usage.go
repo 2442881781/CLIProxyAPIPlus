@@ -104,7 +104,9 @@ type modelPressureRow struct {
 // GetModelPressure returns per-model pressure keyed by the client-facing
 // model name. in_flight is exact; rate/error/latency fields are real event
 // sums over a sliding 60s window; supply counts mirror the same registry
-// projections the auth selector uses. Process-local, memory-only.
+// projections the auth selector uses. Only models with recent activity are
+// listed: registered models that nobody requested stay out of the table.
+// Process-local, memory-only.
 func (h *Handler) GetModelPressure(c *gin.Context) {
 	if h == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler unavailable"})
@@ -118,38 +120,18 @@ func (h *Handler) GetModelPressure(c *gin.Context) {
 		return reg.GetModelSupplyStats(model)
 	}
 
-	merged := make(map[string]*modelPressureRow)
-	order := make([]string, 0)
-	for _, snap := range coreusage.DefaultModelPressure().Snapshot() {
-		row := &modelPressureRow{ModelPressureRow: snap}
+	// The tracker omits models whose in-flight gauge and sliding window are
+	// both empty, so this loop only ever yields recently requested models.
+	snapshot := coreusage.DefaultModelPressure().Snapshot()
+	rows := make([]modelPressureRow, 0, len(snapshot))
+	for _, snap := range snapshot {
+		row := modelPressureRow{ModelPressureRow: snap}
 		s := supply(snap.Model)
 		row.SuspendedAuths = s.Suspended
 		row.QuotaExceededAuths = s.QuotaExceeded
 		row.ServingAuths = max(s.Registered-s.Suspended-s.QuotaExceeded, 0)
 		row.Providers = s.Providers
-		merged[snap.Model] = row
-		order = append(order, snap.Model)
-	}
-	if reg != nil {
-		for _, model := range reg.RegisteredModelIDs() {
-			if _, ok := merged[model]; ok {
-				continue
-			}
-			s := supply(model)
-			row := &modelPressureRow{
-				ModelPressureRow:   coreusage.ModelPressureRow{Model: model},
-				SuspendedAuths:     s.Suspended,
-				QuotaExceededAuths: s.QuotaExceeded,
-				ServingAuths:       max(s.Registered-s.Suspended-s.QuotaExceeded, 0),
-				Providers:          s.Providers,
-			}
-			merged[model] = row
-			order = append(order, model)
-		}
-	}
-	rows := make([]modelPressureRow, 0, len(order))
-	for _, model := range order {
-		rows = append(rows, *merged[model])
+		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].InFlight != rows[j].InFlight {
