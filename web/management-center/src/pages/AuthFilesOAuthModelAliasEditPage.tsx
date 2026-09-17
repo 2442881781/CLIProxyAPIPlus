@@ -23,7 +23,7 @@ import styles from '@/features/authFiles/components/OAuthEditor.module.scss';
 
 type AuthFileModelItem = { id: string; display_name?: string; type?: string; owned_by?: string };
 
-type LocationState = { fromAuthFiles?: boolean } | null;
+type LocationState = { fromAuthFiles?: boolean; fromModelRoutes?: boolean } | null;
 
 type OAuthModelMappingFormEntry = OAuthModelAliasEntry & { id: string };
 
@@ -147,11 +147,11 @@ export function AuthFilesOAuthModelAliasEditPage() {
 
   const handleBack = useCallback(() => {
     const state = location.state as LocationState;
-    if (state?.fromAuthFiles) {
+    if (state?.fromAuthFiles || state?.fromModelRoutes) {
       navigate(-1);
       return;
     }
-    navigate('/auth-files', { replace: true });
+    navigate('/model-routes', { replace: true });
   }, [location.state, navigate]);
 
   const swipeRef = useEdgeSwipeBack({ onBack: handleBack });
@@ -434,7 +434,7 @@ export function AuthFilesOAuthModelAliasEditPage() {
               <IconNetwork size={22} aria-hidden="true" />
             </span>
             <div>
-              <h1 className={styles.introTitle}>{t('oauth_model_alias.title')}</h1>
+              <h1 className={styles.introTitle}>{t('model_routes.title')}</h1>
               <p className={styles.description}>{t('oauth_model_alias.editor_description')}</p>
             </div>
           </div>

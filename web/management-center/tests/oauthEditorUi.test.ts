@@ -97,7 +97,7 @@ describe('OAuth editor UI', () => {
     const lastRow = renderMapping({ canRemove: false });
     expect(lastRow.match(/disabled=""/g)).toHaveLength(1);
     const disabledRow = renderMapping({ disabled: true });
-    expect(disabledRow.match(/disabled=""/g)).toHaveLength(4);
+    expect(disabledRow.match(/disabled=""/g)).toHaveLength(5);
   });
 
   test('all four locales include editor guidance and accessible row labels', () => {
@@ -109,6 +109,8 @@ describe('OAuth editor UI', () => {
       expect(locale.oauth_model_alias.edit_title).toContain('{{provider}}');
       expect(locale.oauth_model_alias.mapping_row).toContain('{{number}}');
       expect(locale.oauth_model_alias.remove_mapping).toContain('{{number}}');
+      expect(locale.oauth_model_alias.force_mapping_label.length).toBeGreaterThan(0);
+      expect(locale.model_routes.title.length).toBeGreaterThan(0);
     }
   });
 });

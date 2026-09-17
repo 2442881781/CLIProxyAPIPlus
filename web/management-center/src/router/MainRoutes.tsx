@@ -8,6 +8,7 @@ import { OAuthPage } from '@/pages/OAuthPage';
 import { QuotaPage } from '@/features/quota/QuotaPage';
 import { UsageMonitorPage } from '@/features/usageMonitor/UsageMonitorPage';
 import { ModelPressurePage } from '@/features/modelPressure/ModelPressurePage';
+import { ModelRoutesPage } from '@/features/modelRoutes/ModelRoutesPage';
 import { AccessKeysPage } from '@/features/accessKeys/AccessKeysPage';
 import { AccessGroupsPage } from '@/features/accessGroups/AccessGroupsPage';
 import { ServerMonitorPage } from '@/features/serverMonitor/ServerMonitorPage';
@@ -26,6 +27,8 @@ const createMainRoutes = (supportsPlugin: boolean) => [
   { path: '/api-keys', element: <Navigate to="/config" replace /> },
   { path: '/ai-providers', element: <ProvidersWorkbenchPage /> },
   { path: '/ai-providers/*', element: <Navigate to="/ai-providers" replace /> },
+  { path: '/model-routes', element: <ModelRoutesPage /> },
+  { path: '/model-routes/edit', element: <AuthFilesOAuthModelAliasEditPage /> },
   { path: '/auth-files', element: <AuthFilesPage /> },
   { path: '/auth-files/oauth-excluded', element: <AuthFilesOAuthExcludedEditPage /> },
   { path: '/auth-files/oauth-model-alias', element: <AuthFilesOAuthModelAliasEditPage /> },
