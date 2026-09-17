@@ -21,7 +21,7 @@ describe('access group api normalization', () => {
       max_concurrency: 8,
       rate_limit_rpm: 600,
       per_key_limits: { rpm: 60, tpm: 100000, rpd: 500, max_concurrency: 2 },
-      usage: { total_tokens: 12345, requests: 40, failed: 2, last_used_at: '2026-09-16T01:00:00Z' },
+      usage: { total_tokens: 12345, requests: 40, failed: 2, last_used_at: '2026-09-16T01:00:00Z', in_bytes: 4096, out_bytes: 8192 },
       created_at: '2026-09-01T00:00:00Z',
       updated_at: '2026-09-15T00:00:00Z',
     });
@@ -32,10 +32,37 @@ describe('access group api normalization', () => {
       maxConcurrency: 8,
       rateLimitRpm: 600,
       perKeyLimits: { rpm: 60, tpm: 100000, rpd: 500, maxConcurrency: 2 },
-      usage: { tokens: 12345, requests: 40, failed: 2, lastUsedAt: '2026-09-16T01:00:00Z' },
+      usage: {
+        tokens: 12345,
+        requests: 40,
+        failed: 2,
+        lastUsedAt: '2026-09-16T01:00:00Z',
+        bytesIn: 4096,
+        bytesOut: 8192,
+        bytes: 12288,
+      },
       createdAt: '2026-09-01T00:00:00Z',
       updatedAt: '2026-09-15T00:00:00Z',
     });
+  });
+
+  test('reads group byte totals from the full Usage shape returned by the list endpoint', () => {
+    // Regression: the list endpoint returns Group.Usage (client_/upstream_
+    // legs), while the detail endpoint returns DimUsage totals (in_bytes).
+    const group = normalizeAccessGroup({
+      name: 'infra',
+      usage: {
+        total_tokens: 500,
+        requests: 4,
+        failed: 0,
+        client_in_bytes: 1000,
+        client_out_bytes: 2000,
+        upstream_in_bytes: 3000,
+        upstream_out_bytes: 4000,
+        period_bytes: 10000,
+      },
+    });
+    expect(group.usage).toMatchObject({ tokens: 500, bytesIn: 4000, bytesOut: 6000, bytes: 10000 });
   });
 
   test('serializes the edit-sheet form into the PUT /access-groups body', () => {

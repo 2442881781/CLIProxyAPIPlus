@@ -93,6 +93,7 @@
       <div class="field"><label>名称</label><input id="f_name" placeholder="张三"></div>
       <div class="field"><label>分组</label><select id="f_group"><option value="">（无分组）</option></select></div>
       <div class="field"><label>Token 限额</label><input id="f_quota" type="number" placeholder="0 = 不限"></div>
+      <div class="field"><label>流量限额 (GB)</label><input id="f_quota_bytes" type="number" min="0" step="0.01" placeholder="0 = 不限"></div>
       <div class="field"><label>周期</label><select id="f_period"><option value="">总量</option><option value="daily">每日</option><option value="monthly">每月</option></select></div>
       <div class="field"><label>模型白名单</label><input id="f_models" placeholder="空=全部,逗号分隔,支持 * 前缀" style="min-width:220px"></div>
       <div class="field"><label>过期时间</label><input id="f_exp" type="datetime-local"></div>
@@ -102,9 +103,17 @@
 
   <div class="card">
     <table>
-      <thead><tr><th>名称</th><th>Key</th><th>分组</th><th>状态</th><th>用量 / 限额</th><th>有效模型</th><th>过期</th><th class="actions">操作</th></tr></thead>
+      <thead><tr><th>名称</th><th>Key</th><th>分组</th><th>状态</th><th>用量 / 限额</th><th>流量 / 成本</th><th>有效模型</th><th>过期</th><th class="actions">操作</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
+  </div>
+
+  <div class="card">
+    <div class="row" style="align-items:flex-end">
+      <div class="field"><label>流量单价 (元/GB)</label><input id="f_price" type="number" min="0" step="0.01" placeholder="0 = 不换算成本" style="min-width:150px"></div>
+      <button class="ghost" onclick="savePrice()">保存单价</button>
+      <span class="muted" style="font-size:12px">流量为客户端 + 上游双腿口径；成本 = 总流量 × 单价，仅本机浏览器保存。</span>
+    </div>
   </div>
 
   <h1 style="font-size:18px;margin-top:28px">分组管理</h1>
@@ -149,6 +158,7 @@
     <div class="field"><label>名称</label><input id="e_name" placeholder="例如：张三"></div>
     <div class="field"><label>分组</label><select id="e_group"><option value="">（无分组）</option></select></div>
     <div class="field"><label>Token 限额</label><input id="e_quota" type="number" min="0" placeholder="0 = 不限"></div>
+    <div class="field"><label>流量限额 (GB)</label><input id="e_quota_bytes" type="number" min="0" step="0.01" placeholder="0 = 不限"></div>
     <div class="field"><label>周期</label><select id="e_period"><option value="">总量</option><option value="daily">每日</option><option value="monthly">每月</option></select></div>
     <div class="field"><label>Key 模型白名单</label><input id="e_models" placeholder="空=继承分组/全部" style="min-width:240px"></div>
     <div class="field"><label>过期时间</label><input id="e_exp" type="datetime-local"></div>
@@ -199,6 +209,40 @@ const api = (m, p, body) => fetch('/v0/management' + p, {
 function toast(msg, ok) { const t = document.getElementById('toast'); t.textContent = msg; t.className = ok ? 'ok' : 'err'; t.style.display = 'block'; setTimeout(()=>t.style.display='none', 3000); }
 function fmt(n) { return (n||0).toLocaleString(); }
 function esc(s) { return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+const GIB = 1073741824;
+function fmtBytes(n) {
+  n = n || 0;
+  if (n >= GIB) return (n/GIB).toFixed(2) + ' GB';
+  if (n >= 1048576) return (n/1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return (n/1024).toFixed(1) + ' KB';
+  return n + ' B';
+}
+function gbToBytes(value) { const gb = parseFloat(value); return gb > 0 ? Math.round(gb * GIB) : 0; }
+function trafficPrice() { const p = parseFloat(localStorage.getItem('akTrafficPrice')); return p > 0 ? p : 0; }
+function savePrice() {
+  localStorage.setItem('akTrafficPrice', document.getElementById('f_price').value || '');
+  toast('单价已保存', 1);
+  load();
+}
+// TotalBytes mirrors the server's cost figure: both legs summed.
+function totalBytes(u) {
+  return (u.client_in_bytes||0) + (u.client_out_bytes||0) + (u.upstream_in_bytes||0) + (u.upstream_out_bytes||0);
+}
+function trafficOver(k) {
+  const q = k.quota || {}, u = k.usage || {};
+  return q.byte_limit > 0 && (u.period_bytes||0) >= q.byte_limit;
+}
+function trafficCell(k) {
+  const q = k.quota || {}, u = k.usage || {};
+  const total = totalBytes(u);
+  const price = trafficPrice();
+  const cost = price > 0 ? ` · <b>¥${(total/GIB*price).toFixed(2)}</b>` : '';
+  const period = u.period_bytes || 0;
+  const periodText = q.byte_limit > 0
+    ? `${fmtBytes(period)} / ${fmtBytes(q.byte_limit)}`
+    : `本期 ${fmtBytes(period)}`;
+  return `<td>${fmtBytes(total)}${cost}<br><span class="muted">${periodText}</span></td>`;
+}
 async function copyText(text) {
   if (!text) return false;
   try {
@@ -263,7 +307,7 @@ function load() {
       const q = k.quota || {}, u = k.usage || {};
       const limit = q.token_limit > 0 ? fmt(q.token_limit) + (q.period ? ' / ' + ({daily:'日',monthly:'月'}[q.period]||q.period) : '') : '不限';
       const used = fmt(u.period_key ? u.period_tokens : u.total_tokens);
-      const over = q.token_limit > 0 && (u.period_key ? u.period_tokens : u.total_tokens) >= q.token_limit;
+      const over = (q.token_limit > 0 && (u.period_key ? u.period_tokens : u.total_tokens) >= q.token_limit) || trafficOver(k);
       const exp = k.expires_at ? k.expires_at.slice(0,10) : '<span class="muted">—</span>';
       return `<tr>
         <td>${esc(k.name)||'<span class="muted">(未命名)</span>'}<br><span class="muted mono">${esc(k.id)}</span></td>
@@ -271,12 +315,13 @@ function load() {
         <td>${k.group ? esc(k.group) : '<span class="muted">—</span>'}</td>
         <td>${k.disabled ? '<span class="tag off">已禁用</span>' : over ? '<span class="tag off">超额</span>' : '<span class="tag on">启用</span>'}</td>
         <td>${used} / ${limit}<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
+        ${trafficCell(k)}
         <td class="mono" style="font-size:11px">${displayModels(k)}</td>
         <td>${exp}</td>
         <td class="actions">
 		  <button class="ghost" onclick="openKeyEdit('${k.id}')">编辑</button>
         </td></tr>`;
-    }).join('') || '<tr><td colspan="8" class="muted" style="text-align:center;padding:30px">暂无 key</td></tr>';
+    }).join('') || '<tr><td colspan="9" class="muted" style="text-align:center;padding:30px">暂无 key</td></tr>';
   }).catch(e => toast('加载失败: ' + e.message));
   loadGroups();
 }
@@ -300,12 +345,13 @@ function loadGroups() {
       const auths = (g.allowed_auths||[]).length ? g.allowed_auths.join(', ') : '<span class="muted">全部</span>';
       const models = (g.allowed_models||[]).length ? g.allowed_models.join(', ') : '<span class="muted">全部</span>';
       const limits = [(g.max_concurrency>0?`并发 ${g.max_concurrency}`:''), (g.rate_limit_rpm>0?`${g.rate_limit_rpm} rpm`:'')].filter(Boolean).join(' · ') || '<span class="muted">不限</span>';
+      const groupBytes = (u.client_in_bytes||0)+(u.client_out_bytes||0)+(u.upstream_in_bytes||0)+(u.upstream_out_bytes||0);
       return `<tr>
         <td>${esc(g.name)}</td>
         <td class="mono" style="font-size:11px">${auths.startsWith('<')?auths:esc(auths)}</td>
         <td class="mono" style="font-size:11px">${models.startsWith('<')?models:esc(models)}</td>
         <td>${limits.startsWith('<')?limits:esc(limits)}</td>
-        <td>${fmt(u.total_tokens)} tok<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
+        <td>${fmt(u.total_tokens)} tok<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''} · ${fmtBytes(groupBytes)}</span></td>
         <td class="actions">
           <button class="ghost" data-g="${esc(g.name)}" onclick="editGroup(this.dataset.g)">编辑</button>
           <button class="danger" data-g="${esc(g.name)}" onclick="delGroup(this.dataset.g)">删除</button>
@@ -324,7 +370,7 @@ function renderKeys() {
     const q = k.quota || {}, u = k.usage || {};
     const limit = q.token_limit > 0 ? fmt(q.token_limit) + (q.period ? ' / ' + ({daily:'日',monthly:'月'}[q.period]||q.period) : '') : '不限';
     const used = fmt(u.period_key ? u.period_tokens : u.total_tokens);
-    const over = q.token_limit > 0 && (u.period_key ? u.period_tokens : u.total_tokens) >= q.token_limit;
+    const over = (q.token_limit > 0 && (u.period_key ? u.period_tokens : u.total_tokens) >= q.token_limit) || trafficOver(k);
     const exp = k.expires_at ? k.expires_at.slice(0,10) : '<span class="muted">—</span>';
     return `<tr>
       <td>${esc(k.name)||'<span class="muted">(未命名)</span>'}<br><span class="muted mono">${esc(k.id)}</span></td>
@@ -332,6 +378,7 @@ function renderKeys() {
       <td>${k.group ? esc(k.group) : '<span class="muted">—</span>'}</td>
       <td>${k.disabled ? '<span class="tag off">已禁用</span>' : over ? '<span class="tag off">超额</span>' : '<span class="tag on">启用</span>'}</td>
       <td>${used} / ${limit}<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
+      ${trafficCell(k)}
       <td class="mono" style="font-size:11px">${displayModels(k)}</td>
       <td>${exp}</td>
       <td class="actions"><button class="ghost" onclick="openKeyEdit('${k.id}')">编辑</button></td>
@@ -383,7 +430,11 @@ function createKey() {
     group: document.getElementById('f_group').value,
     expires_at: (() => { const v = document.getElementById('f_exp').value; return v ? new Date(v).toISOString() : ''; })(),
     allowed_models: models.length ? models : undefined,
-    quota: { token_limit: parseInt(document.getElementById('f_quota').value)||0, period: document.getElementById('f_period').value }
+    quota: {
+      token_limit: parseInt(document.getElementById('f_quota').value)||0,
+      byte_limit: gbToBytes(document.getElementById('f_quota_bytes').value),
+      period: document.getElementById('f_period').value
+    }
   }).then(d => {
     document.getElementById('newKey').textContent = d.key;
     document.getElementById('keyModal').style.display = 'flex';
@@ -419,6 +470,7 @@ function openKeyEdit(id) {
   document.getElementById('e_group').innerHTML = groupOptions(key.group || '');
   document.getElementById('e_group').value = key.group || '';
   document.getElementById('e_quota').value = quota.token_limit || '';
+  document.getElementById('e_quota_bytes').value = quota.byte_limit ? (quota.byte_limit/GIB).toFixed(2) : '';
   document.getElementById('e_period').value = quota.period || '';
   document.getElementById('e_models').value = (key.allowed_models || []).join(', ');
   document.getElementById('e_exp').value = toLocalDateTime(key.expires_at);
@@ -438,6 +490,7 @@ function saveKeyEdit() {
     expires_at: expiry ? new Date(expiry).toISOString() : '',
     quota: {
       token_limit: parseInt(document.getElementById('e_quota').value)||0,
+      byte_limit: gbToBytes(document.getElementById('e_quota_bytes').value),
       period: document.getElementById('e_period').value
     }
   }).then(() => { toast('Key 已保存',1); closeKeyEdit(); load(); }).catch(e=>toast('保存失败: '+e.message));
@@ -491,6 +544,7 @@ if (EMBEDDED) {
   } catch (e) {}
 }
 syncTheme();
+document.getElementById('f_price').value = localStorage.getItem('akTrafficPrice') || '';
 if (MGMT) { document.getElementById('login').style.display='none'; document.getElementById('main').style.display=''; load(); }
 document.getElementById('mgmtKey').addEventListener('keydown', e => { if (e.key==='Enter') login(); });
 document.getElementById('e_group').addEventListener('change', updateEffectiveModelNote);

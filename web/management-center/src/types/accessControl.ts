@@ -10,6 +10,9 @@ export interface AccessGroupUsageTotals {
   requests: number;
   failed: number;
   lastUsedAt: string;
+  bytesIn: number;
+  bytesOut: number;
+  bytes: number;
 }
 
 export interface AccessGroup {
@@ -39,6 +42,9 @@ export interface UsageDimRow {
   requests: number;
   failed: number;
   lastUsedAt: string;
+  bytesIn: number;
+  bytesOut: number;
+  bytes: number;
 }
 
 export interface AccessGroupUsageDetail {
@@ -52,7 +58,7 @@ export interface AccessGroupUsageDetail {
   auths: UsageDimRow[];
 }
 
-export type AccessKeyUsageTopBy = 'tokens' | 'requests' | 'failed';
+export type AccessKeyUsageTopBy = 'tokens' | 'requests' | 'failed' | 'bytes';
 export type AccessKeyUsagePeriod = 'all' | 'month' | 'day';
 
 export interface AccessKeyUsageTopRow {
@@ -64,6 +70,21 @@ export interface AccessKeyUsageTopRow {
   requests: number;
   failed: number;
   lastUsedAt: string;
+  bytesIn: number;
+  bytesOut: number;
+  bytes: number;
+}
+
+/** Byte accounting for the operator-only traffic view. */
+export interface AccessTrafficTotals {
+  clientIn: number;
+  clientOut: number;
+  upstreamIn: number;
+  upstreamOut: number;
+  clientTotal: number;
+  upstreamTotal: number;
+  total: number;
+  periodTotal: number;
 }
 
 export interface AccessKeyUsageDetail {
@@ -79,6 +100,7 @@ export interface AccessKeyUsageDetail {
   models: UsageDimRow[];
   daily: UsageDimRow[];
   auths: UsageDimRow[];
+  traffic?: AccessTrafficTotals;
 }
 
 export interface ServerStatsHost {

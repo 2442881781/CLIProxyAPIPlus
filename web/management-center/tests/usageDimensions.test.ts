@@ -46,4 +46,51 @@ describe('usage dimension api normalization', () => {
     expect(detail.auths).toEqual([]);
     expect(detail.totalTokens).toBe(0);
   });
+
+  test('normalizes byte traffic totals and per-dimension bytes', () => {
+    // Feature: per-key traffic cost view. The operator-only summary exposes
+    // both legs, and every dimension row carries its byte counters.
+    const detail = normalizeAccessKeyUsageDetail({
+      id: 'key-bytes',
+      name: 'Traffic',
+      key_prefix: 'sk-cpa-traffic',
+      group: '',
+      usage: {
+        total_tokens: 10,
+        requests: 1,
+        bytes: {
+          client_in: 100,
+          client_out: 400,
+          upstream_in: 900,
+          upstream_out: 200,
+          client_total: 500,
+          upstream_total: 1100,
+          total: 1600,
+          period_total: 1600,
+        },
+      },
+      models: [{ model: 'gpt-5', tokens: 10, requests: 1, bytes_in: 1000, bytes_out: 600 }],
+      daily: [{ day: '2026-09-17', tokens: 10, requests: 1, bytes_in: 1000, bytes_out: 600 }],
+      auths: [{ auth: 'codex-a', tokens: 10, requests: 1, bytes_in: 900, bytes_out: 200 }],
+    });
+    expect(detail.traffic).toEqual({
+      clientIn: 100,
+      clientOut: 400,
+      upstreamIn: 900,
+      upstreamOut: 200,
+      clientTotal: 500,
+      upstreamTotal: 1100,
+      total: 1600,
+      periodTotal: 1600,
+    });
+    expect(detail.models[0]).toMatchObject({ name: 'gpt-5', bytesIn: 1000, bytesOut: 600, bytes: 1600 });
+    expect(detail.daily[0]).toMatchObject({ name: '2026-09-17', bytes: 1600 });
+    expect(detail.auths[0]).toMatchObject({ name: 'codex-a', bytesIn: 900, bytesOut: 200 });
+  });
+
+  test('leaves traffic undefined for legacy payloads without byte counters', () => {
+    const detail = normalizeAccessKeyUsageDetail({ usage: { total_tokens: 5 } });
+    expect(detail.traffic).toBeUndefined();
+    expect(detail.models).toEqual([]);
+  });
 });

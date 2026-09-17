@@ -77,10 +77,13 @@ type storeFile struct {
 	Groups []Group     `json:"groups,omitempty"`
 }
 
-// Quota limits token consumption. TokenLimit <= 0 means unlimited. Period
-// selects the reset window: "daily", "monthly", or empty for all-time.
+// Quota limits consumption. TokenLimit and ByteLimit <= 0 mean unlimited.
+// Period selects the reset window: "daily", "monthly", or empty for all-time.
+// ByteLimit is evaluated against the total payload bytes across both legs
+// (client + provider), i.e. the bandwidth the key costs the host.
 type Quota struct {
 	TokenLimit int64  `json:"token_limit,omitempty"`
+	ByteLimit  int64  `json:"byte_limit,omitempty"`
 	Period     string `json:"period,omitempty"`
 }
 
@@ -103,6 +106,27 @@ type Usage struct {
 	Auths          map[string]DimUsage `json:"auths,omitempty"`
 	LatencyTotalMS int64               `json:"latency_total_ms,omitempty"`
 	TTFTTotalMS    int64               `json:"ttft_total_ms,omitempty"`
+	// Traffic accounting in bytes, split by leg. Client* is the leg between
+	// the customer and this proxy, Upstream* the leg between this proxy and
+	// the provider. Their sum approximates the host's interface traffic for
+	// this key; PeriodBytes scopes the same sum to the quota window. Upstream*
+	// stays zero for provider transports that do not pass through the tracked
+	// HTTP client (provider websockets, gRPC, plugin executors).
+	ClientInBytes    int64 `json:"client_in_bytes,omitempty"`
+	ClientOutBytes   int64 `json:"client_out_bytes,omitempty"`
+	UpstreamInBytes  int64 `json:"upstream_in_bytes,omitempty"`
+	UpstreamOutBytes int64 `json:"upstream_out_bytes,omitempty"`
+	PeriodBytes      int64 `json:"period_bytes,omitempty"`
+}
+
+// TotalBytes sums both legs: the bandwidth this key cost the host.
+func (u Usage) TotalBytes() int64 {
+	return u.ClientInBytes + u.ClientOutBytes + u.UpstreamInBytes + u.UpstreamOutBytes
+}
+
+// ClientBytes sums the client leg only.
+func (u Usage) ClientBytes() int64 {
+	return u.ClientInBytes + u.ClientOutBytes
 }
 
 // Store is a file-backed, goroutine-safe collection of access keys.
@@ -460,6 +484,7 @@ func (s *Store) Create(plaintext string, fields AccessKey) (*AccessKey, error) {
 		AllowedModels: normalizeModels(fields.AllowedModels),
 		Quota: Quota{
 			TokenLimit: fields.Quota.TokenLimit,
+			ByteLimit:  fields.Quota.ByteLimit,
 			Period:     strings.ToLower(strings.TrimSpace(fields.Quota.Period)),
 		},
 		RateLimit: fields.RateLimit,
@@ -663,20 +688,41 @@ func (q Quota) periodKeyFor(now time.Time) string {
 	}
 }
 
-// QuotaExceeded reports whether the key has consumed its token limit in the
-// current period. A missing/empty period means the limit applies all-time.
+// QuotaExceeded reports whether the key has consumed its token or byte limit
+// in the current period. A missing/empty period means the limit applies
+// all-time.
 func (k *AccessKey) QuotaExceeded(now time.Time) bool {
-	if k == nil || k.Quota.TokenLimit <= 0 {
+	if k == nil {
 		return false
 	}
 	key := k.Quota.periodKeyFor(now)
-	if key == "" {
-		return k.Usage.TotalTokens >= k.Quota.TokenLimit
+	allTime := key == ""
+	current := allTime || k.Usage.PeriodKey == key
+	if k.Quota.TokenLimit > 0 {
+		tokens := k.Usage.TotalTokens
+		if !allTime {
+			tokens = 0
+			if current {
+				tokens = k.Usage.PeriodTokens
+			}
+		}
+		if tokens >= k.Quota.TokenLimit {
+			return true
+		}
 	}
-	if k.Usage.PeriodKey != key {
-		return false
+	if k.Quota.ByteLimit > 0 {
+		bytes := k.Usage.TotalBytes()
+		if !allTime {
+			bytes = 0
+			if current {
+				bytes = k.Usage.PeriodBytes
+			}
+		}
+		if bytes >= k.Quota.ByteLimit {
+			return true
+		}
 	}
-	return k.Usage.PeriodTokens >= k.Quota.TokenLimit
+	return false
 }
 
 // RecordUsage folds one completed request's usage into the presented key's
@@ -701,17 +747,61 @@ func (s *Store) RecordUsage(key string, ev UsageEvent) bool {
 	}
 	entry.Usage.LatencyTotalMS += max(ev.Latency.Milliseconds(), 0)
 	entry.Usage.TTFTTotalMS += max(ev.TTFT.Milliseconds(), 0)
-	periodKey := entry.Quota.periodKeyFor(now)
-	if entry.Usage.PeriodKey != periodKey {
-		entry.Usage.PeriodKey = periodKey
-		entry.Usage.PeriodTokens = 0
-	}
+	entry.Usage.UpstreamInBytes += ev.UpstreamInBytes
+	entry.Usage.UpstreamOutBytes += ev.UpstreamOutBytes
+	s.rollPeriodLocked(entry, now)
 	entry.Usage.PeriodTokens += ev.Tokens
+	entry.Usage.PeriodBytes += ev.UpstreamInBytes + ev.UpstreamOutBytes
 	entry.Usage.LastUsedAt = now.Format(time.RFC3339)
 	s.recordDetailLocked(entry, ev, now)
 	s.recordGroupUsageLocked(entry, ev.Tokens, ev.Failed, now)
+	s.recordGroupTrafficLocked(entry, 0, 0, ev.UpstreamInBytes, ev.UpstreamOutBytes, now)
 	s.chargeKeyTPMLocked(entry, ev.Tokens, now)
 	s.keyRateWindowLocked(entry.ID).Add(now, ev.InputTokens, ev.OutputTokens, ev.Tokens)
+	s.dirty = true
+	return true
+}
+
+// rollPeriodLocked resets the quota-window counters when the window rolled
+// over. Caller must hold s.mu.
+func (s *Store) rollPeriodLocked(entry *AccessKey, now time.Time) {
+	periodKey := entry.Quota.periodKeyFor(now)
+	if entry.Usage.PeriodKey == periodKey {
+		return
+	}
+	entry.Usage.PeriodKey = periodKey
+	entry.Usage.PeriodTokens = 0
+	entry.Usage.PeriodBytes = 0
+}
+
+// RecordTraffic folds client-edge byte counters into the access key addressed
+// by id. It never touches request or token counters: those are owned by the
+// provider-leg RecordUsage call. Returns false when the id is unknown or the
+// event carries no bytes.
+func (s *Store) RecordTraffic(id string, ev TrafficEvent) bool {
+	if s == nil || !s.loaded {
+		return false
+	}
+	if ev.InBytes <= 0 && ev.OutBytes <= 0 {
+		return false
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.keys[id]
+	if !ok {
+		return false
+	}
+	now := s.nowTime().UTC()
+	entry.Usage.ClientInBytes += ev.InBytes
+	entry.Usage.ClientOutBytes += ev.OutBytes
+	s.rollPeriodLocked(entry, now)
+	entry.Usage.PeriodBytes += ev.InBytes + ev.OutBytes
+	s.recordTrafficDetailLocked(entry, ev, now)
+	s.recordGroupTrafficLocked(entry, ev.InBytes, ev.OutBytes, 0, 0, now)
 	s.dirty = true
 	return true
 }
@@ -934,5 +1024,23 @@ func (s *Store) recordGroupUsageLocked(entry *AccessKey, tokens int64, failed bo
 	if failed {
 		grp.Usage.Failed++
 	}
+	grp.Usage.LastUsedAt = now.Format(time.RFC3339)
+}
+
+// recordGroupTrafficLocked aggregates byte accounting into the key's group.
+// Callers pass the leg they measured; the two edges fill different fields.
+// Caller must hold s.mu.
+func (s *Store) recordGroupTrafficLocked(entry *AccessKey, clientIn, clientOut, upstreamIn, upstreamOut int64, now time.Time) {
+	if entry.Group == "" {
+		return
+	}
+	grp, ok := s.groups[entry.Group]
+	if !ok {
+		return
+	}
+	grp.Usage.ClientInBytes += clientIn
+	grp.Usage.ClientOutBytes += clientOut
+	grp.Usage.UpstreamInBytes += upstreamIn
+	grp.Usage.UpstreamOutBytes += upstreamOut
 	grp.Usage.LastUsedAt = now.Format(time.RFC3339)
 }

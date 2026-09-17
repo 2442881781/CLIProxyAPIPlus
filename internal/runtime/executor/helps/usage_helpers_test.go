@@ -617,6 +617,61 @@ func TestUsageReporterTrackHTTPClientStartsTTFTBeforeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUsageReporterTrackHTTPClientCountsProviderLegBytes(t *testing.T) {
+	// Given a tracked HTTP client
+	// When a request body is sent and a response body is read
+	// Then the reporter counts both directions and attaches them to the record
+	ctx := cliproxyexecutor.WithUpstreamAttemptTracker(context.Background())
+	reporter := NewUsageReporter(ctx, "openai", "gpt-5.4", nil)
+	requestBody := `{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}]}`
+	responseBody := strings.Repeat("data\n", 40)
+	client := reporter.TrackHTTPClient(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			// A real transport consumes the request body; the fake must too so
+			// the provider-leg counter sees the bytes.
+			if _, errReadBody := io.ReadAll(req.Body); errReadBody != nil {
+				return nil, errReadBody
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+				Request:    req,
+			}, nil
+		}),
+	})
+
+	req, errNewRequest := http.NewRequestWithContext(ctx, http.MethodPost, "https://example.invalid/v1/chat/completions", strings.NewReader(requestBody))
+	if errNewRequest != nil {
+		t.Fatalf("NewRequestWithContext() error = %v", errNewRequest)
+	}
+	resp, errDo := client.Do(req)
+	if errDo != nil {
+		t.Fatalf("Do() error = %v", errDo)
+	}
+	if _, errRead := io.ReadAll(resp.Body); errRead != nil {
+		t.Fatalf("ReadAll() error = %v", errRead)
+	}
+	if errClose := resp.Body.Close(); errClose != nil {
+		t.Fatalf("response body close error = %v", errClose)
+	}
+
+	if got := reporter.UpstreamSentBytes(); got != int64(len(requestBody)) {
+		t.Fatalf("upstream sent bytes = %d, want %d", got, len(requestBody))
+	}
+	if got := reporter.UpstreamReceivedBytes(); got != int64(len(responseBody)) {
+		t.Fatalf("upstream received bytes = %d, want %d", got, len(responseBody))
+	}
+	record := reporter.buildRecord(usage.Detail{TotalTokens: 3}, false)
+	if record.Detail.UpstreamRequestBytes != int64(len(requestBody)) {
+		t.Fatalf("record upstream request bytes = %d", record.Detail.UpstreamRequestBytes)
+	}
+	if record.Detail.UpstreamResponseBytes != int64(len(responseBody)) {
+		t.Fatalf("record upstream response bytes = %d", record.Detail.UpstreamResponseBytes)
+	}
+}
+
 func TestUsageReporterTrackHTTPClientRoundTripOnly_DoesNotTriggerOnBodyRead(t *testing.T) {
 	reporter := NewUsageReporter(context.Background(), "codex", "gpt-5.6-luna", nil)
 	client := reporter.TrackHTTPClientRoundTripOnly(&http.Client{

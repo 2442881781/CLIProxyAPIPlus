@@ -3289,9 +3289,7 @@ func TestXAIExecutorExecuteImagesUsesImagesEndpointAndPublishesUsage(t *testing.
 	if record.Failed {
 		t.Fatalf("failed = true, want false; failure=%+v", record.Fail)
 	}
-	if record.Detail != (usage.Detail{}) {
-		t.Fatalf("detail = %+v, want zero token usage", record.Detail)
-	}
+	assertZeroTokenUsage(t, record.Detail)
 	if record.TTFT <= 0 {
 		t.Fatalf("ttft = %v, want positive duration", record.TTFT)
 	}
@@ -3397,6 +3395,18 @@ func (p *captureXAIUsagePlugin) HandleUsage(_ context.Context, record usage.Reco
 	select {
 	case p.records <- record:
 	default:
+	}
+}
+
+// assertZeroTokenUsage verifies that no token counters were parsed for a
+// request. Traffic byte counters are intentionally ignored: they are measured
+// by the transport wrapper and are non-zero for any real HTTP exchange.
+func assertZeroTokenUsage(t *testing.T, detail usage.Detail) {
+	t.Helper()
+	if detail.InputTokens != 0 || detail.OutputTokens != 0 || detail.ReasoningTokens != 0 ||
+		detail.CachedTokens != 0 || detail.CacheReadTokens != 0 || detail.CacheCreationTokens != 0 ||
+		detail.TotalTokens != 0 || detail.TokenBreakdown.TotalTokens != 0 {
+		t.Fatalf("detail = %+v, want zero token usage", detail)
 	}
 }
 
@@ -3657,9 +3667,7 @@ func TestXAIExecutorExecuteVideosCreate(t *testing.T) {
 	if record.Failed {
 		t.Fatalf("failed = true, want false; failure=%+v", record.Fail)
 	}
-	if record.Detail != (usage.Detail{}) {
-		t.Fatalf("detail = %+v, want zero token usage", record.Detail)
-	}
+	assertZeroTokenUsage(t, record.Detail)
 	if record.TTFT <= 0 {
 		t.Fatalf("ttft = %v, want positive duration", record.TTFT)
 	}
