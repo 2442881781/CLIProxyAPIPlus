@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { TFunction } from 'i18next';
 import { apiCallApi } from '../src/services/api/apiCall';
 import {
+  buildAIProviderQuotaFiles,
   buildCommandCodeQuotaFiles,
   buildOpenCodeQuotaFiles,
   buildZhipuQuotaFiles,
@@ -352,5 +353,54 @@ describe('AI provider quota payload adapters', () => {
 
     expect(quota.plan).toBe('Team');
     expect(quota.windows.map((window) => window.usedPercent)).toEqual([30, 60]);
+  });
+});
+
+describe('pooled plugin credentials on the quota page', () => {
+  const COMMANDCODE_HASH = 'ee8b9539a6fb54a208343b304990f9da7e8c69ca681a958dc5a9e2f78306ba37';
+  const OPENCODE_HASH = '964f3b6cdcbcdd95be07027737dc49c75776975ee58a733d8a0913996225d421';
+  const authFile = (name: string, type: string) => ({ name, type }) as AuthFileItem;
+
+  test('renders one card per pooled key instead of the mirrored auth entry', () => {
+    const files = buildAIProviderQuotaFiles(
+      [
+        authFile(`commandcode-key-${COMMANDCODE_HASH}.json`, 'commandcode'),
+        authFile(`opencode-go-key-${OPENCODE_HASH}.json`, 'opencode-go'),
+        authFile('devin.json', 'devin'),
+      ],
+      { api_keys: [{ key: 'cc-secret-alpha' }] },
+      { 'api-keys': [{ value: 'oc-secret-beta' }] },
+      []
+    );
+
+    const names = files.map((file) => file.name);
+    expect(names).toContain('devin.json');
+    expect(names.some((name) => name.includes('-key-'))).toBe(false);
+    expect(files.filter((file) => file.type === 'commandcode')).toHaveLength(1);
+    expect(files.filter((file) => file.type === 'opencode')).toHaveLength(1);
+  });
+
+  test('keeps a mirrored entry when the plugin config carries no pool key', () => {
+    const files = buildAIProviderQuotaFiles(
+      [authFile(`commandcode-key-${COMMANDCODE_HASH}.json`, 'commandcode')],
+      {},
+      {},
+      []
+    );
+
+    expect(files.map((file) => file.name)).toEqual([
+      `commandcode-key-${COMMANDCODE_HASH}.json`,
+    ]);
+  });
+
+  test('keeps a hand-named credential of the same provider', () => {
+    const files = buildAIProviderQuotaFiles(
+      [authFile('commandcode-team.json', 'commandcode')],
+      { api_keys: [{ key: 'cc-secret-alpha' }] },
+      {},
+      []
+    );
+
+    expect(files.map((file) => file.name)).toContain('commandcode-team.json');
   });
 });
