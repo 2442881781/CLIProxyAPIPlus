@@ -55,7 +55,9 @@ func (h *Handler) RefreshAuthFiles(c *gin.Context) {
 		return
 	}
 
-	targetAuth, ok := h.lookupAuthFile(name, req.AuthIndex)
+	// Refresh is read-only for credential material, so a cached auth_index that
+	// moved (see lookupAuthFileByUniqueName) still resolves by name.
+	targetAuth, ok := h.lookupAuthFileByUniqueName(name, req.AuthIndex)
 	if !ok || targetAuth == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "auth file not found"})
 		return

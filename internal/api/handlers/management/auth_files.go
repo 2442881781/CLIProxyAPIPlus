@@ -158,22 +158,63 @@ func (h *Handler) lookupAuthFile(name string, authIndex string) (*coreauth.Auth,
 		return nil, false
 	}
 	if authIndex == "" {
-		if auth, ok := h.authManager.GetByID(name); ok {
-			return auth, true
-		}
-		auths := h.authManager.List()
-		for _, auth := range auths {
-			if auth != nil && strings.TrimSpace(auth.FileName) == name {
-				return auth, true
-			}
-		}
-		return nil, false
+		return h.lookupAuthFileByName(name)
 	}
 	auths := h.authManager.List()
 	for _, auth := range auths {
 		if matchesAuthFileLookup(auth, name, authIndex) {
 			return auth, true
 		}
+	}
+	return nil, false
+}
+
+func (h *Handler) lookupAuthFileByName(name string) (*coreauth.Auth, bool) {
+	if auth, ok := h.authManager.GetByID(name); ok {
+		return auth, true
+	}
+	for _, auth := range h.authManager.List() {
+		if auth != nil && strings.TrimSpace(auth.FileName) == name {
+			return auth, true
+		}
+	}
+	return nil, false
+}
+
+// lookupAuthFileByUniqueName resolves an auth by name, treating auth_index as a
+// hint instead of a requirement. Refresh uses this because auth_index is derived
+// from the credential identity and therefore moves when that identity moves —
+// the file-name form changed with the PostgreSQL migration, and a blue/green
+// slot switch rebuilds the spool. A caller holding an index from before the
+// change still names exactly one credential, so the name resolves it. Mutation
+// endpoints keep the strict lookupAuthFile so a stale index can never edit the
+// wrong file.
+func (h *Handler) lookupAuthFileByUniqueName(name string, authIndex string) (*coreauth.Auth, bool) {
+	name = strings.TrimSpace(name)
+	authIndex = strings.TrimSpace(authIndex)
+	if h == nil || h.authManager == nil || name == "" {
+		return nil, false
+	}
+	if authIndex == "" {
+		return h.lookupAuthFileByName(name)
+	}
+	var nameMatch *coreauth.Auth
+	nameMatches := 0
+	for _, auth := range h.authManager.List() {
+		if auth == nil {
+			continue
+		}
+		if strings.TrimSpace(auth.ID) != name && strings.TrimSpace(auth.FileName) != name {
+			continue
+		}
+		if lockedAuthIndex(auth) == authIndex {
+			return auth, true
+		}
+		nameMatch = auth
+		nameMatches++
+	}
+	if nameMatches == 1 {
+		return nameMatch, true
 	}
 	return nil, false
 }
