@@ -1528,7 +1528,7 @@
     "description": "各对外模型的实时压力：在途并发与最近 {{window}} 秒完成请求窗口。",
     "load_failed": "加载失败：{{message}}",
     "empty_title": "暂无模型数据",
-    "empty_description": "还没有已注册模型，或近期没有请求。",
+    "empty_description": "最近没有模型被请求。",
     "model": "模型",
     "in_flight": "在途",
     "requests_per_second": "请求/秒",
