@@ -36,7 +36,8 @@ func queryVnstat(now time.Time) (vnstatTraffic, bool) {
 }
 
 // parseVnstatMonthly sums the current calendar month's rx/tx across every
-// monitored interface. vnstat reports KiB; results are returned in bytes.
+// monitored interface. vnstat's JSON output already reports raw byte counts,
+// so the values are used as-is.
 func parseVnstatMonthly(data []byte, now time.Time) (vnstatTraffic, bool) {
 	var doc struct {
 		Interfaces []struct {
@@ -63,12 +64,12 @@ func parseVnstatMonthly(data []byte, now time.Time) (vnstatTraffic, bool) {
 	var out vnstatTraffic
 	out.Month = now.Format("2006-01")
 	for _, iface := range doc.Interfaces {
-		out.TotalRxBytes += iface.Traffic.Total.Rx * 1024
-		out.TotalTxBytes += iface.Traffic.Total.Tx * 1024
+		out.TotalRxBytes += iface.Traffic.Total.Rx
+		out.TotalTxBytes += iface.Traffic.Total.Tx
 		for _, m := range iface.Traffic.Month {
 			if m.Date.Year == now.Year() && int(now.Month()) == m.Date.Month {
-				out.RxBytes += m.Rx * 1024
-				out.TxBytes += m.Tx * 1024
+				out.RxBytes += m.Rx
+				out.TxBytes += m.Tx
 			}
 		}
 	}
