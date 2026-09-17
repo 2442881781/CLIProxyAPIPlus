@@ -609,15 +609,19 @@ func main() {
 	if usePostgresStore {
 		sdkAuth.RegisterTokenStore(pgStoreInst)
 		storeaccess.SetPersister(pgStoreInst)
+		redisqueue.SetUsageMonitorPersister(pgStoreInst)
 	} else if useObjectStore {
 		sdkAuth.RegisterTokenStore(objectStoreInst)
 		storeaccess.SetPersister(nil)
+		redisqueue.SetUsageMonitorPersister(nil)
 	} else if useGitStore {
 		sdkAuth.RegisterTokenStore(gitStoreInst)
 		storeaccess.SetPersister(nil)
+		redisqueue.SetUsageMonitorPersister(nil)
 	} else {
 		sdkAuth.RegisterTokenStore(sdkAuth.NewFileTokenStore())
 		storeaccess.SetPersister(nil)
+		redisqueue.SetUsageMonitorPersister(nil)
 	}
 
 	// Register built-in access providers before constructing services.

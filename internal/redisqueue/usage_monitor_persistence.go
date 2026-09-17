@@ -1,6 +1,7 @@
 package redisqueue
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,33 @@ type usageMonitorPersistenceState struct {
 
 var usageMonitorPersistence usageMonitorPersistenceState
 
+// UsageMonitorPersister stores the usage monitor snapshot in a durable backend
+// that outlives the per-slot auth directory. A nil payload from
+// LoadUsageMonitor means the backend has not been seeded yet.
+type UsageMonitorPersister interface {
+	LoadUsageMonitor(ctx context.Context) ([]byte, error)
+	SaveUsageMonitor(ctx context.Context, data []byte) error
+}
+
+var (
+	usageMonitorPersisterMu sync.RWMutex
+	usageMonitorPersister   UsageMonitorPersister
+)
+
+// SetUsageMonitorPersister configures the durable backend used by subsequently
+// configured usage monitor persistence. Passing nil keeps file-only behavior.
+func SetUsageMonitorPersister(p UsageMonitorPersister) {
+	usageMonitorPersisterMu.Lock()
+	usageMonitorPersister = p
+	usageMonitorPersisterMu.Unlock()
+}
+
+func currentUsageMonitorPersister() UsageMonitorPersister {
+	usageMonitorPersisterMu.RLock()
+	defer usageMonitorPersisterMu.RUnlock()
+	return usageMonitorPersister
+}
+
 // ConfigureUsageMonitorPersistence loads and stores usage snapshots under the auth directory.
 func ConfigureUsageMonitorPersistence(authDir string) error {
 	authDir = strings.TrimSpace(authDir)
@@ -87,12 +115,46 @@ func ConfigureUsageMonitorPersistence(authDir string) error {
 	usageMonitorPersistence.dirty = false
 	usageMonitorPersistence.mu.Unlock()
 
-	if path == "" {
+	// A durable backend keeps persistence active even without a local path.
+	persister := currentUsageMonitorPersister()
+	if path == "" && persister == nil {
 		return nil
 	}
-	persisted, errLoad := loadPersistedUsageMonitor(path)
-	if errLoad != nil {
-		return errLoad
+	// The durable backend is authoritative; the local file stays as a mirror and
+	// as the migration source for deployments that predate the backend.
+	var fileSnapshot *persistedUsageMonitor
+	if path != "" {
+		var errLoad error
+		fileSnapshot, errLoad = loadPersistedUsageMonitor(path)
+		if errLoad != nil {
+			log.WithError(errLoad).Warn("ignoring unreadable usage monitor snapshot")
+			fileSnapshot = nil
+		}
+	}
+	persisted := fileSnapshot
+	if persister != nil {
+		data, errBackend := persister.LoadUsageMonitor(context.Background())
+		switch {
+		case errBackend != nil:
+			log.WithError(errBackend).Warn("failed to load usage monitor snapshot from backend")
+		case len(data) == 0:
+			// First run against this backend: seed it from the local snapshot.
+			if fileSnapshot != nil {
+				encoded, errEncode := json.Marshal(fileSnapshot)
+				if errEncode != nil {
+					log.WithError(errEncode).Warn("failed to encode usage monitor snapshot for backend seeding")
+				} else if errSave := persister.SaveUsageMonitor(context.Background(), encoded); errSave != nil {
+					log.WithError(errSave).Warn("failed to seed usage monitor snapshot into backend")
+				}
+			}
+		default:
+			backendSnapshot, errDecode := decodePersistedUsageMonitor(data)
+			if errDecode != nil {
+				log.WithError(errDecode).Warn("ignoring invalid usage monitor snapshot from backend")
+			} else {
+				persisted = backendSnapshot
+			}
+		}
 	}
 	if persisted == nil {
 		if previousPath != "" {
@@ -117,7 +179,11 @@ func FlushUsageMonitorPersistence() error {
 	dirty := usageMonitorPersistence.dirty
 	usageMonitorPersistence.dirty = false
 	usageMonitorPersistence.mu.Unlock()
-	if path == "" || !dirty {
+	if !dirty {
+		return nil
+	}
+	persister := currentUsageMonitorPersister()
+	if path == "" && persister == nil {
 		return nil
 	}
 
@@ -126,9 +192,26 @@ func FlushUsageMonitorPersistence() error {
 		markUsageMonitorPersistenceDirty()
 		return fmt.Errorf("marshal usage monitor snapshot: %w", errMarshal)
 	}
-	if errWrite := writeUsageMonitorFileAtomic(path, data); errWrite != nil {
+	// Persist to both targets: a failing backend must not cost us the local
+	// mirror, and a failing mirror must not cost us the durable snapshot.
+	var errPersist error
+	if persister != nil {
+		if errSave := persister.SaveUsageMonitor(context.Background(), data); errSave != nil {
+			errPersist = fmt.Errorf("save usage monitor snapshot to backend: %w", errSave)
+		}
+	}
+	if path != "" {
+		if errWrite := writeUsageMonitorFileAtomic(path, data); errWrite != nil {
+			if errPersist != nil {
+				errPersist = fmt.Errorf("%w; mirror usage monitor snapshot: %v", errPersist, errWrite)
+			} else {
+				errPersist = errWrite
+			}
+		}
+	}
+	if errPersist != nil {
 		markUsageMonitorPersistenceDirty()
-		return errWrite
+		return errPersist
 	}
 	return nil
 }
@@ -136,7 +219,7 @@ func FlushUsageMonitorPersistence() error {
 func scheduleUsageMonitorPersistence() {
 	usageMonitorPersistence.mu.Lock()
 	defer usageMonitorPersistence.mu.Unlock()
-	if usageMonitorPersistence.path == "" {
+	if usageMonitorPersistence.path == "" && currentUsageMonitorPersister() == nil {
 		return
 	}
 	usageMonitorPersistence.dirty = true
@@ -152,7 +235,7 @@ func scheduleUsageMonitorPersistence() {
 
 func markUsageMonitorPersistenceDirty() {
 	usageMonitorPersistence.mu.Lock()
-	if usageMonitorPersistence.path != "" {
+	if usageMonitorPersistence.path != "" || currentUsageMonitorPersister() != nil {
 		usageMonitorPersistence.dirty = true
 	}
 	usageMonitorPersistence.mu.Unlock()
@@ -213,6 +296,11 @@ func loadPersistedUsageMonitor(path string) (*persistedUsageMonitor, error) {
 	if errRead != nil {
 		return nil, fmt.Errorf("read usage monitor snapshot: %w", errRead)
 	}
+	return decodePersistedUsageMonitor(data)
+}
+
+// decodePersistedUsageMonitor validates a raw snapshot payload.
+func decodePersistedUsageMonitor(data []byte) (*persistedUsageMonitor, error) {
 	var persisted persistedUsageMonitor
 	if errUnmarshal := json.Unmarshal(data, &persisted); errUnmarshal != nil {
 		return nil, fmt.Errorf("decode usage monitor snapshot: %w", errUnmarshal)
