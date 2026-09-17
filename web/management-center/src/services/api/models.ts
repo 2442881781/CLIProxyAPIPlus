@@ -87,6 +87,10 @@ export const normalizeProviderModels = (payload: unknown) => {
   return normalizeModelList(record.models ?? payload, { dedupe: true });
 };
 
+export const mergeProviderModelCatalogs = (
+  ...catalogs: ReturnType<typeof normalizeModelList>[]
+) => normalizeModelList(catalogs.flat(), { dedupe: true });
+
 export const modelsApi = {
   /**
    * Fetch available models from /v1/models endpoint (for system info page)
@@ -114,6 +118,29 @@ export const modelsApi = {
     if (!normalized) return [];
     const payload = await apiClient.get(`/provider-models/${encodeURIComponent(normalized)}`);
     return normalizeProviderModels(payload);
+  },
+
+  async fetchModelRouteCatalog(provider: string) {
+    const normalized = provider.trim().toLowerCase();
+    if (!normalized) return [];
+
+    const [runtimeResult, staticResult] = await Promise.allSettled([
+      apiClient.get(`/provider-models/${encodeURIComponent(normalized)}`),
+      apiClient.get(`/model-definitions/${encodeURIComponent(normalized)}`),
+    ]);
+    const catalogs = [];
+    if (runtimeResult.status === 'fulfilled') {
+      catalogs.push(normalizeProviderModels(runtimeResult.value));
+    }
+    if (staticResult.status === 'fulfilled') {
+      catalogs.push(normalizeProviderModels(staticResult.value));
+    }
+    if (catalogs.length === 0) {
+      if (runtimeResult.status === 'rejected') throw runtimeResult.reason;
+      if (staticResult.status === 'rejected') throw staticResult.reason;
+      throw new Error('Model catalog unavailable');
+    }
+    return mergeProviderModelCatalogs(...catalogs);
   },
 
   /**

@@ -6,7 +6,10 @@ import {
   readModelPolicyAliases,
 } from '../src/features/providers/modelPolicy';
 import { normalizeOauthAllowedModels } from '../src/services/api/authFiles';
-import { normalizeProviderModels } from '../src/services/api/models';
+import {
+  mergeProviderModelCatalogs,
+  normalizeProviderModels,
+} from '../src/services/api/models';
 
 describe('provider model policy', () => {
   it('preserves custom values while deduplicating model names case-insensitively', () => {
@@ -53,6 +56,20 @@ describe('provider model policy', () => {
     ).toEqual([
       expect.objectContaining({ name: 'dynamic-a' }),
       expect.objectContaining({ name: 'dynamic-b' }),
+    ]);
+  });
+  it('merges runtime plugin and static model catalogs without duplicates', () => {
+    const runtime = normalizeProviderModels({
+      models: [{ id: 'plugin-model', display_name: 'Plugin Model' }, { id: 'shared-model' }],
+    });
+    const staticModels = normalizeProviderModels({
+      models: [{ id: 'SHARED-MODEL' }, { id: 'static-model' }],
+    });
+
+    expect(mergeProviderModelCatalogs(runtime, staticModels)).toEqual([
+      expect.objectContaining({ name: 'plugin-model', alias: 'Plugin Model' }),
+      expect.objectContaining({ name: 'shared-model' }),
+      expect.objectContaining({ name: 'static-model' }),
     ]);
   });
 });

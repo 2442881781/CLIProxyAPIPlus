@@ -11,7 +11,7 @@ import { SecondaryScreenShell } from '@/components/common/SecondaryScreenShell';
 import { useEdgeSwipeBack } from '@/hooks/useEdgeSwipeBack';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { useAuthStore, useNotificationStore } from '@/stores';
-import { authFilesApi } from '@/services/api';
+import { authFilesApi, modelsApi } from '@/services/api';
 import { buildOAuthProviderOptions, normalizeProviderKey } from '@/features/authFiles/constants';
 import {
   getModelAliasDraftSignature,
@@ -246,11 +246,13 @@ export function AuthFilesOAuthModelAliasEditPage() {
     setModelsLoading(true);
     setModelsError(null);
 
-    authFilesApi
-      .getModelDefinitions(resolvedProviderKey)
+    modelsApi
+      .fetchModelRouteCatalog(resolvedProviderKey)
       .then((models) => {
         if (cancelled) return;
-        setModelsList(models);
+        setModelsList(
+          models.map((model) => ({ id: model.name, display_name: model.alias }))
+        );
       })
       .catch((err: unknown) => {
         if (cancelled) return;

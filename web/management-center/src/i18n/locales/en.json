@@ -627,7 +627,7 @@
     "provider_placeholder": "e.g. codex / vertex",
     "provider_hint": "Defaults to the current filter; pick an existing provider or type a new name.",
     "model_source_loading": "Loading models...",
-    "model_source_unsupported": "The current CPA version does not support fetching model lists (manual input still works).",
+    "model_source_unsupported": "Models could not be loaded from either the runtime or static catalog (manual input still works).",
     "model_source_loaded": "{{count}} models loaded. Use the dropdown in 'Source model name', or type custom values. Saving an empty list removes that provider. Enable 'Keep original' to keep the original name while adding the alias.",
     "alias_label": "Route mappings",
     "alias_name_placeholder": "Real upstream model",

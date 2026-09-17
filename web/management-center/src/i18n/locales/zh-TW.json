@@ -627,7 +627,7 @@
     "provider_placeholder": "例如 codex / vertex",
     "provider_hint": "預設選取目前篩選的供應商，也可直接輸入或選擇其他名稱。",
     "model_source_loading": "正在載入模型清單...",
-    "model_source_unsupported": "目前 CPA 版本不支援取得模型清單（仍可手動輸入）。",
+    "model_source_unsupported": "無法從運行時或靜態目錄取得該供應商的模型（仍可手動輸入）。",
     "model_source_loaded": "已載入 {{count}} 個模型，可在「原模型名稱」中下拉選擇；也可手動輸入。留空儲存將刪除該供應商記錄；開啟「保留原名」會在保留原模型名的同時新增別名。",
     "alias_label": "路由映射",
     "alias_name_placeholder": "上游真實模型",
