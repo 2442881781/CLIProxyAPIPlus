@@ -5,6 +5,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
 )
@@ -61,6 +63,9 @@ func (h *Host) RouteModelExcept(ctx context.Context, req pluginapi.ModelRouteReq
 			}
 			return resp, true
 		case pluginapi.ModelRouteTargetSelf, pluginapi.ModelRouteTargetExecutor:
+			if h.configuredPublicModelForPlugin(resp.Target, req.RequestedModel) && registeredModelHasOtherProvider(req.RequestedModel, h.modelProvider(resp.Target)) {
+				continue
+			}
 			if !h.executorPluginReady(resp.Target, nextReq) {
 				log.WithFields(log.Fields{"plugin_id": record.id, "target_plugin_id": resp.Target}).Warn("pluginhost: model router returned unavailable executor plugin")
 				continue
@@ -72,6 +77,17 @@ func (h *Host) RouteModelExcept(ctx context.Context, req pluginapi.ModelRouteReq
 		}
 	}
 	return pluginapi.ModelRouteResponse{}, false
+}
+
+func registeredModelHasOtherProvider(modelID, pluginProvider string) bool {
+	providers := registry.GetGlobalRegistry().GetModelProviders(strings.TrimSpace(modelID))
+	pluginProvider = strings.ToLower(strings.TrimSpace(pluginProvider))
+	for _, provider := range providers {
+		if normalized := strings.ToLower(strings.TrimSpace(provider)); normalized != "" && normalized != pluginProvider {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Host) callModelRouter(ctx context.Context, pluginID string, router pluginapi.ModelRouter, req pluginapi.ModelRouteRequest) (out pluginapi.ModelRouteResponse, ok bool) {

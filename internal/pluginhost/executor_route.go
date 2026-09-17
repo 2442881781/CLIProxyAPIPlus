@@ -1,6 +1,7 @@
 package pluginhost
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -88,7 +89,12 @@ func (h *Host) ExecutePluginExecutor(ctx context.Context, pluginID string, req c
 	if errAdapter != nil {
 		return coreexecutor.Response{}, errAdapter
 	}
-	return adapter.Execute(ctx, (*coreauth.Auth)(nil), req, opts)
+	resp, errExecute := adapter.Execute(ctx, (*coreauth.Auth)(nil), req, opts)
+	if errExecute != nil {
+		return resp, errExecute
+	}
+	resp.Payload = rewritePluginExecutorPayload(resp.Payload, pluginClientModel(req, opts))
+	return resp, nil
 }
 
 // ExecutePluginExecutorStream executes a streaming request with the named plugin executor without changing the requested model.
@@ -97,7 +103,11 @@ func (h *Host) ExecutePluginExecutorStream(ctx context.Context, pluginID string,
 	if errAdapter != nil {
 		return nil, errAdapter
 	}
-	return adapter.ExecuteStream(ctx, (*coreauth.Auth)(nil), req, opts)
+	result, errExecute := adapter.ExecuteStream(ctx, (*coreauth.Auth)(nil), req, opts)
+	if errExecute != nil || result == nil {
+		return result, errExecute
+	}
+	return rewritePluginExecutorStream(result, pluginClientModel(req, opts)), nil
 }
 
 // CountPluginExecutor executes a count-tokens request with the named plugin executor without changing the requested model.
@@ -107,6 +117,47 @@ func (h *Host) CountPluginExecutor(ctx context.Context, pluginID string, req cor
 		return coreexecutor.Response{}, errAdapter
 	}
 	return adapter.CountTokens(ctx, (*coreauth.Auth)(nil), req, opts)
+}
+
+func pluginClientModel(req coreexecutor.Request, opts coreexecutor.Options) string {
+	if requested, ok := opts.Metadata[coreexecutor.RequestedModelMetadataKey].(string); ok {
+		if requested = strings.TrimSpace(requested); requested != "" {
+			return requested
+		}
+	}
+	return strings.TrimSpace(req.Model)
+}
+
+func rewritePluginExecutorPayload(payload []byte, clientModel string) []byte {
+	if len(payload) == 0 || strings.TrimSpace(clientModel) == "" {
+		return payload
+	}
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 || (trimmed[0] != '{' && !bytes.Contains(payload, []byte("data:"))) {
+		return payload
+	}
+	rewriter := coreauth.NewStreamRewriter(coreauth.StreamRewriteOptions{RewriteModel: clientModel})
+	rewritten := rewriter.RewriteChunk(payload)
+	return append(rewritten, rewriter.Finish()...)
+}
+
+func rewritePluginExecutorStream(result *coreexecutor.StreamResult, clientModel string) *coreexecutor.StreamResult {
+	if result == nil || result.Chunks == nil || strings.TrimSpace(clientModel) == "" {
+		return result
+	}
+	out := make(chan coreexecutor.StreamChunk)
+	go func() {
+		defer close(out)
+		for chunk := range result.Chunks {
+			if chunk.Err != nil {
+				out <- chunk
+				continue
+			}
+			chunk.Payload = rewritePluginExecutorPayload(chunk.Payload, clientModel)
+			out <- chunk
+		}
+	}()
+	return &coreexecutor.StreamResult{Headers: result.Headers, Chunks: out}
 }
 
 func (h *Host) executorAdapterForPlugin(pluginID string) (*executorAdapter, error) {

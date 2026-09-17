@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -609,5 +611,96 @@ func TestHostRouteModelSkipsOAuthOnlyExecutorTargets(t *testing.T) {
 	}
 	if !ok || resp.Target != "fallback" {
 		t.Fatalf("RouteModel() = %#v, %v; want fallback executor handled", resp, ok)
+	}
+}
+
+func TestHostExecutePluginExecutorRewritesResponseModelToClientModel(t *testing.T) {
+	executor := &fakeExecutor{
+		identifier: "plugin-provider",
+		execute: func(context.Context, pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
+			return pluginapi.ExecutorResponse{Payload: []byte(`{"model":"provider/internal-model","choices":[]}`)}, nil
+		},
+	}
+	host := newRouteModelHostWithRecords(capabilityRecord{
+		id: "executor",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+			Executor:              executor,
+			ExecutorInputFormats:  []string{"openai"},
+			ExecutorOutputFormats: []string{"openai"},
+		}},
+	})
+
+	resp, errExecute := host.ExecutePluginExecutor(context.Background(), "executor", coreexecutor.Request{Model: "public-model"}, coreexecutor.Options{
+		Metadata: map[string]any{coreexecutor.RequestedModelMetadataKey: "public-model"},
+	})
+	if errExecute != nil {
+		t.Fatalf("ExecutePluginExecutor() error = %v", errExecute)
+	}
+	if string(resp.Payload) != `{"model":"public-model","choices":[]}` {
+		t.Fatalf("payload = %q, want public model", resp.Payload)
+	}
+}
+
+func TestHostExecutePluginExecutorStreamRewritesResponseModelToClientModel(t *testing.T) {
+	chunks := make(chan pluginapi.ExecutorStreamChunk, 1)
+	chunks <- pluginapi.ExecutorStreamChunk{Payload: []byte("data: {\"model\":\"provider/internal-model\"}\n\n")}
+	close(chunks)
+	executor := &fakeExecutor{
+		identifier: "plugin-provider",
+		executeStream: func(context.Context, pluginapi.ExecutorRequest) (pluginapi.ExecutorStreamResponse, error) {
+			return pluginapi.ExecutorStreamResponse{Chunks: chunks}, nil
+		},
+	}
+	host := newRouteModelHostWithRecords(capabilityRecord{
+		id: "executor",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+			Executor:              executor,
+			ExecutorInputFormats:  []string{"openai"},
+			ExecutorOutputFormats: []string{"openai"},
+		}},
+	})
+
+	result, errExecute := host.ExecutePluginExecutorStream(context.Background(), "executor", coreexecutor.Request{Model: "public-model"}, coreexecutor.Options{
+		Metadata: map[string]any{coreexecutor.RequestedModelMetadataKey: "public-model"},
+	})
+	if errExecute != nil {
+		t.Fatalf("ExecutePluginExecutorStream() error = %v", errExecute)
+	}
+	var payload []byte
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("stream error = %v", chunk.Err)
+		}
+		payload = append(payload, chunk.Payload...)
+	}
+	if string(payload) != "data: {\"model\":\"public-model\"}\n\n" {
+		t.Fatalf("payload = %q, want public model", payload)
+	}
+}
+
+func TestHostRouteModelDefersConfiguredPublicAliasToSharedModelPool(t *testing.T) {
+	registry.GetGlobalRegistry().RegisterClient("shared-provider-client", "other-provider", []*registry.ModelInfo{{ID: "public-model"}})
+	defer registry.GetGlobalRegistry().UnregisterClient("shared-provider-client")
+
+	router := modelRouterFunc(func(context.Context, pluginapi.ModelRouteRequest) (pluginapi.ModelRouteResponse, error) {
+		return pluginapi.ModelRouteResponse{TargetKind: pluginapi.ModelRouteTargetSelf, Target: "executor"}, nil
+	})
+	executor := &fakeExecutor{identifier: "plugin-provider"}
+	host := newRouteModelHostWithRecords(capabilityRecord{
+		id: "executor",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+			ModelRouter:           router,
+			Executor:              executor,
+			ExecutorInputFormats:  []string{"openai"},
+			ExecutorOutputFormats: []string{"openai"},
+		}},
+	})
+	host.mu.Lock()
+	host.loaded["executor"] = &loadedPlugin{id: "executor", configYAML: []byte("models:\n  - alias: public-model\n    name: internal-model\n")}
+	host.modelProviders["executor"] = "plugin-provider"
+	host.mu.Unlock()
+
+	if resp, ok := host.RouteModel(context.Background(), pluginapi.ModelRouteRequest{RequestedModel: "public-model"}); ok {
+		t.Fatalf("RouteModel() = %#v, true; want shared model pool to handle public alias", resp)
 	}
 }
