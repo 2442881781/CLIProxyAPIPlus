@@ -136,7 +136,8 @@ func TestServerStats_MonthlyTrafficInResponse(t *testing.T) {
 }
 
 func TestParseVnstatMonthly(t *testing.T) {
-	// vnstat 2.x reports KiB; the current month is summed across interfaces.
+	// vnstat 2.x reports byte counts in JSON; the current month is summed
+	// across interfaces.
 	doc := []byte(`{
 		"interfaces": [
 			{"name": "eth0", "traffic": {
@@ -158,11 +159,11 @@ func TestParseVnstatMonthly(t *testing.T) {
 	if !ok {
 		t.Fatal("parse failed")
 	}
-	if vt.RxBytes != (2000+300)*1024 || vt.TxBytes != (1000+150)*1024 {
-		t.Fatalf("month bytes = %d/%d, want %d/%d", vt.RxBytes, vt.TxBytes, 2300*1024, 1150*1024)
+	if vt.RxBytes != 2000+300 || vt.TxBytes != 1000+150 {
+		t.Fatalf("month bytes = %d/%d, want %d/%d", vt.RxBytes, vt.TxBytes, 2300, 1150)
 	}
-	if vt.TotalRxBytes != (1000000+4000)*1024 {
-		t.Fatalf("total rx = %d, want %d", vt.TotalRxBytes, 1004000*1024)
+	if vt.TotalRxBytes != 1000000+4000 {
+		t.Fatalf("total rx = %d, want %d", vt.TotalRxBytes, 1004000)
 	}
 	if vt.Month != "2026-09" {
 		t.Fatalf("month = %q", vt.Month)
