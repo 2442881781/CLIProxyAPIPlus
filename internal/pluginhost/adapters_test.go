@@ -3691,3 +3691,27 @@ func (failingReadCloser) Read(p []byte) (int, error) {
 func (failingReadCloser) Close() error {
 	return nil
 }
+
+func TestExecutorAdapterRewritesModelToClientRequest(t *testing.T) {
+	executor := &fakeExecutor{
+		identifier: "plugin-provider",
+		execute: func(context.Context, pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
+			return pluginapi.ExecutorResponse{Payload: []byte(`{"model":"provider/internal-model","choices":[]}`)}, nil
+		},
+	}
+	host := newHostWithRecords(capabilityRecord{id: "executor"})
+	adapter := newCurrentExecutorAdapterForTest(host, "executor", executor,
+		[]sdktranslator.Format{sdktranslator.FormatOpenAI},
+		[]sdktranslator.Format{sdktranslator.FormatOpenAI},
+	)
+	resp, errExecute := adapter.Execute(context.Background(), &coreauth.Auth{ID: "auth", Provider: "plugin-provider"}, coreexecutor.Request{
+		Model:  "provider/internal-model",
+		Format: sdktranslator.FormatOpenAI,
+	}, coreexecutor.Options{Metadata: map[string]any{coreexecutor.RequestedModelMetadataKey: "public-model"}})
+	if errExecute != nil {
+		t.Fatalf("Execute() error = %v", errExecute)
+	}
+	if string(resp.Payload) != `{"model":"public-model","choices":[]}` {
+		t.Fatalf("payload = %q, want public model", resp.Payload)
+	}
+}

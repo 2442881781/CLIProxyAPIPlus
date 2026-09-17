@@ -128,6 +128,11 @@ func pluginClientModel(req coreexecutor.Request, opts coreexecutor.Options) stri
 	return strings.TrimSpace(req.Model)
 }
 
+func pluginRequestedClientModel(opts coreexecutor.Options) string {
+	requested, _ := opts.Metadata[coreexecutor.RequestedModelMetadataKey].(string)
+	return strings.TrimSpace(requested)
+}
+
 func rewritePluginExecutorPayload(payload []byte, clientModel string) []byte {
 	if len(payload) == 0 || strings.TrimSpace(clientModel) == "" {
 		return payload
