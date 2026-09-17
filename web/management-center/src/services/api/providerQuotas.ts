@@ -1,9 +1,13 @@
 import { apiClient } from './client';
 
+// The server serializes normalized plugin buckets in camelCase; snake_case is
+// kept for older snapshots and plugin payloads.
 export interface ProviderQuotaBucketSnapshot {
   window?: string;
   remaining_fraction?: number;
+  remainingFraction?: number;
   reset_time?: string;
+  resetTime?: string;
 }
 
 export interface ProviderQuotaSourceSnapshot {
@@ -16,6 +20,7 @@ export interface ProviderQuotaSourceSnapshot {
   quota?: {
     groups?: Array<{
       display_name?: string;
+      displayName?: string;
       buckets?: ProviderQuotaBucketSnapshot[];
     }>;
   };

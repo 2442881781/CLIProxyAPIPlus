@@ -333,15 +333,23 @@ const snapshotSourceToQuotaData = (
   fallbackReason = ''
 ): ProviderQuotaData => {
   const windows = (source.quota?.groups ?? []).flatMap((group) =>
-    (group.buckets ?? []).map((bucket, index) => {
-      const remaining = clampPercent((asNumber(bucket.remaining_fraction) ?? 0) * 100);
+    (group.buckets ?? []).flatMap((bucket, index) => {
+      // The server serializes normalized plugin buckets in camelCase while
+      // earlier snapshots and plugin payloads use snake_case, so accept both.
+      const fraction = asNumber(bucket.remaining_fraction ?? bucket.remainingFraction);
+      // A bucket without a usable fraction is unknown, not consumed: skipping
+      // it beats reporting a window that looks fully used.
+      if (fraction === null) return [];
+      const remaining = clampPercent(fraction * 100);
       const id = String(bucket.window || `window-${index}`);
-      return makePercentWindow(
-        id,
-        t(`provider_quota.windows.${id}`, { defaultValue: id }),
-        100 - remaining,
-        asResetMs(bucket.reset_time)
-      );
+      return [
+        makePercentWindow(
+          id,
+          t(`provider_quota.windows.${id}`, { defaultValue: id }),
+          100 - remaining,
+          asResetMs(bucket.reset_time ?? bucket.resetTime)
+        ),
+      ];
     })
   );
   if (windows.length === 0) {
