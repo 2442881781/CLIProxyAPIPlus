@@ -1,0 +1,44 @@
+import { apiClient } from './client';
+
+export interface ProviderQuotaBucketSnapshot {
+  window?: string;
+  remaining_fraction?: number;
+  reset_time?: string;
+}
+
+export interface ProviderQuotaSourceSnapshot {
+  id: string;
+  label?: string;
+  remaining_percent?: number;
+  observed_at?: string;
+  last_attempt_at?: string;
+  last_error?: string;
+  quota?: {
+    groups?: Array<{
+      display_name?: string;
+      buckets?: ProviderQuotaBucketSnapshot[];
+    }>;
+  };
+}
+
+export interface ProviderQuotaSnapshot {
+  provider: string;
+  remaining_percent: number;
+  observed_at?: string;
+  last_attempt_at?: string;
+  last_error?: string;
+  sources?: ProviderQuotaSourceSnapshot[];
+}
+
+export const providerQuotasApi = {
+  async list(): Promise<ProviderQuotaSnapshot[]> {
+    const response = (await apiClient.get('/provider-quotas')) as {
+      providers?: ProviderQuotaSnapshot[];
+    };
+    return Array.isArray(response.providers) ? response.providers : [];
+  },
+
+  refresh(provider: string): Promise<ProviderQuotaSnapshot> {
+    return apiClient.post(`/provider-quotas/${encodeURIComponent(provider)}/refresh`);
+  },
+};

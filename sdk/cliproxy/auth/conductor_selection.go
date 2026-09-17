@@ -649,6 +649,7 @@ func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, pr
 			return nil, nil, err
 		}
 		priorityAuths = cloneAuthSlice(priorityAuths)
+		m.applyProviderQuotaFallback(priorityAuths, routeModel, now)
 		return priorityAuths, priorityAuths, nil
 	}
 
@@ -659,6 +660,7 @@ func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, pr
 		return nil, nil, err
 	}
 	selectorAuths = cloneAuthSlice(selectorAuths)
+	m.applyProviderQuotaFallback(selectorAuths, routeModel, now)
 	return highestPriorityAuths(selectorAuths), selectorAuths, nil
 }
 
@@ -1611,6 +1613,12 @@ func (m *Manager) CloseExecutionSession(sessionID string) {
 
 func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
+		return false
+	}
+	m.providerQuotaMu.RLock()
+	hasProviderQuotas := len(m.providerQuotas) > 0
+	m.providerQuotaMu.RUnlock()
+	if hasProviderQuotas {
 		return false
 	}
 	return isBuiltInSelector(m.Selector())

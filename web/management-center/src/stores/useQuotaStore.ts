@@ -1,11 +1,9 @@
 /**
- * Successful quota snapshots persist across route switches and browser reloads.
+ * Quota snapshots are server-derived runtime data and intentionally remain
+ * in-memory. Persistent snapshots are owned by the backend.
  */
 
 import { create } from 'zustand';
-import { createJSONStorage, persist } from 'zustand/middleware';
-import { obfuscatedStorage } from '@/services/storage/secureStorage';
-import { STORAGE_KEY_QUOTA } from '@/utils/constants';
 import type {
   AntigravityQuotaState,
   ClaudeQuotaState,
@@ -47,10 +45,38 @@ const resolveUpdater = <T>(updater: QuotaUpdater<T>, prev: T): T => {
   return updater;
 };
 
-export const useQuotaStore = create<QuotaStoreState>()(
-  persist(
-    (set) => ({
-      cacheGeneration: 0,
+export const useQuotaStore = create<QuotaStoreState>()((set) => ({
+  cacheGeneration: 0,
+  antigravityQuota: {},
+  claudeQuota: {},
+  codexQuota: {},
+  kimiQuota: {},
+  xaiQuota: {},
+  commandcodeQuota: {},
+  opencodeQuota: {},
+  zhipuQuota: {},
+  devinQuota: {},
+  setAntigravityQuota: (updater) =>
+    set((state) => ({ antigravityQuota: resolveUpdater(updater, state.antigravityQuota) })),
+  setClaudeQuota: (updater) =>
+    set((state) => ({ claudeQuota: resolveUpdater(updater, state.claudeQuota) })),
+  setCodexQuota: (updater) =>
+    set((state) => ({ codexQuota: resolveUpdater(updater, state.codexQuota) })),
+  setKimiQuota: (updater) =>
+    set((state) => ({ kimiQuota: resolveUpdater(updater, state.kimiQuota) })),
+  setXaiQuota: (updater) =>
+    set((state) => ({ xaiQuota: resolveUpdater(updater, state.xaiQuota) })),
+  setCommandcodeQuota: (updater) =>
+    set((state) => ({ commandcodeQuota: resolveUpdater(updater, state.commandcodeQuota) })),
+  setOpencodeQuota: (updater) =>
+    set((state) => ({ opencodeQuota: resolveUpdater(updater, state.opencodeQuota) })),
+  setZhipuQuota: (updater) =>
+    set((state) => ({ zhipuQuota: resolveUpdater(updater, state.zhipuQuota) })),
+  setDevinQuota: (updater) =>
+    set((state) => ({ devinQuota: resolveUpdater(updater, state.devinQuota) })),
+  clearQuotaCache: () =>
+    set((state) => ({
+      cacheGeneration: state.cacheGeneration + 1,
       antigravityQuota: {},
       claudeQuota: {},
       codexQuota: {},
@@ -60,88 +86,8 @@ export const useQuotaStore = create<QuotaStoreState>()(
       opencodeQuota: {},
       zhipuQuota: {},
       devinQuota: {},
-      setAntigravityQuota: (updater) =>
-        set((state) => ({
-          antigravityQuota: resolveUpdater(updater, state.antigravityQuota),
-        })),
-      setClaudeQuota: (updater) =>
-        set((state) => ({
-          claudeQuota: resolveUpdater(updater, state.claudeQuota),
-        })),
-      setCodexQuota: (updater) =>
-        set((state) => ({
-          codexQuota: resolveUpdater(updater, state.codexQuota),
-        })),
-      setKimiQuota: (updater) =>
-        set((state) => ({
-          kimiQuota: resolveUpdater(updater, state.kimiQuota),
-        })),
-      setXaiQuota: (updater) =>
-        set((state) => ({
-          xaiQuota: resolveUpdater(updater, state.xaiQuota),
-        })),
-      setCommandcodeQuota: (updater) =>
-        set((state) => ({
-          commandcodeQuota: resolveUpdater(updater, state.commandcodeQuota),
-        })),
-      setOpencodeQuota: (updater) =>
-        set((state) => ({
-          opencodeQuota: resolveUpdater(updater, state.opencodeQuota),
-        })),
-      setZhipuQuota: (updater) =>
-        set((state) => ({
-          zhipuQuota: resolveUpdater(updater, state.zhipuQuota),
-        })),
-      setDevinQuota: (updater) =>
-        set((state) => ({
-          devinQuota: resolveUpdater(updater, state.devinQuota),
-        })),
-      clearQuotaCache: () =>
-        set((state) => ({
-          cacheGeneration: state.cacheGeneration + 1,
-          antigravityQuota: {},
-          claudeQuota: {},
-          codexQuota: {},
-          kimiQuota: {},
-          xaiQuota: {},
-          commandcodeQuota: {},
-          opencodeQuota: {},
-          zhipuQuota: {},
-          devinQuota: {},
-        })),
-    }),
-    {
-      name: STORAGE_KEY_QUOTA,
-      version: 1,
-      storage: createJSONStorage(() => ({
-        getItem: (name) => {
-          if (typeof localStorage === 'undefined') return null;
-          const data = obfuscatedStorage.getItem<QuotaStoreState>(name);
-          return data ? JSON.stringify(data) : null;
-        },
-        setItem: (name, value) => {
-          if (typeof localStorage === 'undefined') return;
-          obfuscatedStorage.setItem(name, JSON.parse(value));
-        },
-        removeItem: (name) => {
-          if (typeof localStorage === 'undefined') return;
-          obfuscatedStorage.removeItem(name);
-        },
-      })),
-      partialize: (state) => ({
-        antigravityQuota: state.antigravityQuota,
-        claudeQuota: state.claudeQuota,
-        codexQuota: state.codexQuota,
-        kimiQuota: state.kimiQuota,
-        xaiQuota: state.xaiQuota,
-        commandcodeQuota: state.commandcodeQuota,
-        opencodeQuota: state.opencodeQuota,
-        zhipuQuota: state.zhipuQuota,
-        devinQuota: state.devinQuota,
-      }),
-    }
-  )
-);
+    })),
+}));
 
 export const captureQuotaCacheGeneration = (): number => useQuotaStore.getState().cacheGeneration;
 
@@ -150,3 +96,11 @@ export const commitIfQuotaCacheCurrent = (generation: number, commit: () => void
   commit();
   return true;
 };
+
+if (typeof window !== 'undefined') {
+  try {
+    window.localStorage.removeItem('cli-proxy-quota-cache');
+  } catch {
+    // Storage can be unavailable in browser privacy modes.
+  }
+}

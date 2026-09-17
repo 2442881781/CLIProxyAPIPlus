@@ -20,35 +20,38 @@ import (
 )
 
 const (
-	defaultConfigTable   = "config_store"
-	defaultAuthTable     = "auth_store"
-	defaultCooldownTable = "cooldown_store"
-	defaultAccessTable   = "access_store"
-	defaultAccessKey     = "access-keys"
-	defaultConfigKey     = "config"
+	defaultConfigTable        = "config_store"
+	defaultAuthTable          = "auth_store"
+	defaultCooldownTable      = "cooldown_store"
+	defaultAccessTable        = "access_store"
+	defaultProviderQuotaTable = "provider_quota_store"
+	defaultAccessKey          = "access-keys"
+	defaultConfigKey          = "config"
 )
 
 // PostgresStoreConfig captures configuration required to initialize a Postgres-backed store.
 type PostgresStoreConfig struct {
-	DSN           string
-	Schema        string
-	ConfigTable   string
-	AuthTable     string
-	CooldownTable string
-	AccessTable   string
-	SpoolDir      string
+	DSN                string
+	Schema             string
+	ConfigTable        string
+	AuthTable          string
+	CooldownTable      string
+	AccessTable        string
+	ProviderQuotaTable string
+	SpoolDir           string
 }
 
 // PostgresStore persists configuration and authentication metadata using PostgreSQL as backend
 // while mirroring data to a local workspace so existing file-based workflows continue to operate.
 type PostgresStore struct {
-	db            *sql.DB
-	cfg           PostgresStoreConfig
-	spoolRoot     string
-	configPath    string
-	authDir       string
-	cooldownStore *postgresCooldownStateStore
-	mu            sync.Mutex
+	db                 *sql.DB
+	cfg                PostgresStoreConfig
+	spoolRoot          string
+	configPath         string
+	authDir            string
+	cooldownStore      *postgresCooldownStateStore
+	providerQuotaStore *postgresProviderQuotaStore
+	mu                 sync.Mutex
 }
 
 // NewPostgresStore establishes a connection to PostgreSQL and prepares the local workspace.
@@ -69,6 +72,9 @@ func NewPostgresStore(ctx context.Context, cfg PostgresStoreConfig) (*PostgresSt
 	}
 	if cfg.AccessTable == "" {
 		cfg.AccessTable = defaultAccessTable
+	}
+	if cfg.ProviderQuotaTable == "" {
+		cfg.ProviderQuotaTable = defaultProviderQuotaTable
 	}
 
 	spoolRoot := strings.TrimSpace(cfg.SpoolDir)
@@ -109,6 +115,7 @@ func NewPostgresStore(ctx context.Context, cfg PostgresStoreConfig) (*PostgresSt
 		authDir:    authDir,
 	}
 	store.cooldownStore = &postgresCooldownStateStore{store: store}
+	store.providerQuotaStore = &postgresProviderQuotaStore{store: store}
 	return store, nil
 }
 
@@ -177,6 +184,17 @@ func (s *PostgresStore) EnsureSchema(ctx context.Context) error {
 		)
 	`, accessTable)); err != nil {
 		return fmt.Errorf("postgres store: create access table: %w", err)
+	}
+	providerQuotaTable := s.fullTableName(s.cfg.ProviderQuotaTable)
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			provider TEXT PRIMARY KEY,
+			content JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`, providerQuotaTable)); err != nil {
+		return fmt.Errorf("postgres store: create provider quota table: %w", err)
 	}
 	return nil
 }

@@ -704,3 +704,33 @@ func TestHostRouteModelDefersConfiguredPublicAliasToSharedModelPool(t *testing.T
 		t.Fatalf("RouteModel() = %#v, true; want shared model pool to handle public alias", resp)
 	}
 }
+
+func TestStaticPluginCandidateExecutesWithoutExternalAuthIdentity(t *testing.T) {
+	var gotReq pluginapi.ExecutorRequest
+	executor := &fakeExecutor{
+		identifier: "static-provider",
+		execute: func(_ context.Context, req pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
+			gotReq = req
+			return pluginapi.ExecutorResponse{Payload: []byte(`{"model":"upstream-model","ok":true}`)}, nil
+		},
+	}
+	host := newRouteModelHostWithRecords(capabilityRecord{
+		id: "static-plugin",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+			Executor:              executor,
+			ExecutorInputFormats:  []string{"openai"},
+			ExecutorOutputFormats: []string{"openai"},
+		}},
+	})
+	records := host.activeRecords()
+	adapter := newExecutorAdapterRegistration(host, records[0], "static-provider", executor).adapter
+	auth := &coreauth.Auth{ID: "plugin-static:static-provider", Provider: "static-provider", Attributes: map[string]string{}}
+	coreauth.MarkPluginStaticAuth(auth)
+	_, errExecute := adapter.Execute(context.Background(), auth, coreexecutor.Request{Model: "public-model", Payload: []byte(`{"model":"public-model"}`)}, coreexecutor.Options{SourceFormat: "openai", ResponseFormat: "openai"})
+	if errExecute != nil {
+		t.Fatalf("Execute(): %v", errExecute)
+	}
+	if gotReq.AuthID != "" || gotReq.AuthProvider != "" || len(gotReq.AuthAttributes) != 0 {
+		t.Fatalf("plugin request exposed synthetic auth: %#v", gotReq)
+	}
+}

@@ -22,6 +22,8 @@ const (
 	AttributeSource           = "source"
 	AttributeSourceBackend    = "source_backend"
 	AttributeWeight           = "weight"
+	AttributePluginStatic     = "plugin_static"
+	pluginStaticAttrEnabled   = "true"
 )
 
 // AuthKind returns the credential kind using explicit metadata first and legacy
@@ -74,6 +76,24 @@ func (a *Auth) AuthSourceKind() string {
 		return AuthSourceFile
 	}
 	return ""
+}
+
+// MarkPluginStaticAuth marks an in-memory scheduler candidate representing a
+// plugin-managed credential pool rather than an external auth record.
+func MarkPluginStaticAuth(auth *Auth) {
+	if auth == nil {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	auth.Attributes[AttributeRuntimeOnly] = pluginStaticAttrEnabled
+	auth.Attributes[AttributePluginStatic] = pluginStaticAttrEnabled
+}
+
+// IsPluginStaticAuth reports whether auth represents a plugin-managed static pool.
+func IsPluginStaticAuth(auth *Auth) bool {
+	return auth != nil && strings.EqualFold(authAttribute(auth, AttributePluginStatic), pluginStaticAttrEnabled)
 }
 
 func normalizeAuthKind(kind string) string {

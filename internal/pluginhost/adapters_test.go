@@ -498,6 +498,29 @@ func TestRegisterExecutorsAllowsMultipleProvidersForSharedModel(t *testing.T) {
 	}
 }
 
+func TestRegisterExecutorsRegistersStaticSchedulerCandidate(t *testing.T) {
+	modelRegistry := newFakeModelRegistry()
+	manager := coreauth.NewManager(nil, nil, nil)
+	host := newHostWithRecords(capabilityRecord{
+		id: "static-plugin",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+			ModelRegistrar: staticModelRegistrar("static-provider", "shared-model"),
+			Executor:       &fakeExecutor{identifier: "static-provider"},
+		}},
+	})
+	host.RegisterModels(context.Background(), modelRegistry)
+	host.RegisterExecutors(manager, modelRegistry)
+
+	candidate, ok := manager.GetByID(pluginStaticAuthID("static-provider"))
+	if !ok || !coreauth.IsPluginStaticAuth(candidate) {
+		t.Fatalf("static candidate = %#v, %v", candidate, ok)
+	}
+	client := modelRegistry.clients[pluginStaticAuthID("static-provider")]
+	if client == nil || len(client.models) != 1 || client.models[0].ID != "shared-model" {
+		t.Fatalf("static candidate models = %#v", client)
+	}
+}
+
 func TestRegisterExecutorsKeepsPluginModelsForNativeProviderWithoutOverwritingExecutor(t *testing.T) {
 	modelRegistry := newFakeModelRegistry()
 	manager := newFakeExecutorManager()

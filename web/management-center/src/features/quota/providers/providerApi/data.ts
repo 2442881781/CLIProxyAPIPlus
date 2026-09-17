@@ -7,14 +7,19 @@ import type {
   ProviderQuotaState,
   ProviderQuotaWindow,
 } from '@/types';
-import { apiCallApi, authFilesApi, getApiCallErrorMessage } from '@/services/api';
+import {
+  apiCallApi,
+  authFilesApi,
+  getApiCallErrorMessage,
+  providerQuotasApi,
+  type ProviderQuotaSnapshot,
+  type ProviderQuotaSourceSnapshot,
+} from '@/services/api';
 import { normalizeAuthIndex } from '@/utils/authIndex';
 import { createStatusError, isDisabledAuthFile } from '@/utils/quota';
 import { readProviderQuotaCredential } from '../../providerQuotaSources';
 import type { QuotaProviderData, QuotaResetAction } from '../types';
 
-const COMMANDCODE_QUOTA_URL = 'https://api.commandcode.ai/alpha/billing/credits';
-const OPENCODE_DEFAULT_BASE_URL = 'https://opencode.ai/zen/go/v1';
 const ZHIPU_CN_QUOTA_URL = 'https://open.bigmodel.cn/api/monitor/usage/quota/limit';
 const ZHIPU_TEAM_QUOTA_URL = `${ZHIPU_CN_QUOTA_URL}?type=2`;
 const ZHIPU_GLOBAL_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';
@@ -322,24 +327,50 @@ const parseDevinQuota = (file: AuthFileItem, t: TFunction): ProviderQuotaData =>
   return { windows, ...(typeof plan === 'string' && plan.trim() ? { plan: plan.trim() } : {}) };
 };
 
-const fetchCommandCode = async (file: AuthFileItem, t: TFunction): Promise<ProviderQuotaData> => {
-  const credential = readProviderQuotaCredential(file);
-  if (!credential) throw new Error(t('provider_quota.missing_credential'));
-  return parseCommandCodeQuota(
-    await requestJSON(COMMANDCODE_QUOTA_URL, credential.apiKey, credential.proxyUrl),
-    t
+const snapshotSourceToQuotaData = (
+  source: ProviderQuotaSourceSnapshot,
+  t: TFunction
+): ProviderQuotaData => {
+  const windows = (source.quota?.groups ?? []).flatMap((group) =>
+    (group.buckets ?? []).map((bucket, index) => {
+      const remaining = clampPercent((asNumber(bucket.remaining_fraction) ?? 0) * 100);
+      const id = String(bucket.window || `window-${index}`);
+      return makePercentWindow(
+        id,
+        t(`provider_quota.windows.${id}`, { defaultValue: id }),
+        100 - remaining,
+        asResetMs(bucket.reset_time)
+      );
+    })
   );
+  if (windows.length === 0) throw new Error(source.last_error || t('provider_quota.empty_data'));
+  return { windows };
 };
 
-const fetchOpenCode = async (file: AuthFileItem, t: TFunction): Promise<ProviderQuotaData> => {
-  const credential = readProviderQuotaCredential(file);
-  if (!credential) throw new Error(t('provider_quota.missing_credential'));
-  const baseUrl = (credential.baseUrl || OPENCODE_DEFAULT_BASE_URL).replace(/\/+$/, '');
-  return parseOpenCodeQuota(
-    await requestJSON(`${baseUrl}/usage`, credential.apiKey, credential.proxyUrl),
-    t
-  );
+const fetchServerProviderQuota = async (
+  file: AuthFileItem,
+  provider: string,
+  t: TFunction
+): Promise<ProviderQuotaData> => {
+  let snapshot: ProviderQuotaSnapshot;
+  try {
+    snapshot = await providerQuotasApi.refresh(provider);
+  } catch {
+    const current = (await providerQuotasApi.list()).find((item) => item.provider === provider);
+    if (!current) throw new Error(t('provider_quota.empty_data'));
+    snapshot = current;
+  }
+  const source = (snapshot.sources ?? []).find((item) => item.label === file.name.split(' · ')[0]);
+  const resolved = source ?? snapshot.sources?.find((item) => item.observed_at && !item.last_error);
+  if (!resolved) throw new Error(snapshot.last_error || t('provider_quota.empty_data'));
+  return snapshotSourceToQuotaData(resolved, t);
 };
+
+const fetchCommandCode = (file: AuthFileItem, t: TFunction): Promise<ProviderQuotaData> =>
+  fetchServerProviderQuota(file, 'commandcode', t);
+
+const fetchOpenCode = (file: AuthFileItem, t: TFunction): Promise<ProviderQuotaData> =>
+  fetchServerProviderQuota(file, 'opencode-go', t);
 
 const resolveZhipuRequestContext = (file: AuthFileItem, t: TFunction) => {
   const credential = readProviderQuotaCredential(file);

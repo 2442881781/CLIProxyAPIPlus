@@ -43,6 +43,8 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.POST("/plugins/:id/quota", s.mgmt.FetchPluginQuota)
 		mgmt.DELETE("/plugins/:id/quota", s.mgmt.ResetPluginQuota)
 		mgmt.POST("/plugins/:id/quota/reset", s.mgmt.ResetPluginQuota)
+		mgmt.GET("/provider-quotas", s.mgmt.ListProviderQuotas)
+		mgmt.POST("/provider-quotas/:provider/refresh", s.mgmt.RefreshProviderQuota)
 
 		mgmt.GET("/debug", s.mgmt.GetDebug)
 		mgmt.PUT("/debug", s.mgmt.PutDebug)

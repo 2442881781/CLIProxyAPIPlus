@@ -57,6 +57,7 @@ type Handler struct {
 	postAuthPersistHook     coreauth.PostAuthHook
 	pluginHost              *pluginhost.Host
 	configReloadHook        func(context.Context, *config.Config)
+	quotaRefreshHook        func(context.Context, string) error
 	pluginStoreRegistryURL  string
 	pluginStoreHTTPClient   pluginstore.HTTPDoer
 	pluginStoreRateLimiter  *pluginstore.GitHubRateLimiter
@@ -152,6 +153,15 @@ func (h *Handler) SetPluginHost(host *pluginhost.Host) {
 	}
 	h.mu.Lock()
 	h.pluginHost = host
+	h.mu.Unlock()
+}
+
+func (h *Handler) SetProviderQuotaRefreshHook(hook func(context.Context, string) error) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.quotaRefreshHook = hook
 	h.mu.Unlock()
 }
 

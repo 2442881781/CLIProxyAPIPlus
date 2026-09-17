@@ -327,6 +327,9 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 	if auth == nil {
 		return nil
 	}
+	if coreauth.IsPluginStaticAuth(auth) {
+		return nil
+	}
 	auth.EnsureIndex()
 	runtimeOnly := isRuntimeOnlyAuth(auth)
 	if runtimeOnly && (auth.Disabled || auth.Status == coreauth.StatusDisabled) {
