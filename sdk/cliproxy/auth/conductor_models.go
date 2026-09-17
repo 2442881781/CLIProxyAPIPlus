@@ -376,10 +376,35 @@ func (m *Manager) resolveExecutionAliasResultForRequestedWithRouting(routing *ap
 	if result := homeForceMappingAliasResult(auth, requestedModel); result.ForceMapping {
 		return result
 	}
+	var result OAuthModelAliasResult
 	if isConfiguredModelRoutingAuth(auth) {
-		return resolveAPIKeyModelAliasWithResult(routing.config, auth, requestedModel)
+		result = resolveAPIKeyModelAliasWithResult(routing.config, auth, requestedModel)
+	} else {
+		result = m.applyOAuthModelAliasWithResult(auth, requestedModel)
 	}
-	return m.applyOAuthModelAliasWithResult(auth, requestedModel)
+	return forcePluginResponseModel(auth, requestedModel, result)
+}
+
+// forcePluginResponseModel keeps plugin-specific upstream model identifiers behind
+// the host routing boundary. Plugin executors may translate a shared client model
+// into a provider-specific name internally, but responses should retain the model
+// name requested by the client.
+func forcePluginResponseModel(auth *Auth, requestedModel string, result OAuthModelAliasResult) OAuthModelAliasResult {
+	if !IsPluginOwnedAuth(auth) && !IsPluginVirtualAuth(auth) {
+		return result
+	}
+	requestedModel = strings.TrimSpace(requestedModel)
+	if requestedModel == "" {
+		return result
+	}
+	if strings.TrimSpace(result.UpstreamModel) == "" {
+		result.UpstreamModel = requestedModel
+	}
+	if !result.ForceMapping || strings.TrimSpace(result.OriginalAlias) == "" {
+		result.ForceMapping = true
+		result.OriginalAlias = requestedModel
+	}
+	return result
 }
 
 func homeForceMappingAliasResult(auth *Auth, requestedModel string) OAuthModelAliasResult {
