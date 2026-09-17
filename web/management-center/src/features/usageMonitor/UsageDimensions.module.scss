@@ -99,6 +99,16 @@
   font-weight: 700;
 }
 
+.costCell {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.toolbarField {
+  width: 120px;
+  flex: 0 0 auto;
+}
+
 .dimGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));

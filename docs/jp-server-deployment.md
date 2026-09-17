@@ -121,6 +121,19 @@ legacy `/etc` copy. Backups are root-owned mode `0600`; the live runtime config
 is owned by `cliproxy:cliproxy` with mode `0640` so management saves and hot
 reloads work inside the systemd sandbox.
 
+### Effective configuration source
+
+With `PGSTORE_*` enabled (the production setup), the **database config row is
+authoritative**. At startup the store mirrors it to the slot workspace at
+`<slot>/pgstore/config/config.yaml`, and the config watcher hot-reloads from
+that mirrored file. The `/var/lib/cliproxy/config/config.yaml` copy only
+bootstraps an empty store: editing it alone does not affect the running process
+and is never reloaded.
+
+Change configuration through the management panel/API (which persists to the
+store row), or update the store row directly. The startup log line `effective
+config source: ...` names the file the process actually reads.
+
 The one-time migration from the legacy `cliproxy.service` cannot use the new
 drain endpoint. It instead waits for existing TCP connections to disappear,
 up to `CLIPROXY_DEPLOY_LEGACY_DRAIN_TIMEOUT` (default 120 seconds), before

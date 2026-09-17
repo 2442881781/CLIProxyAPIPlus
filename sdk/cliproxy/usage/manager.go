@@ -78,6 +78,11 @@ type Detail struct {
 	TotalTokens         int64
 	TokenBreakdown      TokenBreakdown
 	ResponseServiceTier string
+	// UpstreamRequestBytes is how many bytes this proxy sent to the provider,
+	// and UpstreamResponseBytes how many it read back for the request. Both are
+	// zero when the executor could not observe the upstream transport.
+	UpstreamRequestBytes  int64
+	UpstreamResponseBytes int64
 }
 
 type requestedModelAliasContextKey struct{}

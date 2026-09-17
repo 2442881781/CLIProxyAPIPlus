@@ -262,3 +262,77 @@ func TestAccessKeyStoreRecoversFromConfiguredAuthDir(t *testing.T) {
 		t.Fatalf("accessKeyStore() = %#v, want configured store with deepseek group", store)
 	}
 }
+
+// Feature: operator-only traffic (bandwidth) accounting on the access-key API.
+func TestAccessKeyUsageExposesTraffic(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storeaccess.Configure(dir)
+	if err != nil {
+		t.Fatalf("configure store: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h := &Handler{}
+	r.GET("/access-keys", h.ListAccessKeys)
+	r.GET("/access-keys/usage", h.GetAccessKeyUsage)
+	r.GET("/access-keys/usage-top", h.GetAccessKeyUsageTop)
+
+	entry, err := store.Create("sk-cpa-traffic-api", storeaccess.AccessKey{
+		Name:  "traffic",
+		Quota: storeaccess.Quota{ByteLimit: 1 << 30, Period: "monthly"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	store.RecordTraffic(entry.ID, storeaccess.TrafficEvent{InBytes: 300, OutBytes: 700, Model: "gpt-t"})
+	store.RecordUsage("sk-cpa-traffic-api", storeaccess.UsageEvent{
+		Tokens: 5, Model: "gpt-t", AuthID: "auth-t",
+		UpstreamInBytes: 2000, UpstreamOutBytes: 500,
+	})
+
+	rec, body := doReq(t, r, "GET", "/access-keys", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: %d", rec.Code)
+	}
+	list, _ := body["access-keys"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("list: %v", list)
+	}
+	listed, _ := list[0].(map[string]any)["usage"].(map[string]any)
+	if listed["client_in_bytes"].(float64) != 300 || listed["upstream_in_bytes"].(float64) != 2000 {
+		t.Fatalf("listed traffic: %v", listed)
+	}
+
+	rec, body = doReq(t, r, "GET", "/access-keys/usage?id="+entry.ID, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("usage: %d", rec.Code)
+	}
+	usage, _ := body["usage"].(map[string]any)
+	bytes, _ := usage["bytes"].(map[string]any)
+	if bytes["client_total"].(float64) != 1000 || bytes["upstream_total"].(float64) != 2500 {
+		t.Fatalf("traffic summary: %v", bytes)
+	}
+	if bytes["total"].(float64) != 3500 || bytes["period_total"].(float64) != 3500 {
+		t.Fatalf("traffic totals: %v", bytes)
+	}
+	models, _ := body["models"].([]any)
+	if len(models) != 1 {
+		t.Fatalf("models: %v", models)
+	}
+	modelRow, _ := models[0].(map[string]any)
+	if modelRow["bytes_in"].(float64) != 2300 || modelRow["bytes_out"].(float64) != 1200 {
+		t.Fatalf("model traffic: %v", modelRow)
+	}
+
+	rec, body = doReq(t, r, "GET", "/access-keys/usage-top?by=bytes&period=all&limit=5", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("top: %d", rec.Code)
+	}
+	top, _ := body["keys"].([]any)
+	if len(top) != 1 || top[0].(map[string]any)["bytes"].(float64) != 3500 {
+		t.Fatalf("top by bytes: %v", top)
+	}
+	if _, body := doReq(t, r, "GET", "/access-keys/usage-top?by=bogus", ""); body["error"] == nil {
+		t.Fatal("unknown by value must be rejected")
+	}
+}

@@ -106,6 +106,10 @@ func (s *Server) setupRoutes() {
 			return
 		}
 		keyRate, _ := store.KeyRate(entry.ID)
+		// Byte limits are an operator-side cost control: keep them out of the
+		// key holder's view together with the byte counters.
+		quota := entry.Quota
+		quota.ByteLimit = 0
 		resp := gin.H{
 			"name":                 entry.Name,
 			"key_prefix":           entry.KeyPrefix,
@@ -113,10 +117,10 @@ func (s *Server) setupRoutes() {
 			"expired":              entry.Expired(time.Now()),
 			"expires_at":           entry.ExpiresAt,
 			"allowed_models":       entry.AllowedModels,
-			"quota":                entry.Quota,
+			"quota":                quota,
 			"rate_limit":           entry.RateLimit,
 			"effective_rate_limit": store.EffectiveRateLimit(entry),
-			"usage":                storeaccess.UsageSummary(entry.Usage, false, keyRate),
+			"usage":                storeaccess.UsageSummary(entry.Usage, false, false, keyRate),
 		}
 		if grp := store.GroupFor(entry); grp != nil {
 			resp["group"] = gin.H{
@@ -124,7 +128,7 @@ func (s *Server) setupRoutes() {
 				"max_concurrency": grp.MaxConcurrency,
 				"rate_limit_rpm":  grp.RateLimitRPM,
 				"per_key_limits":  grp.PerKeyLimits,
-				"usage":           grp.Usage,
+				"usage":           grp.Usage.WithoutTraffic(),
 			}
 		}
 		c.JSON(http.StatusOK, resp)

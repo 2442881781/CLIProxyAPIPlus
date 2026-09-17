@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { accessControlApi } from '@/services/api';
 import type { AccessGroup, AccessGroupUsageDetail } from '@/types';
-import { formatCompactNumber, formatDateTimeValue } from '@/utils/format';
+import { formatCompactNumber, formatDateTimeValue, formatFileSize } from '@/utils/format';
 import { DimDetailTables } from './DimDetailTables';
 import styles from './UsageDimensions.module.scss';
 
@@ -83,6 +83,7 @@ export function GroupUsageTab({ connected }: { connected: boolean }) {
                   <th>{t('access_groups.col_name')}</th>
                   <th>{t('usage_monitor.group_models')}</th>
                   <th>{t('usage_monitor.total_tokens')}</th>
+                  <th>{t('usage_monitor.traffic')}</th>
                   <th>{t('usage_monitor.requests')}</th>
                   <th>{t('usage_monitor.failed_short')}</th>
                   <th>{t('usage_monitor.last_used')}</th>
@@ -101,6 +102,7 @@ export function GroupUsageTab({ connected }: { connected: boolean }) {
                           : t('access_groups.all_models')}
                       </td>
                       <td className={styles.totalCell}>{formatTokens(group.usage.tokens)}</td>
+                      <td className={styles.totalCell}>{formatFileSize(group.usage.bytes)}</td>
                       <td>{group.usage.requests.toLocaleString()}</td>
                       <td className={group.usage.failed > 0 ? styles.badCell : undefined}>
                         {group.usage.failed}
@@ -109,7 +111,7 @@ export function GroupUsageTab({ connected }: { connected: boolean }) {
                     </tr>
                     {expandedName === group.name && (
                       <tr className={styles.detailRow}>
-                        <td colSpan={6}>
+                        <td colSpan={7}>
                           {detailLoading ? (
                             <span className={styles.dimEmpty}>{t('common.loading')}</span>
                           ) : detail ? (

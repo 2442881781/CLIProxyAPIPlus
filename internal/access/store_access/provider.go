@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,7 +86,7 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 			StatusCode: http.StatusTooManyRequests,
 		}
 	}
-	model := requestModel(r)
+	model, requestBytes := requestModel(r)
 	if model != "" && !entry.ModelAllowed(model) {
 		return nil, forbiddenError("API key is not allowed to use model: " + model)
 	}
@@ -94,14 +95,23 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 			return nil, forbiddenError("API key group is not allowed to use model: " + model)
 		}
 	}
+	metadata := map[string]string{
+		"key_id":   entry.ID,
+		"key_name": entry.Name,
+		"group":    entry.Group,
+	}
+	if model != "" {
+		metadata["model"] = model
+	}
+	if requestBytes > 0 {
+		// The body was read in full above; hand the size to the edge so it can
+		// attribute request traffic without touching the request again.
+		metadata["req_bytes"] = strconv.FormatInt(requestBytes, 10)
+	}
 	return &sdkaccess.Result{
 		Provider:  p.Identifier(),
 		Principal: presented,
-		Metadata: map[string]string{
-			"key_id":   entry.ID,
-			"key_name": entry.Name,
-			"group":    entry.Group,
-		},
+		Metadata:  metadata,
 	}, nil
 }
 
@@ -176,25 +186,27 @@ func extractBearerToken(header string) string {
 }
 
 // requestModel peeks at the JSON body for the top-level model field, restoring
-// the body for downstream handlers. Returns "" when no model can be found.
-func requestModel(r *http.Request) string {
+// the body for downstream handlers. It also reports the number of body bytes
+// consumed so the edge can attribute request traffic. Returns "" and 0 when no
+// body could be read.
+func requestModel(r *http.Request) (string, int64) {
 	if r == nil || r.Body == nil || r.Method != http.MethodPost {
-		return ""
+		return "", 0
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	if err != nil || len(body) == 0 {
-		return ""
+		return "", int64(len(body))
 	}
 	var payload struct {
 		Model json.RawMessage `json:"model"`
 	}
 	if errUnmarshal := json.Unmarshal(body, &payload); errUnmarshal != nil || len(payload.Model) == 0 {
-		return ""
+		return "", int64(len(body))
 	}
 	var model string
 	if errUnmarshal := json.Unmarshal(payload.Model, &model); errUnmarshal != nil {
-		return ""
+		return "", int64(len(body))
 	}
-	return strings.TrimSpace(model)
+	return strings.TrimSpace(model), int64(len(body))
 }

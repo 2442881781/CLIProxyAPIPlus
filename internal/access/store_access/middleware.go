@@ -1,6 +1,11 @@
 package storeaccess
 
 import (
+	"bufio"
+	"net"
+	"strconv"
+	"sync/atomic"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -46,9 +51,78 @@ func GroupAccessMiddleware(store *Store) gin.HandlerFunc {
 				c.Set(GinContextAllowedAuthsKey, grp.AllowedAuths)
 			}
 		}
+		// Byte accounting for the client leg. The provider leg is recorded by
+		// the usage plugin once the executor publishes the request's usage.
+		tw := &trafficWriter{ResponseWriter: c.Writer}
+		c.Writer = tw
+		defer func() {
+			store.RecordTraffic(meta["key_id"], TrafficEvent{
+				InBytes:  parseByteCount(meta["req_bytes"]) + tw.inBytes.Load(),
+				OutBytes: int64(tw.Size()) + tw.outBytes.Load(),
+				Model:    meta["model"],
+			})
+		}()
 		defer releaseAll()
 		c.Next()
 	}
+}
+
+// parseByteCount reads a non-negative decimal byte count from access metadata.
+func parseByteCount(value string) int64 {
+	if value == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// trafficWriter counts response bytes leaving the process. Writes that go
+// through the gin writer are reflected by Size(); hijacked connections
+// (codex responses websocket, realtime) bypass it and are counted through
+// trafficConn instead.
+type trafficWriter struct {
+	gin.ResponseWriter
+	inBytes  atomic.Int64
+	outBytes atomic.Int64
+}
+
+// Hijack wraps the hijacked connection so websocket frames keep contributing
+// to the key's traffic counters.
+func (w *trafficWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, errHijack := w.ResponseWriter.Hijack()
+	if errHijack != nil {
+		return conn, rw, errHijack
+	}
+	counted := &trafficConn{Conn: conn, in: &w.inBytes, out: &w.outBytes}
+	// net/http may hand back a buffered reader; gorilla/websocket rejects
+	// connections that carry buffered handshake data, so a fresh pair over the
+	// counting connection observes every later read and write.
+	return counted, bufio.NewReadWriter(bufio.NewReader(counted), bufio.NewWriter(counted)), nil
+}
+
+type trafficConn struct {
+	net.Conn
+	in  *atomic.Int64
+	out *atomic.Int64
+}
+
+func (c *trafficConn) Read(p []byte) (int, error) {
+	n, errRead := c.Conn.Read(p)
+	if n > 0 {
+		c.in.Add(int64(n))
+	}
+	return n, errRead
+}
+
+func (c *trafficConn) Write(p []byte) (int, error) {
+	n, errWrite := c.Conn.Write(p)
+	if n > 0 {
+		c.out.Add(int64(n))
+	}
+	return n, errWrite
 }
 
 // accessMetadataFromContext extracts the metadata map set by the store access

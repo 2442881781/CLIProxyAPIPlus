@@ -6,6 +6,7 @@ import type {
   AccessKeyUsagePeriod,
   AccessKeyUsageTopBy,
   AccessKeyUsageTopRow,
+  AccessTrafficTotals,
   RateLimitSpec,
   UsageDimRow,
 } from '@/types';
@@ -38,11 +39,25 @@ const normalizeRateLimit = (value: unknown): RateLimitSpec => {
 
 const normalizeUsageTotals = (value: unknown): AccessGroup['usage'] => {
   const raw = asRecord(value);
+  // Group list rows carry the full Usage shape (client_/upstream_ legs summed
+  // on the server); group detail totals carry the DimUsage shape
+  // (in_bytes/out_bytes). The shapes never mix, so summing is safe.
+  const bytesIn =
+    asNumber(raw.in_bytes ?? raw.bytes_in) +
+    asNumber(raw.client_in_bytes) +
+    asNumber(raw.upstream_in_bytes);
+  const bytesOut =
+    asNumber(raw.out_bytes ?? raw.bytes_out) +
+    asNumber(raw.client_out_bytes) +
+    asNumber(raw.upstream_out_bytes);
   return {
     tokens: asNumber(raw.tokens ?? raw.total_tokens),
     requests: asNumber(raw.requests),
     failed: asNumber(raw.failed),
     lastUsedAt: asString(raw.last_used_at ?? raw.lastUsedAt),
+    bytesIn,
+    bytesOut,
+    bytes: bytesIn + bytesOut,
   };
 };
 
@@ -55,12 +70,7 @@ export const normalizeAccessGroup = (value: unknown): AccessGroup => {
     maxConcurrency: asNumber(raw.max_concurrency ?? raw.maxConcurrency),
     rateLimitRpm: asNumber(raw.rate_limit_rpm ?? raw.rateLimitRpm),
     perKeyLimits: normalizeRateLimit(raw.per_key_limits ?? raw.perKeyLimits),
-    usage: {
-      tokens: asNumber(asRecord(raw.usage).total_tokens ?? asRecord(raw.usage).tokens),
-      requests: asNumber(asRecord(raw.usage).requests),
-      failed: asNumber(asRecord(raw.usage).failed),
-      lastUsedAt: asString(asRecord(raw.usage).last_used_at),
-    },
+    usage: normalizeUsageTotals(raw.usage),
     createdAt: asString(raw.created_at ?? raw.createdAt),
     updatedAt: asString(raw.updated_at ?? raw.updatedAt),
   };
@@ -97,12 +107,32 @@ export const serializeAccessGroup = (payload: AccessGroupPayload): Record<string
 
 const normalizeDimRow = (value: unknown, keyField: string): UsageDimRow => {
   const raw = asRecord(value);
+  const bytesIn = asNumber(raw.bytes_in ?? raw.bytesIn);
+  const bytesOut = asNumber(raw.bytes_out ?? raw.bytesOut);
   return {
     name: asString(raw[keyField]),
     tokens: asNumber(raw.tokens),
     requests: asNumber(raw.requests),
     failed: asNumber(raw.failed),
     lastUsedAt: asString(raw.last_used_at ?? raw.lastUsedAt),
+    bytesIn,
+    bytesOut,
+    bytes: bytesIn + bytesOut,
+  };
+};
+
+const normalizeTraffic = (value: unknown): AccessTrafficTotals | undefined => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const raw = asRecord(value);
+  return {
+    clientIn: asNumber(raw.client_in),
+    clientOut: asNumber(raw.client_out),
+    upstreamIn: asNumber(raw.upstream_in),
+    upstreamOut: asNumber(raw.upstream_out),
+    clientTotal: asNumber(raw.client_total),
+    upstreamTotal: asNumber(raw.upstream_total),
+    total: asNumber(raw.total),
+    periodTotal: asNumber(raw.period_total),
   };
 };
 
@@ -125,6 +155,8 @@ export const normalizeAccessGroupUsage = (value: unknown): AccessGroupUsageDetai
 
 const normalizeUsageTopRow = (value: unknown): AccessKeyUsageTopRow => {
   const raw = asRecord(value);
+  const bytesIn = asNumber(raw.bytes_in);
+  const bytesOut = asNumber(raw.bytes_out);
   return {
     id: asString(raw.id),
     name: asString(raw.name),
@@ -134,6 +166,9 @@ const normalizeUsageTopRow = (value: unknown): AccessKeyUsageTopRow => {
     requests: asNumber(raw.requests),
     failed: asNumber(raw.failed),
     lastUsedAt: asString(raw.last_used_at ?? raw.lastUsedAt),
+    bytesIn,
+    bytesOut,
+    bytes: bytesIn + bytesOut,
   };
 };
 
@@ -153,6 +188,7 @@ export const normalizeAccessKeyUsageDetail = (value: unknown): AccessKeyUsageDet
     models: normalizeDimRows(raw.models, 'model'),
     daily: normalizeDimRows(raw.daily, 'day'),
     auths: normalizeDimRows(raw.auths, 'auth'),
+    traffic: normalizeTraffic(usage.bytes),
   };
 };
 

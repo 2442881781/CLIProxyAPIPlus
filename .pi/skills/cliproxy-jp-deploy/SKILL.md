@@ -175,9 +175,14 @@ A rollout is complete only when all applicable checks pass:
 
    The deployed commit must equal the intended source commit, not merely the transport commit.
 
-2. Confirm the active process uses `/var/lib/cliproxy/config/config.yaml`, the
-   file is `cliproxy:cliproxy` mode `0640`, and the unit keeps
-   `ProtectSystem=strict` with `/var/lib/cliproxy/config` in `ReadWritePaths`.
+2. Confirm the runtime config source and permissions: the active process's
+   startup log names its effective config source (`effective config source: ...`).
+   With `PGSTORE_*` enabled the database row is authoritative and is mirrored to
+   `<slot>/pgstore/config/config.yaml`; `/var/lib/cliproxy/config/config.yaml`
+   only bootstraps an empty store, so editing it alone does not affect the
+   running process. The bootstrap file is `cliproxy:cliproxy` mode `0640`, and
+   the unit keeps `ProtectSystem=strict` with the config directories in
+   `ReadWritePaths`.
 3. Exactly one slot is active and enabled; the other slot and legacy service are inactive and disabled:
 
    ```bash

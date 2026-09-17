@@ -123,6 +123,8 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		Stream:          stream,
 		Fail:            fail,
 		ResponseHeaders: record.ResponseHeaders,
+		RequestBytes:    usageDetail.UpstreamRequestBytes,
+		ResponseBytes:   usageDetail.UpstreamResponseBytes,
 	}
 
 	payload, err := json.Marshal(queuedUsageDetail{
@@ -184,6 +186,9 @@ type requestDetail struct {
 	Stream          bool        `json:"stream"`
 	Fail            failDetail  `json:"fail"`
 	ResponseHeaders http.Header `json:"response_headers,omitempty"`
+	// Provider-leg payload bytes, zero when the transport was not observable.
+	RequestBytes  int64 `json:"request_bytes,omitempty"`
+	ResponseBytes int64 `json:"response_bytes,omitempty"`
 }
 
 type tokenStats struct {

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -50,6 +51,11 @@ type UsageReporter struct {
 	ttftStart           time.Time
 	ttftSet             bool
 	once                sync.Once
+	// upstreamInBytes/upstreamOutBytes count payload bytes on the provider
+	// leg: what this proxy sent upstream and what it read back. They feed the
+	// per-key traffic accounting through usage.Detail.
+	upstreamInBytes  atomic.Int64
+	upstreamOutBytes atomic.Int64
 }
 
 type usageExecutor interface {
@@ -242,6 +248,7 @@ func (r *UsageReporter) ObserveResponse(resp *http.Response) {
 	r.StartResponseTTFT()
 	resp.Body = &usageTTFTReadCloser{
 		ReadCloser: resp.Body,
+		counter:    &r.upstreamInBytes,
 		mark: func() {
 			r.MarkFirstResponseByte()
 		},
@@ -255,6 +262,7 @@ func (r *UsageReporter) ObserveResponsePacketOnly(resp *http.Response) {
 	r.StartResponseTTFT()
 	resp.Body = &usageTTFTReadCloser{
 		ReadCloser: resp.Body,
+		counter:    &r.upstreamInBytes,
 		mark: func() {
 			r.RecordFirstPacket()
 		},
@@ -437,7 +445,27 @@ func (r *UsageReporter) buildRecord(detail usage.Detail, failed bool, failures .
 	if r == nil {
 		return usage.Record{Detail: detail, Failed: failed, Fail: fail, Generate: usage.GenerateFlag(true)}
 	}
+	// Attach the provider-leg byte counters to the primary record only, so
+	// additional-model records (multi-model responses) never double count.
+	detail.UpstreamRequestBytes = r.upstreamOutBytes.Load()
+	detail.UpstreamResponseBytes = r.upstreamInBytes.Load()
 	return r.buildRecordForModel(r.model, detail, failed, fail)
+}
+
+// UpstreamSentBytes returns how many payload bytes this reporter has sent to
+// the provider, and UpstreamReceivedBytes how many it has read back.
+func (r *UsageReporter) UpstreamSentBytes() int64 {
+	if r == nil {
+		return 0
+	}
+	return r.upstreamOutBytes.Load()
+}
+
+func (r *UsageReporter) UpstreamReceivedBytes() int64 {
+	if r == nil {
+		return 0
+	}
+	return r.upstreamInBytes.Load()
 }
 
 func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, failed bool, fail usage.Failure) usage.Record {
@@ -548,6 +576,13 @@ type usageTTFTRoundTripper struct {
 func (t usageTTFTRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	cliproxyexecutor.MarkUpstreamAttempt(req.Context())
 	t.reporter.StartResponseTTFT()
+	if req != nil && req.Body != nil {
+		// Idempotent: a client whose transport is already tracked must not
+		// count its request body twice.
+		if _, counted := req.Body.(*usageCountingReadCloser); !counted {
+			req.Body = &usageCountingReadCloser{ReadCloser: req.Body, counter: &t.reporter.upstreamOutBytes}
+		}
+	}
 	resp, errRoundTrip := t.base.RoundTrip(req)
 	if errRoundTrip != nil {
 		return resp, errRoundTrip
@@ -560,10 +595,30 @@ func (t usageTTFTRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	return resp, nil
 }
 
+// usageCountingReadCloser counts the payload bytes read through it, which is
+// what the transport sends to the provider or receives from it.
+type usageCountingReadCloser struct {
+	io.ReadCloser
+	counter *atomic.Int64
+}
+
+func (r *usageCountingReadCloser) Read(p []byte) (int, error) {
+	if r == nil || r.ReadCloser == nil {
+		return 0, io.ErrClosedPipe
+	}
+	n, errRead := r.ReadCloser.Read(p)
+	if n > 0 && r.counter != nil {
+		r.counter.Add(int64(n))
+	}
+	return n, errRead
+}
+
 type usageTTFTReadCloser struct {
 	io.ReadCloser
 	once sync.Once
 	mark func()
+	// counter accumulates the provider response bytes read by the caller.
+	counter *atomic.Int64
 }
 
 func (r *usageTTFTReadCloser) Read(p []byte) (int, error) {
@@ -571,8 +626,13 @@ func (r *usageTTFTReadCloser) Read(p []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 	n, errRead := r.ReadCloser.Read(p)
-	if n > 0 && r.mark != nil {
-		r.once.Do(r.mark)
+	if n > 0 {
+		if r.counter != nil {
+			r.counter.Add(int64(n))
+		}
+		if r.mark != nil {
+			r.once.Do(r.mark)
+		}
 	}
 	return n, errRead
 }

@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { UsageDimRow } from '@/types';
-import { formatCompactNumber, formatDateTimeValue } from '@/utils/format';
+import { formatCompactNumber, formatDateTimeValue, formatFileSize } from '@/utils/format';
 import styles from './UsageDimensions.module.scss';
 
 const DASH = '—';
@@ -27,6 +27,7 @@ const DimTable = ({ title, rows }: { title: string; rows: UsageDimRow[] }) => {
             <tr>
               <th />
               <th>{t('usage_monitor.total_tokens')}</th>
+              <th>{t('usage_monitor.traffic')}</th>
               <th>{t('usage_monitor.requests')}</th>
               <th>{t('usage_monitor.failed_short')}</th>
               <th>{t('usage_monitor.last_used')}</th>
@@ -39,6 +40,7 @@ const DimTable = ({ title, rows }: { title: string; rows: UsageDimRow[] }) => {
                   <code>{row.name}</code>
                 </td>
                 <td>{formatTokens(row.tokens)}</td>
+                <td>{formatFileSize(row.bytes)}</td>
                 <td>{row.requests.toLocaleString()}</td>
                 <td className={row.failed > 0 ? styles.badCell : undefined}>{row.failed}</td>
                 <td>{formatDateTimeValue(row.lastUsedAt) || DASH}</td>

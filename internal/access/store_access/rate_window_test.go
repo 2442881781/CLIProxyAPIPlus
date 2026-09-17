@@ -73,7 +73,7 @@ func TestKeyRate_InUsageSummary(t *testing.T) {
 	}
 	s.RecordUsage("sk-cpa-rs", UsageEvent{Tokens: 60, OutputTokens: 30})
 	rate, _ := s.KeyRate(entry.ID)
-	summary := UsageSummary(entry.Usage, false, rate)
+	summary := UsageSummary(entry.Usage, false, false, rate)
 	got, ok := summary["rates"].(coreusage.Rate)
 	if !ok || got.OutputTokensPerSecond == 0 {
 		t.Fatalf("summary rates: %+v", summary["rates"])

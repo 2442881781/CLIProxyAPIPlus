@@ -39,6 +39,9 @@ func (p *usagePlugin) HandleUsage(_ context.Context, record usage.Record) {
 		AuthID:       strings.TrimSpace(record.AuthID),
 		Latency:      record.Latency,
 		TTFT:         record.TTFT,
+		// Provider leg, measured by the executor transport wrapper.
+		UpstreamInBytes:  record.Detail.UpstreamResponseBytes,
+		UpstreamOutBytes: record.Detail.UpstreamRequestBytes,
 	})
 }
 

@@ -272,6 +272,9 @@ func sortedDimRows(m map[string]storeaccess.DimUsage, keyField string) []gin.H {
 			"requests":     d.Requests,
 			"failed":       d.Failed,
 			"last_used_at": d.LastUsedAt,
+			"bytes_in":     d.InBytes,
+			"bytes_out":    d.OutBytes,
+			"bytes":        d.InBytes + d.OutBytes,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -308,7 +311,7 @@ func (h *Handler) GetAccessKeyUsage(c *gin.Context) {
 		"name":       entry.Name,
 		"key_prefix": entry.KeyPrefix,
 		"group":      entry.Group,
-		"usage":      storeaccess.UsageSummary(entry.Usage, false, rate),
+		"usage":      storeaccess.UsageSummary(entry.Usage, false, true, rate),
 		"models":     sortedDimRows(entry.Usage.Models, "model"),
 		"daily":      sortedDimRows(entry.Usage.Daily, "day"),
 		"auths":      sortedDimRows(entry.Usage.Auths, "auth"),
@@ -316,15 +319,15 @@ func (h *Handler) GetAccessKeyUsage(c *gin.Context) {
 }
 
 // GetAccessKeyUsageTop ranks access keys by usage
-// (?by=tokens|requests|failed&period=all|month|day&limit=N).
+// (?by=tokens|requests|failed|bytes&period=all|month|day&limit=N).
 func (h *Handler) GetAccessKeyUsageTop(c *gin.Context) {
 	store := h.accessKeyStore(c)
 	if store == nil {
 		return
 	}
 	by := strings.ToLower(strings.TrimSpace(c.DefaultQuery("by", "tokens")))
-	if by != "tokens" && by != "requests" && by != "failed" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "by must be tokens|requests|failed"})
+	if by != "tokens" && by != "requests" && by != "failed" && by != "bytes" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "by must be tokens|requests|failed|bytes"})
 		return
 	}
 	period := strings.ToLower(strings.TrimSpace(c.DefaultQuery("period", "all")))
