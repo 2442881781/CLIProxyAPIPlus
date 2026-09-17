@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { authFilesApi } from '@/services/api';
+import { authFilesApi, modelsApi } from '@/services/api';
 import { useNotificationStore } from '@/stores';
 import type { AuthFileItem, OAuthModelAliasEntry } from '@/types';
 import type { AuthFileModelItem, OAuthConfigLoadError } from '@/features/authFiles/constants';
@@ -100,8 +100,11 @@ export function useAuthFilesOauth(options: UseAuthFilesOauthOptions): UseAuthFil
       const results = await Promise.all(
         providerList.map(async (provider) => {
           try {
-            const models = await authFilesApi.getModelDefinitions(provider);
-            return { provider, models };
+            const models = await modelsApi.fetchModelRouteCatalog(provider);
+            return {
+              provider,
+              models: models.map((model) => ({ id: model.name, display_name: model.alias })),
+            };
           } catch {
             return { provider, models: [] as AuthFileModelItem[] };
           }
