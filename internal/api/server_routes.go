@@ -79,6 +79,7 @@ func (s *Server) setupRoutes() {
 		}
 		c.JSON(http.StatusOK, s.deploymentStatus())
 	})
+	s.engine.GET("/v0/deployment/routing-diagnostics", s.routingDiagnostics)
 	s.engine.POST("/v0/deployment/drain", func(c *gin.Context) {
 		if !s.authorizeDeploymentControl(c) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})

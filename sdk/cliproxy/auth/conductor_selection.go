@@ -2075,6 +2075,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	if selected == nil {
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 	}
+	m.recordRoutingDiagnostic(model, selected, selectorAuths, opts, time.Now())
 	providerKey := executorKeyFromAuth(selected)
 	executor, okExecutor := m.Executor(providerKey)
 	if !okExecutor {
