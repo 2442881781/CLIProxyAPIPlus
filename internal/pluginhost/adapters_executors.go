@@ -681,7 +681,7 @@ func (a *executorAdapter) Execute(ctx context.Context, auth *coreauth.Auth, req 
 	}
 
 	return coreexecutor.Response{
-		Payload:  a.translateExecutorResponse(ctx, prepared, pluginResp.Payload, false, nil),
+		Payload:  rewritePluginExecutorPayload(a.translateExecutorResponse(ctx, prepared, pluginResp.Payload, false, nil), pluginRequestedClientModel(opts)),
 		Metadata: cloneAnyMap(pluginResp.Metadata),
 		Headers:  cloneHeader(pluginResp.Headers),
 	}, nil
@@ -732,10 +732,10 @@ func (a *executorAdapter) ExecuteStream(ctx context.Context, auth *coreauth.Auth
 	}
 
 	chunks := a.observeAndTranslateExecutorStream(ctx, prepared, pluginResp.Chunks, reporter)
-	return &coreexecutor.StreamResult{
+	return rewritePluginExecutorStream(&coreexecutor.StreamResult{
 		Headers: cloneHeader(pluginResp.Headers),
 		Chunks:  chunks,
-	}, nil
+	}, pluginRequestedClientModel(opts)), nil
 }
 
 func (a *executorAdapter) observeAndTranslateExecutorStream(ctx context.Context, prepared preparedExecutorCall, in <-chan pluginapi.ExecutorStreamChunk, reporter *helps.UsageReporter) <-chan coreexecutor.StreamChunk {
