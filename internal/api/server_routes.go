@@ -128,7 +128,11 @@ func (s *Server) setupRoutes() {
 				"max_concurrency": grp.MaxConcurrency,
 				"rate_limit_rpm":  grp.RateLimitRPM,
 				"per_key_limits":  grp.PerKeyLimits,
-				"usage":           grp.Usage.WithoutTraffic(),
+				// The group allowlist is part of this key's effective model
+				// permissions (a model must pass both lists), so the holder
+				// needs it to know what they may actually call.
+				"allowed_models": grp.AllowedModels,
+				"usage":          grp.Usage.WithoutTraffic(),
 			}
 		}
 		c.JSON(http.StatusOK, resp)
