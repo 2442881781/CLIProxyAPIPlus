@@ -20,7 +20,7 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:40px 20px}
-.wrap{max-width:760px;margin:0 auto}
+.wrap{max-width:1080px;margin:0 auto}
 h1{font-size:24px;font-weight:600}
 .sub{color:var(--text3);font-size:13px;margin-top:6px;margin-bottom:28px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:16px}
@@ -54,9 +54,11 @@ h2{font-size:15px;font-weight:600;margin-bottom:12px}
 .tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
 .tabs button{padding:7px 14px;font-size:13px;font-weight:500;background:var(--card2);color:var(--text2);border:1px solid var(--border)}
 .tabs button.active{background:var(--primary);color:var(--card);border-color:var(--primary)}
-.step{font-size:13px;color:var(--text2);margin:16px 0 7px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.step:first-of-type{margin-top:0}
-.step code{background:var(--card2);border:1px solid var(--border);border-radius:5px;padding:1px 7px;font-size:12px;color:var(--text)}
+.setup-step{display:grid;grid-template-columns:290px minmax(0,1fr);gap:16px;align-items:start;margin-bottom:18px}
+.setup-step:last-child{margin-bottom:0}
+.setup-step .label{font-size:13px;color:var(--text2);line-height:1.65;padding-top:12px}
+.setup-step .label code{background:var(--card2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:12px;color:var(--text);overflow-wrap:anywhere}
+@media (max-width:860px){.setup-step{grid-template-columns:1fr;gap:8px}.setup-step .label{padding-top:0}}
 .codeblock{position:relative;background:var(--card2);border:1px solid var(--border);border-radius:9px;overflow:hidden}
 .codeblock pre{margin:0;padding:13px 15px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;overflow-x:auto;white-space:pre;color:var(--text)}
 .codeblock .copy{position:absolute;top:8px;right:8px;padding:5px 11px;font-size:12px;background:var(--card);color:var(--text2);border:1px solid var(--border)}
@@ -323,9 +325,9 @@ function configCard(key, models){
 
   panels.forEach((p,i)=>{
     html += '<div class="tabpanel" data-panel="'+p.id+'"'+(i===0?'':' style="display:none"')+'>'
-      + '<div class="step">1. 安装 <code>'+esc(p.title)+'</code></div>'
-      + codeBlock('cmd-'+p.id, p.install)
-      + p.blocks.map((b,j)=>'<div class="step">'+(j+2)+'. '+b[2]+'</div>'+codeBlock(b[0], b[1])).join('')
+      + '<div class="setup-step"><div class="label">1. 安装 <code>'+esc(p.title)+'</code></div>'
+      + codeBlock('cmd-'+p.id, p.install)+'</div>'
+      + p.blocks.map((b,j)=>'<div class="setup-step"><div class="label">'+(j+2)+'. '+b[2]+'</div>'+codeBlock(b[0], b[1])+'</div>').join('')
       + (p.id==='claude'
           ? '<div class="hint">Claude Code 走 <b>/v1/messages</b>（Anthropic 协议），本服务已自动翻译到上游；<b>ANTHROPIC_AUTH_TOKEN</b> 会作为 <code>Authorization: Bearer</code> 发送。</div>'
           : '<div class="hint">pi / omp 走 <b>/v1/chat/completions</b>（OpenAI 协议）。首次启动后用 <code>/model</code> 选择模型；若上面填了默认模型，直接运行即可。</div>')
