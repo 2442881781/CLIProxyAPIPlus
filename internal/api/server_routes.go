@@ -92,9 +92,13 @@ func (s *Server) setupRoutes() {
 
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
 	s.engine.GET("/access-keys.html", func(c *gin.Context) {
+		// Self-service panels change with every release; never let a browser
+		// serve a stale copy after a deploy.
+		c.Header("Cache-Control", "no-cache")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", accessKeysPageHTML)
 	})
 	s.engine.GET("/my-usage.html", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-cache")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", myUsagePageHTML)
 	})
 	// Self-service usage lookup: the employee's own access key is the credential.
