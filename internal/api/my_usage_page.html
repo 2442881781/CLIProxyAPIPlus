@@ -20,7 +20,7 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:40px 20px}
-.wrap{max-width:1080px;margin:0 auto}
+.wrap{max-width:760px;margin:0 auto}
 h1{font-size:24px;font-weight:600}
 .sub{color:var(--text3);font-size:13px;margin-top:6px;margin-bottom:28px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:16px}
@@ -54,13 +54,11 @@ h2{font-size:15px;font-weight:600;margin-bottom:12px}
 .tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
 .tabs button{padding:7px 14px;font-size:13px;font-weight:500;background:var(--card2);color:var(--text2);border:1px solid var(--border)}
 .tabs button.active{background:var(--primary);color:var(--card);border-color:var(--primary)}
-.setup-step{display:grid;grid-template-columns:290px minmax(0,1fr);gap:16px;align-items:start;margin-bottom:18px}
-.setup-step:last-child{margin-bottom:0}
-.setup-step .label{font-size:13px;color:var(--text2);line-height:1.65;padding-top:12px}
-.setup-step .label code{background:var(--card2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:12px;color:var(--text);overflow-wrap:anywhere}
-@media (max-width:860px){.setup-step{grid-template-columns:1fr;gap:8px}.setup-step .label{padding-top:0}}
+.step{font-size:13px;color:var(--text2);margin:16px 0 7px}
+.step:first-of-type{margin-top:0}
+.step code{background:var(--card2);border:1px solid var(--border);border-radius:5px;padding:1px 7px;font-size:12px;color:var(--text)}
 .codeblock{position:relative;background:var(--card2);border:1px solid var(--border);border-radius:9px;overflow:hidden}
-.codeblock pre{margin:0;padding:13px 15px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;overflow-x:auto;white-space:pre;color:var(--text)}
+.codeblock pre{margin:0;padding:13px 15px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;white-space:pre-wrap;overflow-wrap:break-word;color:var(--text)}
 .codeblock .copy{position:absolute;top:8px;right:8px;padding:5px 11px;font-size:12px;background:var(--card);color:var(--text2);border:1px solid var(--border)}
 .codeblock .copy:hover{background:var(--primary);color:var(--card);border-color:var(--primary)}
 .hint{font-size:12px;color:var(--text3);margin-top:8px;line-height:1.6}
@@ -96,7 +94,9 @@ async function load(key){
   document.getElementById('subtitle').textContent = d.name ? d.name+' 的 API Key 用量与配额' : '个人 API Key 用量与配额';
 
   const u = d.usage||{}, q = d.quota||{};
-  const modelPerms = await resolveModels(key, d, u);
+  // 服务端已按该 Key 的有效权限算好可用模型与元数据
+  const available = Array.isArray(d.models) ? d.models.filter(m=>m && m.id) : [];
+  const allow = modelAllow(d);
   const limit = q.token_limit||0;
   const periodUsed = u.period_tokens||0;
   const pct = limit>0 ? Math.min(100, Math.round(periodUsed/limit*100)) : 0;
@@ -122,7 +122,7 @@ async function load(key){
     + row('Key', '<code>'+(d.key_prefix||'')+'…</code>')
     + row('状态', statusTag)
     + row('过期时间', fmtDate(d.expires_at))
-    + row('可用模型', modelLabel(modelPerms.allow));
+    + row('可用模型', modelLabel(available, allow));
   const rl = d.effective_rate_limit||{};
   const segs = [];
   if(rl.rpm>0)segs.push(fmt(rl.rpm)+' 次/分');
@@ -159,7 +159,7 @@ async function load(key){
       + '</div>';
   }
 
-  html += configCard(key, modelPerms.ids);
+  html += configCard(key, available);
 
   html += '<div class="muted" style="font-size:12px;text-align:center">数据每 15 秒刷新一次 · 请妥善保管本链接，它包含你的 Key</div>';
   app.innerHTML = html;
@@ -183,46 +183,21 @@ const COMPAT = {
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function yamlStr(v){return '"'+String(v).replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"'}
 
-// 一个模型必须同时通过 key 白名单与分组白名单（空列表=不限），与鉴权侧一致。
-function allowsModel(list, id){
-  if(!list || !list.length) return true;
-  return list.some(pat => pat === '*' || pat === id || (pat.slice(-1) === '*' && id.indexOf(pat.slice(0,-1)) === 0));
-}
-
 function modelAllow(d){
   const key = Array.isArray(d.allowed_models) ? d.allowed_models.filter(Boolean) : [];
   const group = (d.group && Array.isArray(d.group.allowed_models)) ? d.group.allowed_models.filter(Boolean) : [];
   return {key: key, group: group, restricted: key.length > 0 || group.length > 0};
 }
 
-function modelLabel(allow){
+function modelIds(models){
+  return (models||[]).map(m=>m && m.id).filter(Boolean);
+}
+
+function modelLabel(models, allow){
   if(!allow.restricted) return '全部';
-  const list = Array.from(new Set(allow.key.concat(allow.group)));
-  return list.length ? esc(list.join(', ')) : '全部';
+  const ids = modelIds(models);
+  return ids.length ? esc(ids.join(', ')) : '—';
 }
-
-async function fetchCatalog(key){
-  try{
-    const res = await fetch(location.origin+'/v1/models', {headers:{Authorization:'Bearer '+key}});
-    if(!res.ok) return [];
-    const j = await res.json();
-    return (j.data||[]).map(m=>m&&m.id).filter(Boolean);
-  }catch(e){ return []; }
-}
-
-// /v1/models 返回全量目录，所以按该 Key 的有效权限再过滤一次；拿不到目录时
-// 退回白名单里的具体条目（通配符无法展开，只能省去）。
-async function resolveModels(key, d, u){
-  const allow = modelAllow(d);
-  const catalog = await fetchCatalog(key);
-  const permitted = catalog.filter(id => allowsModel(allow.key, id) && allowsModel(allow.group, id));
-  if(permitted.length) return {ids: permitted.slice(0,12), allow: allow};
-  const flat = Array.from(new Set(allow.key.concat(allow.group))).filter(m => m.indexOf('*') < 0);
-  if(flat.length) return {ids: flat.slice(0,12), allow: allow};
-  const used = Object.keys((u&&u.models)||{});
-  return {ids: used.slice(0,8), allow: allow};
-}
-
 function codeBlock(id, text, label){
   return '<div class="codeblock"><button class="copy" onclick="copyEl(\''+id+'\',this)">'+(label||'复制')+'</button>'
     + '<pre id="'+id+'">'+esc(text)+'</pre></div>';
@@ -249,11 +224,22 @@ function copyEl(id, btn){
   }
 }
 
+// 一个模型压成一行，只写与 pi/omp 默认值不同的字段；yaml=true 时键名不加引号。
+function modelEntry(m, yaml){
+  const parts = ['"id": '+JSON.stringify(m.id)];
+  if(m.context_window) parts.push('"contextWindow": '+m.context_window);
+  if(m.max_tokens) parts.push('"maxTokens": '+m.max_tokens);
+  if(m.reasoning) parts.push('"reasoning": true');
+  if(Array.isArray(m.input)) parts.push('"input": '+JSON.stringify(m.input));
+  const line = '{ '+parts.join(', ')+' }';
+  return yaml ? line.replace(/"([a-zA-Z_]+)": /g, '$1: ') : line;
+}
+
 function configCard(key, models){
   const base = location.origin.replace(/\/+$/,'');
   const openaiBase = base + '/v1';
-  const list = models.length ? models : ['your-model-id'];
-  const first = list[0];
+  const list = models.length ? models.slice(0,12) : [{id: 'your-model-id'}];
+  const first = list[0].id;
 
   const piConfig = {
     providers: {
@@ -263,17 +249,21 @@ function configCard(key, models){
         api: 'openai-completions',
         apiKey: key,
         compat: COMPAT,
-        models: list.map(id=>({id: id}))
+        models: '__MODELS__'
       }
     }
   };
+  // 只写与 pi/omp 默认值不同的字段：默认 input 为纯文本、上下文 128000、输出 16384、
+  // 不开思考，所以图片 / 大上下文 / 思考模型必须显式声明。
+  const piModelsText = '[\n' + list.map(m=>'        '+modelEntry(m, false)).join(',\n') + '\n      ]';
+  const piConfigText = JSON.stringify(piConfig, null, 2).replace('"__MODELS__"', piModelsText);
   const piDefaults = {defaultProvider: 'cpa', defaultModel: first};
 
   const ompConfig = ['providers:', '  cpa:', '    baseUrl: '+openaiBase, '    apiKey: '+yamlStr(key),
     '    api: openai-completions', '    compat:', '      supportsStore: false',
     '      supportsDeveloperRole: false', '      supportsReasoningEffort: true',
     '      maxTokensField: max_tokens', '      thinkingFormat: openai', '    models:']
-    .concat(list.map(id=>'      - id: '+id)).join('\n');
+    .concat(list.map(m=>'      - '+modelEntry(m, true))).join('\n');
   const ompDefaults = ['defaultProvider: cpa', 'defaultModel: '+first].join('\n');
 
   const claudeConfig = {
@@ -281,7 +271,7 @@ function configCard(key, models){
       ANTHROPIC_BASE_URL: base,
       ANTHROPIC_AUTH_TOKEN: key,
       ANTHROPIC_MODEL: first,
-      ANTHROPIC_SMALL_FAST_MODEL: list[1] || first
+      ANTHROPIC_SMALL_FAST_MODEL: (list[1] ? list[1].id : first)
     }
   };
 
@@ -294,7 +284,7 @@ function configCard(key, models){
       title: 'pi',
       install: 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent',
       blocks: [
-        ['pi-models', JSON.stringify(piConfig, null, 2), '写入 <code>~/.pi/agent/models.json</code>（新建，或合并进已有 <code>providers</code>）'],
+        ['pi-models', piConfigText, '写入 <code>~/.pi/agent/models.json</code>（新建，或合并进已有 <code>providers</code>）'],
         ['pi-settings', JSON.stringify(piDefaults, null, 2), '可选：写入 <code>~/.pi/agent/settings.json</code>，设为启动默认模型']
       ]
     },
@@ -325,9 +315,9 @@ function configCard(key, models){
 
   panels.forEach((p,i)=>{
     html += '<div class="tabpanel" data-panel="'+p.id+'"'+(i===0?'':' style="display:none"')+'>'
-      + '<div class="setup-step"><div class="label">1. 安装 <code>'+esc(p.title)+'</code></div>'
-      + codeBlock('cmd-'+p.id, p.install)+'</div>'
-      + p.blocks.map((b,j)=>'<div class="setup-step"><div class="label">'+(j+2)+'. '+b[2]+'</div>'+codeBlock(b[0], b[1])+'</div>').join('')
+      + '<div class="step">1. 安装 <code>'+esc(p.title)+'</code></div>'
+      + codeBlock('cmd-'+p.id, p.install)
+      + p.blocks.map((b,j)=>'<div class="step">'+(j+2)+'. '+b[2]+'</div>'+codeBlock(b[0], b[1])).join('')
       + (p.id==='claude'
           ? '<div class="hint">Claude Code 走 <b>/v1/messages</b>（Anthropic 协议），本服务已自动翻译到上游；<b>ANTHROPIC_AUTH_TOKEN</b> 会作为 <code>Authorization: Bearer</code> 发送。</div>'
           : '<div class="hint">pi / omp 走 <b>/v1/chat/completions</b>（OpenAI 协议）。首次启动后用 <code>/model</code> 选择模型；若上面填了默认模型，直接运行即可。</div>')
