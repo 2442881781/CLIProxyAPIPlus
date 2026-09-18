@@ -816,6 +816,10 @@ type modelMaxContextLengthEntry interface {
 	GetMaxContextLength() int
 }
 
+type modelMaxTokensEntry interface {
+	GetMaxTokens() int
+}
+
 type modelCompatEntry interface {
 	GetIsCompat() bool
 }
@@ -854,6 +858,11 @@ func buildConfiguredModelInfo(model modelEntry, ownedBy, modelType string, creat
 		if maxContextLength := maxContextModel.GetMaxContextLength(); maxContextLength > 0 {
 			info.ContextLength = maxContextLength
 			info.MaxContextLength = maxContextLength
+		}
+	}
+	if maxTokensModel, okMaxTokens := any(model).(modelMaxTokensEntry); okMaxTokens {
+		if maxTokens := maxTokensModel.GetMaxTokens(); maxTokens > 0 {
+			info.MaxCompletionTokens = maxTokens
 		}
 	}
 	if compatModel, okCompat := any(model).(modelCompatEntry); okCompat {

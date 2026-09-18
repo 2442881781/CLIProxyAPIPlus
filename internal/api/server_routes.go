@@ -691,21 +691,24 @@ func accessKeyModels(entry *storeaccess.AccessKey, grp *storeaccess.Group) []gin
 		if id == "" || !entry.ModelAllowed(id) || !grp.ModelAllowed(id) {
 			continue
 		}
+		// The same id can be served by several providers; use metadata from any
+		// provider that published it instead of only whichever registered last.
+		meta := mergeModelMetadata(reg.GetModelInfosForID(id))
 		model := gin.H{"id": id}
-		contextLength := info.ContextLength
-		if info.MaxContextLength > 0 {
-			contextLength = info.MaxContextLength
+		contextLength := meta.ContextLength
+		if meta.MaxContextLength > 0 {
+			contextLength = meta.MaxContextLength
 		}
 		if contextLength > 0 {
 			model["context_window"] = contextLength
 		}
-		if info.MaxCompletionTokens > 0 {
-			model["max_tokens"] = info.MaxCompletionTokens
+		if meta.MaxCompletionTokens > 0 {
+			model["max_tokens"] = meta.MaxCompletionTokens
 		}
-		if supportsImageInput(info.SupportedInputModalities) {
+		if supportsImageInput(meta.SupportedInputModalities) {
 			model["input"] = []string{"text", "image"}
 		}
-		if info.Thinking != nil {
+		if meta.Thinking != nil {
 			model["reasoning"] = true
 		}
 		models = append(models, model)
@@ -713,6 +716,33 @@ func accessKeyModels(entry *storeaccess.AccessKey, grp *storeaccess.Group) []gin
 	return models
 }
 
+// mergeModelMetadata folds the per-provider definitions of one model id into a
+// single view, keeping the first non-empty value for each field so a provider
+// that publishes no metadata cannot hide what another provider declared.
+func mergeModelMetadata(infos []*registry.ModelInfo) *registry.ModelInfo {
+	out := &registry.ModelInfo{}
+	for _, info := range infos {
+		if info == nil {
+			continue
+		}
+		if out.ContextLength == 0 {
+			out.ContextLength = info.ContextLength
+		}
+		if out.MaxContextLength == 0 {
+			out.MaxContextLength = info.MaxContextLength
+		}
+		if out.MaxCompletionTokens == 0 {
+			out.MaxCompletionTokens = info.MaxCompletionTokens
+		}
+		if len(out.SupportedInputModalities) == 0 {
+			out.SupportedInputModalities = info.SupportedInputModalities
+		}
+		if out.Thinking == nil {
+			out.Thinking = info.Thinking
+		}
+	}
+	return out
+}
 func supportsImageInput(modalities []string) bool {
 	for _, modality := range modalities {
 		switch strings.ToLower(strings.TrimSpace(modality)) {

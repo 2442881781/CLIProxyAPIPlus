@@ -90,3 +90,42 @@ func TestBuildConfigModelsPropagatesMaxContextLength(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAICompatibilityModelPropagatesMaxTokens(t *testing.T) {
+	// Given a compatibility model that declares its completion token cap
+	// Then the registered model carries it, so catalogs can advertise maxTokens
+	const wantContext = 1000000
+	const wantTokens = 128000
+
+	model := buildOpenAICompatibilityConfigModels(&config.OpenAICompatibility{
+		Models: []config.OpenAICompatibilityModel{{
+			Name:             "glm-5.3",
+			Alias:            "glm-5.3",
+			MaxContextLength: wantContext,
+			MaxTokens:        wantTokens,
+		}},
+	})[0]
+	if model == nil {
+		t.Fatal("model = nil")
+	}
+	if model.MaxCompletionTokens != wantTokens {
+		t.Fatalf("max completion tokens = %d, want %d", model.MaxCompletionTokens, wantTokens)
+	}
+	if model.ContextLength != wantContext {
+		t.Fatalf("context length = %d, want %d", model.ContextLength, wantContext)
+	}
+}
+
+func TestOpenAICompatibilityModelWithoutMaxTokensKeepsZero(t *testing.T) {
+	// Given a model that declares no cap
+	// Then nothing is invented for it
+	model := buildOpenAICompatibilityConfigModels(&config.OpenAICompatibility{
+		Models: []config.OpenAICompatibilityModel{{Name: "glm-5", Alias: "glm-5"}},
+	})[0]
+	if model == nil {
+		t.Fatal("model = nil")
+	}
+	if model.MaxCompletionTokens != 0 {
+		t.Fatalf("max completion tokens = %d, want 0", model.MaxCompletionTokens)
+	}
+}
