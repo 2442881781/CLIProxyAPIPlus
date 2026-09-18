@@ -122,6 +122,9 @@ func (s *Server) setupRoutes() {
 			"effective_rate_limit": store.EffectiveRateLimit(entry),
 			"usage":                storeaccess.UsageSummary(entry.Usage, false, false, keyRate),
 		}
+		// The models this key may actually call, with the metadata an agent
+		// config needs, so the panel never has to guess or over-promise.
+		resp["models"] = accessKeyModels(entry, store.GroupFor(entry))
 		if grp := store.GroupFor(entry); grp != nil {
 			resp["group"] = gin.H{
 				"name":            grp.Name,
@@ -664,6 +667,56 @@ func (s *Server) AttachWebsocketRoute(path string, handler http.Handler) {
 	}
 
 	s.engine.GET(trimmed, conditionalAuth, groupAccess, finalHandler)
+}
+
+// accessKeyModels lists the models this key may call together with the fields an
+// agent config declares per model: context window, output cap, image input and
+// reasoning support. A model must pass both the key and the group allowlist.
+func accessKeyModels(entry *storeaccess.AccessKey, grp *storeaccess.Group) []gin.H {
+	reg := registry.GetGlobalRegistry()
+	if reg == nil || entry == nil {
+		return nil
+	}
+	infos := reg.GetAvailableModelInfos()
+	models := make([]gin.H, 0, len(infos))
+	for _, info := range infos {
+		if info == nil {
+			continue
+		}
+		id := strings.TrimSpace(info.ID)
+		if id == "" || !entry.ModelAllowed(id) || !grp.ModelAllowed(id) {
+			continue
+		}
+		model := gin.H{"id": id}
+		contextLength := info.ContextLength
+		if info.MaxContextLength > 0 {
+			contextLength = info.MaxContextLength
+		}
+		if contextLength > 0 {
+			model["context_window"] = contextLength
+		}
+		if info.MaxCompletionTokens > 0 {
+			model["max_tokens"] = info.MaxCompletionTokens
+		}
+		if supportsImageInput(info.SupportedInputModalities) {
+			model["input"] = []string{"text", "image"}
+		}
+		if info.Thinking != nil {
+			model["reasoning"] = true
+		}
+		models = append(models, model)
+	}
+	return models
+}
+
+func supportsImageInput(modalities []string) bool {
+	for _, modality := range modalities {
+		switch strings.ToLower(strings.TrimSpace(modality)) {
+		case "image", "image_url", "vision":
+			return true
+		}
+	}
+	return false
 }
 
 // isAnthropicModelsRequest reports whether a /v1/models request should be served in
