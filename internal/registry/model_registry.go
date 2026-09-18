@@ -1598,6 +1598,28 @@ func (r *ModelRegistry) GetModelProviders(modelID string) []string {
 }
 
 // GetModelInfo returns ModelInfo, prioritizing provider-specific definition if available.
+// GetModelInfosForID returns the global definition plus every provider-specific
+// definition stored for a model id, so callers can use metadata published by any
+// provider instead of only whichever one registered last.
+func (r *ModelRegistry) GetModelInfosForID(modelID string) []*ModelInfo {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	reg, ok := r.models[modelID]
+	if !ok || reg == nil {
+		return nil
+	}
+	out := make([]*ModelInfo, 0, len(reg.InfoByProvider)+1)
+	if reg.Info != nil {
+		out = append(out, cloneModelInfo(reg.Info))
+	}
+	for _, info := range reg.InfoByProvider {
+		if info != nil {
+			out = append(out, cloneModelInfo(info))
+		}
+	}
+	return out
+}
+
 func (r *ModelRegistry) GetModelInfo(modelID, provider string) *ModelInfo {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()

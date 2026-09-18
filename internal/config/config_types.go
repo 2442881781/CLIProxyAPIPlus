@@ -758,6 +758,9 @@ type OpenAICompatibilityModel struct {
 	// ForceMapping rewrites upstream response model fields back to Alias.
 	ForceMapping bool `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
 
+	// MaxTokens is the maximum completion (output) tokens reported for this model.
+	MaxTokens int `yaml:"max-tokens,omitempty" json:"max-tokens,omitempty"`
+
 	// Image marks this model as callable through /v1/images/generations and /v1/images/edits.
 	Image bool `yaml:"image,omitempty" json:"image,omitempty"`
 
@@ -783,7 +786,10 @@ func (m OpenAICompatibilityModel) GetAlias() string { return m.Alias }
 
 func (m OpenAICompatibilityModel) GetDisplayName() string   { return m.DisplayName }
 func (m OpenAICompatibilityModel) GetMaxContextLength() int { return m.MaxContextLength }
-func (m OpenAICompatibilityModel) GetForceMapping() bool    { return m.ForceMapping }
-func (m OpenAICompatibilityModel) GetIsCompat() bool        { return m.IsCompat }
+
+// GetMaxTokens reports the declared completion token cap.
+func (m OpenAICompatibilityModel) GetMaxTokens() int     { return m.MaxTokens }
+func (m OpenAICompatibilityModel) GetForceMapping() bool { return m.ForceMapping }
+func (m OpenAICompatibilityModel) GetIsCompat() bool     { return m.IsCompat }
 
 func (m OpenAICompatibilityModel) GetThinking() *registry.ThinkingSupport { return m.Thinking }
