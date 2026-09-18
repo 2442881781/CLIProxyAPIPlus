@@ -51,6 +51,18 @@ h2{font-size:15px;font-weight:600;margin-bottom:12px}
 .err{background:rgba(198,87,70,.1);border:1px solid var(--error);color:var(--error);padding:12px 16px;border-radius:8px;font-size:14px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .spin{display:inline-block;width:18px;height:18px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle}
+.tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.tabs button{padding:7px 14px;font-size:13px;font-weight:500;background:var(--card2);color:var(--text2);border:1px solid var(--border)}
+.tabs button.active{background:var(--primary);color:var(--card);border-color:var(--primary)}
+.step{font-size:13px;color:var(--text2);margin:16px 0 7px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.step:first-of-type{margin-top:0}
+.step code{background:var(--card2);border:1px solid var(--border);border-radius:5px;padding:1px 7px;font-size:12px;color:var(--text)}
+.codeblock{position:relative;background:var(--card2);border:1px solid var(--border);border-radius:9px;overflow:hidden}
+.codeblock pre{margin:0;padding:13px 15px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;overflow-x:auto;white-space:pre;color:var(--text)}
+.codeblock .copy{position:absolute;top:8px;right:8px;padding:5px 11px;font-size:12px;background:var(--card);color:var(--text2);border:1px solid var(--border)}
+.codeblock .copy:hover{background:var(--primary);color:var(--card);border-color:var(--primary)}
+.hint{font-size:12px;color:var(--text3);margin-top:8px;line-height:1.6}
+.hint b{color:var(--text2);font-weight:500}
 </style>
 </head>
 <body>
@@ -82,6 +94,7 @@ async function load(key){
   document.getElementById('subtitle').textContent = d.name ? d.name+' 的 API Key 用量与配额' : '个人 API Key 用量与配额';
 
   const u = d.usage||{}, q = d.quota||{};
+  const modelIds = await resolveModelIds(key, d, u);
   const limit = q.token_limit||0;
   const periodUsed = u.period_tokens||0;
   const pct = limit>0 ? Math.min(100, Math.round(periodUsed/limit*100)) : 0;
@@ -144,11 +157,172 @@ async function load(key){
       + '</div>';
   }
 
+  html += configCard(key, modelIds);
+
   html += '<div class="muted" style="font-size:12px;text-align:center">数据每 15 秒刷新一次 · 请妥善保管本链接，它包含你的 Key</div>';
   app.innerHTML = html;
+  activateTabs();
 }
 function stat(label,value,extra){return '<div class="stat"><div class="label">'+label+'</div><div class="value">'+value+'</div><div class="extra">'+extra+'</div></div>'}
 function row(k,v){return '<div class="row"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'}
+
+/* ---------- 接入配置 ---------- */
+
+const COMPAT = {
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: true,
+  supportsUsageInStreaming: true,
+  supportsStrictMode: false,
+  maxTokensField: 'max_tokens',
+  thinkingFormat: 'openai'
+};
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function yamlStr(v){return '"'+String(v).replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"'}
+
+// 模型列表按可靠性依次回落：近期用过 → 该 Key 的可用模型 → /v1/models → 占位
+async function resolveModelIds(key, d, u){
+  const used = Object.keys((u&&u.models)||{});
+  if(used.length) return used.slice(0,8);
+  const allowed = Array.isArray(d.allowed_models) ? d.allowed_models.filter(Boolean) : [];
+  if(allowed.length) return allowed.slice(0,8);
+  try{
+    const res = await fetch(location.origin+'/v1/models', {headers:{Authorization:'Bearer '+key}});
+    if(res.ok){
+      const j = await res.json();
+      const ids = (j.data||[]).map(m=>m&&m.id).filter(Boolean);
+      if(ids.length) return ids.slice(0,8);
+    }
+  }catch(e){}
+  return [];
+}
+
+function codeBlock(id, text, label){
+  return '<div class="codeblock"><button class="copy" onclick="copyEl(\''+id+'\',this)">'+(label||'复制')+'</button>'
+    + '<pre id="'+id+'">'+esc(text)+'</pre></div>';
+}
+
+function copyEl(id, btn){
+  const el = document.getElementById(id);
+  if(!el) return;
+  const text = el.textContent;
+  const ok = ()=>{const old = btn.textContent; btn.textContent = '已复制'; setTimeout(()=>{btn.textContent = old}, 1500)};
+  const fallback = ()=>{
+    const area = document.createElement('textarea');
+    area.value = text; area.setAttribute('readonly','');
+    area.style.position = 'fixed'; area.style.opacity = '0';
+    document.body.appendChild(area); area.select(); area.setSelectionRange(0, area.value.length);
+    let done = false; try{done = document.execCommand('copy')}catch(e){}
+    area.remove();
+    if(done){ok()}else{btn.textContent = '请手动复制'; setTimeout(()=>{btn.textContent = '复制'}, 2000)}
+  };
+  if(navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(text).then(ok).catch(fallback);
+  }else{
+    fallback();
+  }
+}
+
+function configCard(key, models){
+  const base = location.origin.replace(/\/+$/,'');
+  const openaiBase = base + '/v1';
+  const list = models.length ? models : ['your-model-id'];
+  const first = list[0];
+
+  const piConfig = {
+    providers: {
+      cpa: {
+        name: 'CLIProxyAPI',
+        baseUrl: openaiBase,
+        api: 'openai-completions',
+        apiKey: key,
+        compat: COMPAT,
+        models: list.map(id=>({id: id}))
+      }
+    }
+  };
+  const piDefaults = {defaultProvider: 'cpa', defaultModel: first};
+
+  const ompConfig = ['providers:', '  cpa:', '    baseUrl: '+openaiBase, '    apiKey: '+yamlStr(key),
+    '    api: openai-completions', '    compat:', '      supportsStore: false',
+    '      supportsDeveloperRole: false', '      supportsReasoningEffort: true',
+    '      maxTokensField: max_tokens', '      thinkingFormat: openai', '    models:']
+    .concat(list.map(id=>'      - id: '+id)).join('\n');
+  const ompDefaults = ['defaultProvider: cpa', 'defaultModel: '+first].join('\n');
+
+  const claudeConfig = {
+    env: {
+      ANTHROPIC_BASE_URL: base,
+      ANTHROPIC_AUTH_TOKEN: key,
+      ANTHROPIC_MODEL: first,
+      ANTHROPIC_SMALL_FAST_MODEL: list[1] || first
+    }
+  };
+
+  const placeholderNote = models.length ? '' :
+    '<div class="hint">未能自动获取模型列表，请把 <b>your-model-id</b> 换成你要用的模型名（见上方「可用模型」一行）。</div>';
+
+  const panels = [
+    {
+      id: 'pi', label: 'pi',
+      title: 'pi',
+      install: 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent',
+      blocks: [
+        ['pi-models', JSON.stringify(piConfig, null, 2), '写入 <code>~/.pi/agent/models.json</code>（新建，或合并进已有 <code>providers</code>）'],
+        ['pi-settings', JSON.stringify(piDefaults, null, 2), '可选：写入 <code>~/.pi/agent/settings.json</code>，设为启动默认模型']
+      ]
+    },
+    {
+      id: 'omp', label: 'omp',
+      title: 'omp (oh-my-pi)',
+      install: 'curl -fsSL https://omp.sh/install | sh',
+      blocks: [
+        ['omp-models', ompConfig, '写入 <code>~/.omp/agent/models.yml</code>（新建，或合并进已有 <code>providers</code>）'],
+        ['omp-config', ompDefaults, '可选：写入 <code>~/.omp/agent/config.yml</code>，设为启动默认模型']
+      ]
+    },
+    {
+      id: 'claude', label: 'Claude Code',
+      title: 'Claude Code',
+      install: 'npm install -g @anthropic-ai/claude-code',
+      blocks: [
+        ['claude-settings', JSON.stringify(claudeConfig, null, 2), '写入 <code>~/.claude/settings.json</code>（合并进已有 <code>env</code>；也可改用同名环境变量）']
+      ]
+    }
+  ];
+
+  let html = '<div class="card"><h2>接入配置</h2>'
+    + '<div class="hint" style="margin-top:-4px;margin-bottom:14px">已自动填入你的 Key 和本服务地址，复制即可使用。安装好 agent 后，把对应配置写进文件，重启 agent 生效。</div>'
+    + '<div class="tabs">'
+    + panels.map((p,i)=>'<button data-tab="'+p.id+'"'+(i===0?' class="active"':'')+'>'+esc(p.label)+'</button>').join('')
+    + '</div>';
+
+  panels.forEach((p,i)=>{
+    html += '<div class="tabpanel" data-panel="'+p.id+'"'+(i===0?'':' style="display:none"')+'>'
+      + '<div class="step">1. 安装 <code>'+esc(p.title)+'</code></div>'
+      + codeBlock('cmd-'+p.id, p.install)
+      + p.blocks.map((b,j)=>'<div class="step">'+(j+2)+'. '+b[2]+'</div>'+codeBlock(b[0], b[1])).join('')
+      + (p.id==='claude'
+          ? '<div class="hint">Claude Code 走 <b>/v1/messages</b>（Anthropic 协议），本服务已自动翻译到上游；<b>ANTHROPIC_AUTH_TOKEN</b> 会作为 <code>Authorization: Bearer</code> 发送。</div>'
+          : '<div class="hint">pi / omp 走 <b>/v1/chat/completions</b>（OpenAI 协议）。首次启动后用 <code>/model</code> 选择模型；若上面填了默认模型，直接运行即可。</div>')
+      + '</div>';
+  });
+
+  html += placeholderNote + '</div>';
+  return html;
+}
+
+function activateTabs(){
+  document.querySelectorAll('.tabs button').forEach(btn=>{
+    btn.onclick = ()=>{
+      const id = btn.dataset.tab;
+      document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active', b===btn));
+      document.querySelectorAll('[data-panel]').forEach(p=>{p.style.display = p.dataset.panel===id ? '' : 'none'});
+    };
+  });
+}
+
 function keyInput(){
   return '<div class="center"><p class="muted" style="margin-bottom:14px">手动输入你的 API Key 查看用量：</p>'
     + '<input type="text" id="kinput" placeholder="sk-cpa-..."> '
