@@ -177,6 +177,11 @@ func (s *Server) setupRoutes() {
 		v1.GET("/live/:call_id", s.codexLiveHandler.HandleSideband)
 	}
 
+	// Web search provider key pool (Tavily / Exa / Firecrawl REST proxy and MCP server)
+	search := s.engine.Group("/search")
+	search.Use(liftSearchBodyAPIKey(), AuthMiddleware(s.accessManager), groupAccess)
+	search.Any("/*path", s.searchService.Handle)
+
 	realtimeAuth := realtimeAuthMiddleware(s.accessManager, s.codexLiveHandler)
 	standardAuth := realtimeStandardAuthMiddleware(s.accessManager)
 	s.engine.GET("/v1/realtime", realtimeAuth, groupAccess, s.codexLiveHandler.HandleRealtimeWebsocket)
@@ -868,7 +873,13 @@ func (s *Server) handleHomeCodexClientModels(c *gin.Context, clientVersion strin
 	if clientVersion == "cpa" {
 		webSearchCapabilityForModel = homeWebSearchCapabilityForModel(entries)
 	}
-	s.writeModelListResponse(c, "openai", codexmodels.BuildResponseForClientWithCPACapabilities(models, nil, webSearchCapabilityForModel, s.cfg.Codex.OptimizeMultiAgentV2, clientVersion))
+	payload := codexmodels.BuildResponseForClientWithCPACapabilities(models, nil, webSearchCapabilityForModel, s.cfg.Codex.OptimizeMultiAgentV2, clientVersion)
+	body, errMarshal := codexmodels.MarshalCompact(payload)
+	if errMarshal != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errMarshal.Error()})
+		return
+	}
+	s.writeModelListResponse(c, "openai", body)
 }
 
 func homeWebSearchCapabilityForModel(entries []homeModelEntry) codexmodels.WebSearchCapabilityForModelFunc {
@@ -891,6 +902,12 @@ func formatHomeCodexModel(entry homeModelEntry) map[string]any {
 	}
 	if entry.ownedBy != "" {
 		model["owned_by"] = entry.ownedBy
+	}
+	for _, p := range entry.providers {
+		if strings.EqualFold(p, "devin") {
+			model["type"] = "devin"
+			break
+		}
 	}
 	if entry.displayName != "" {
 		model["display_name"] = entry.displayName

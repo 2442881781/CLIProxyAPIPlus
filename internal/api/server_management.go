@@ -161,10 +161,22 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/codex-api-key", s.mgmt.PatchCodexKey)
 		mgmt.DELETE("/codex-api-key", s.mgmt.DeleteCodexKey)
 
+		mgmt.GET("/search-api-key", s.mgmt.GetSearchKeys)
+		mgmt.PUT("/search-api-key", s.mgmt.PutSearchKeys)
+		mgmt.PATCH("/search-api-key", s.mgmt.PatchSearchKey)
+		mgmt.DELETE("/search-api-key", s.mgmt.DeleteSearchKey)
+		mgmt.GET("/search-api-key/status", s.mgmt.GetSearchKeyStatus)
+		mgmt.POST("/search-api-key/reset-cooldown", s.mgmt.ResetSearchKeyCooldown)
+
 		mgmt.GET("/xai-api-key", s.mgmt.GetXAIKeys)
 		mgmt.PUT("/xai-api-key", s.mgmt.PutXAIKeys)
 		mgmt.PATCH("/xai-api-key", s.mgmt.PatchXAIKey)
 		mgmt.DELETE("/xai-api-key", s.mgmt.DeleteXAIKey)
+
+		mgmt.GET("/meta-api-key", s.mgmt.GetMetaKeys)
+		mgmt.PUT("/meta-api-key", s.mgmt.PutMetaKeys)
+		mgmt.PATCH("/meta-api-key", s.mgmt.PatchMetaKey)
+		mgmt.DELETE("/meta-api-key", s.mgmt.DeleteMetaKey)
 
 		mgmt.GET("/openai-compatibility", s.mgmt.GetOpenAICompat)
 		mgmt.PUT("/openai-compatibility", s.mgmt.PutOpenAICompat)
@@ -212,8 +224,10 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
 		mgmt.GET("/antigravity-auth-url", s.mgmt.RequestAntigravityToken)
 		mgmt.GET("/kimi-auth-url", s.mgmt.RequestKimiToken)
+		mgmt.GET("/kimi-ai-auth-url", s.mgmt.RequestKimiAIToken)
 		mgmt.GET("/xai-auth-url", s.mgmt.RequestXAIToken)
 		mgmt.GET("/devin-auth-url", s.mgmt.RequestDevinToken)
+		mgmt.GET("/meta-auth-url", s.mgmt.RequestMetaToken)
 		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 		mgmt.DELETE("/oauth-session", s.mgmt.CancelAuthSession)
 	}

@@ -11,6 +11,7 @@ import { ModelPressurePage } from '@/features/modelPressure/ModelPressurePage';
 import { ModelRoutesPage } from '@/features/modelRoutes/ModelRoutesPage';
 import { AccessKeysPage } from '@/features/accessKeys/AccessKeysPage';
 import { AccessGroupsPage } from '@/features/accessGroups/AccessGroupsPage';
+import { SearchKeysPage } from '@/features/searchKeys/SearchKeysPage';
 import { ServerMonitorPage } from '@/features/serverMonitor/ServerMonitorPage';
 import { PluginResourcePage } from '@/features/plugins/PluginResourcePage';
 import { PluginsPage } from '@/features/plugins/PluginsPage';
@@ -38,6 +39,7 @@ const createMainRoutes = (supportsPlugin: boolean) => [
   { path: '/model-pressure', element: <ModelPressurePage /> },
   { path: '/access-keys', element: <AccessKeysPage /> },
   { path: '/access-groups', element: <AccessGroupsPage /> },
+  { path: '/search-keys', element: <SearchKeysPage /> },
   { path: '/server-monitor', element: <ServerMonitorPage /> },
   ...(supportsPlugin
     ? [

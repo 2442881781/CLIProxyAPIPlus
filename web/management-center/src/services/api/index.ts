@@ -17,5 +17,6 @@ export * from './vertex';
 export * from './usageMonitor';
 export * from './modelPressure';
 export * from './accessControl';
+export * from './searchKeys';
 export * from './serverStats';
 export * from './providerQuotas';
