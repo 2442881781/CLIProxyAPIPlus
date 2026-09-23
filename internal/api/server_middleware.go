@@ -119,6 +119,8 @@ func isExampleAPIKeySafeModeProxyPath(path string) bool {
 		return true
 	case path == "/backend-api/codex" || strings.HasPrefix(path, "/backend-api/codex/"):
 		return true
+	case path == "/search" || strings.HasPrefix(path, "/search/"):
+		return true
 	default:
 		return false
 	}

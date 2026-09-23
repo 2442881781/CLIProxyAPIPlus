@@ -161,6 +161,13 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/codex-api-key", s.mgmt.PatchCodexKey)
 		mgmt.DELETE("/codex-api-key", s.mgmt.DeleteCodexKey)
 
+		mgmt.GET("/search-api-key", s.mgmt.GetSearchKeys)
+		mgmt.PUT("/search-api-key", s.mgmt.PutSearchKeys)
+		mgmt.PATCH("/search-api-key", s.mgmt.PatchSearchKey)
+		mgmt.DELETE("/search-api-key", s.mgmt.DeleteSearchKey)
+		mgmt.GET("/search-api-key/status", s.mgmt.GetSearchKeyStatus)
+		mgmt.POST("/search-api-key/reset-cooldown", s.mgmt.ResetSearchKeyCooldown)
+
 		mgmt.GET("/xai-api-key", s.mgmt.GetXAIKeys)
 		mgmt.PUT("/xai-api-key", s.mgmt.PutXAIKeys)
 		mgmt.PATCH("/xai-api-key", s.mgmt.PatchXAIKey)

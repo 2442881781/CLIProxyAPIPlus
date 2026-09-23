@@ -133,6 +133,10 @@ type Config struct {
 	// MetaKey defines Meta API key configurations using the same structure as Codex API keys.
 	MetaKey []MetaKey `yaml:"meta-api-key" json:"meta-api-key"`
 
+	// SearchKey defines upstream web search provider keys (Tavily, Exa, Firecrawl)
+	// pooled behind the /search routes.
+	SearchKey []SearchKey `yaml:"search-api-key" json:"search-api-key"`
+
 	// XAI configures provider-wide xAI request behavior.
 	XAI XAIConfig `yaml:"xai" json:"xai"`
 

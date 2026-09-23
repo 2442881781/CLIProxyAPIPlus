@@ -364,6 +364,8 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 		}
 	}
 
+	changes = appendSearchKeyChanges(changes, oldCfg.SearchKey, newCfg.SearchKey)
+
 	// xAI keys (do not print key material)
 	if len(oldCfg.XAIKey) != len(newCfg.XAIKey) {
 		changes = append(changes, fmt.Sprintf("xai-api-key count: %d -> %d", len(oldCfg.XAIKey), len(newCfg.XAIKey)))
@@ -664,4 +666,33 @@ func formatURL(raw string) string {
 		return host
 	}
 	return scheme + "://" + host
+}
+
+// appendSearchKeyChanges reports search-api-key changes without printing key or proxy material.
+func appendSearchKeyChanges(changes []string, oldKeys, newKeys []config.SearchKey) []string {
+	if len(oldKeys) != len(newKeys) {
+		return append(changes, fmt.Sprintf("search-api-key count: %d -> %d", len(oldKeys), len(newKeys)))
+	}
+	for i := range oldKeys {
+		o, n := oldKeys[i], newKeys[i]
+		if o.Provider != n.Provider {
+			changes = append(changes, fmt.Sprintf("search-api-key[%d].provider: %s -> %s", i, o.Provider, n.Provider))
+		}
+		if o.APIKey != n.APIKey {
+			changes = append(changes, fmt.Sprintf("search-api-key[%d].api-key: updated", i))
+		}
+		if o.Label != n.Label {
+			changes = append(changes, fmt.Sprintf("search-api-key[%d].label: %s -> %s", i, o.Label, n.Label))
+		}
+		if o.BaseURL != n.BaseURL {
+			changes = append(changes, fmt.Sprintf("search-api-key[%d].base-url: %s -> %s", i, formatURL(o.BaseURL), formatURL(n.BaseURL)))
+		}
+		if o.ProxyURL != n.ProxyURL {
+			changes = append(changes, fmt.Sprintf("search-api-key[%d].proxy-url: updated", i))
+		}
+		if o.Disabled != n.Disabled {
+			changes = append(changes, fmt.Sprintf("search-api-key[%d].disabled: %t -> %t", i, o.Disabled, n.Disabled))
+		}
+	}
+	return changes
 }

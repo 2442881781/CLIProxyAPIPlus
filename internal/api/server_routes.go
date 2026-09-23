@@ -177,6 +177,11 @@ func (s *Server) setupRoutes() {
 		v1.GET("/live/:call_id", s.codexLiveHandler.HandleSideband)
 	}
 
+	// Web search provider key pool (Tavily / Exa / Firecrawl REST proxy and MCP server)
+	search := s.engine.Group("/search")
+	search.Use(liftSearchBodyAPIKey(), AuthMiddleware(s.accessManager), groupAccess)
+	search.Any("/*path", s.searchService.Handle)
+
 	realtimeAuth := realtimeAuthMiddleware(s.accessManager, s.codexLiveHandler)
 	standardAuth := realtimeStandardAuthMiddleware(s.accessManager)
 	s.engine.GET("/v1/realtime", realtimeAuth, groupAccess, s.codexLiveHandler.HandleRealtimeWebsocket)
