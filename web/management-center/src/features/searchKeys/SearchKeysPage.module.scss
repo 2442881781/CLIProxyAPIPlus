@@ -124,8 +124,6 @@
   }
 }
 
-
-
 .rowActions {
   display: flex;
   gap: 6px;
@@ -219,6 +217,12 @@
   color: var(--text-tertiary);
 }
 
+.state_exhausted {
+  @extend %badge;
+  background: color-mix(in srgb, var(--danger-color, #dc2626) 14%, transparent);
+  color: var(--danger-color, #dc2626);
+}
+
 .state_active {
   @extend %badge;
   background: color-mix(in srgb, var(--success-color, #16a34a) 14%, transparent);
@@ -294,5 +298,53 @@
   &:hover {
     border-color: var(--primary-color);
     color: var(--primary-color);
+  }
+}
+
+.summaryRemaining {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quotaCell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 140px;
+}
+
+.quotaText {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.quotaMuted,
+.quotaMeta {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.quotaError {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--danger-color, #dc2626);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.quotaBar {
+  display: block;
+  width: 120px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+
+  > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--primary-color);
   }
 }

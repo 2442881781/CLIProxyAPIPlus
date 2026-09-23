@@ -67,7 +67,7 @@ type Handler struct {
 	statsMu                 sync.Mutex
 	lastStatsSample         *statsSample
 	netUsage                *netUsageTracker
-	searchPool              *searchproxy.Pool
+	searchService           *searchproxy.Service
 }
 
 type configReloadSnapshot struct {

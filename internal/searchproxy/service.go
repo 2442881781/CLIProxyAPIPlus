@@ -33,6 +33,11 @@ type Service struct {
 	mu          sync.RWMutex
 	globalProxy string
 	clients     map[string]*http.Client
+
+	spendMu   sync.Mutex
+	spendPath string
+
+	newTicker func(time.Duration) (<-chan time.Time, func())
 }
 
 // NewService creates a search proxy service. now defaults to time.Now when nil.
@@ -41,11 +46,12 @@ func NewService(now func() time.Time) *Service {
 		now = time.Now
 	}
 	return &Service{
-		now:     now,
-		pool:    NewPool(now),
-		jobs:    newJobStore(now),
-		publish: coreusage.PublishRecord,
-		clients: map[string]*http.Client{},
+		now:       now,
+		pool:      NewPool(now),
+		jobs:      newJobStore(now),
+		publish:   coreusage.PublishRecord,
+		clients:   map[string]*http.Client{},
+		newTicker: defaultTicker,
 	}
 }
 
@@ -65,6 +71,7 @@ func (s *Service) UpdateConfig(cfg *config.Config) {
 		return
 	}
 	s.pool.Update(cfg.SearchKey)
+	s.setSpendPath(strings.TrimSpace(cfg.AuthDir))
 	s.mu.Lock()
 	s.globalProxy = strings.TrimSpace(cfg.ProxyURL)
 	s.mu.Unlock()
@@ -108,6 +115,16 @@ func (s *Service) Handle(c *gin.Context) {
 		}
 	}()
 	s.recordUsage(c.Request.Context(), provider, downstreamKey, key, started, resp.StatusCode >= http.StatusBadRequest)
+
+	if provider == config.SearchProviderExa && resp.StatusCode < http.StatusMultipleChoices && isJSONResponse(resp) {
+		capture := &captureBody{ReadCloser: resp.Body}
+		resp.Body = capture
+		defer func() {
+			if !capture.truncated {
+				s.RecordSpend(key.ID, exaCost(capture.buf.Bytes()))
+			}
+		}()
+	}
 
 	if c.Request.Method == http.MethodPost && resp.StatusCode < http.StatusMultipleChoices &&
 		isJobCreatePath(provider, path) && isJSONResponse(resp) {

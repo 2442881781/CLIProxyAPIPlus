@@ -12,8 +12,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/searchproxy"
 )
 
-// SetSearchPool wires the runtime search key pool used by status and cooldown endpoints.
-func (h *Handler) SetSearchPool(pool *searchproxy.Pool) { h.searchPool = pool }
+// SetSearchService wires the runtime search proxy used by status, quota and cooldown endpoints.
+func (h *Handler) SetSearchService(svc *searchproxy.Service) { h.searchService = svc }
 
 // search-api-key: []SearchKey
 func (h *Handler) GetSearchKeys(c *gin.Context) {
@@ -58,12 +58,13 @@ func (h *Handler) PutSearchKeys(c *gin.Context) {
 
 func (h *Handler) PatchSearchKey(c *gin.Context) {
 	type searchKeyPatch struct {
-		Provider *string `json:"provider"`
-		APIKey   *string `json:"api-key"`
-		Label    *string `json:"label"`
-		BaseURL  *string `json:"base-url"`
-		ProxyURL *string `json:"proxy-url"`
-		Disabled *bool   `json:"disabled"`
+		Provider *string  `json:"provider"`
+		APIKey   *string  `json:"api-key"`
+		Label    *string  `json:"label"`
+		BaseURL  *string  `json:"base-url"`
+		ProxyURL *string  `json:"proxy-url"`
+		Disabled *bool    `json:"disabled"`
+		Budget   *float64 `json:"budget"`
 	}
 	var body struct {
 		Index *int            `json:"index"`
@@ -115,6 +116,9 @@ func (h *Handler) PatchSearchKey(c *gin.Context) {
 	if patch.Disabled != nil {
 		entry.Disabled = *patch.Disabled
 	}
+	if patch.Budget != nil {
+		entry.Budget = *patch.Budget
+	}
 	normalized, ok := config.NormalizeSearchKey(entry)
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": invalidSearchKeyMessage(target, normalized)})
@@ -165,8 +169,12 @@ type searchKeyStatusView struct {
 	Index int `json:"index"`
 }
 
-// GetSearchKeyStatus returns runtime rotation state for every search key; key material is masked.
+// GetSearchKeyStatus returns runtime rotation and quota state for every search key; key material is masked.
 func (h *Handler) GetSearchKeyStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"keys": h.searchKeyStatusViews()})
+}
+
+func (h *Handler) searchKeyStatusViews() []searchKeyStatusView {
 	h.mu.Lock()
 	indexByID := make(map[string]int, len(h.cfg.SearchKey))
 	for i, entry := range h.cfg.SearchKey {
@@ -175,45 +183,84 @@ func (h *Handler) GetSearchKeyStatus(c *gin.Context) {
 	h.mu.Unlock()
 
 	views := []searchKeyStatusView{}
-	if h.searchPool != nil {
-		for _, st := range h.searchPool.Snapshot() {
-			index, ok := indexByID[st.ID]
-			if !ok {
-				// The pool has not caught up with a config change yet.
-				continue
-			}
-			views = append(views, searchKeyStatusView{KeyStatus: st, Index: index})
-		}
+	if h.searchService == nil {
+		return views
 	}
-	c.JSON(http.StatusOK, gin.H{"keys": views})
+	for _, st := range h.searchService.Pool().Snapshot() {
+		index, ok := indexByID[st.ID]
+		if !ok {
+			// The pool has not caught up with a config change yet.
+			continue
+		}
+		views = append(views, searchKeyStatusView{KeyStatus: st, Index: index})
+	}
+	return views
+}
+
+// searchKeyTarget is the request body shared by per-key search actions.
+type searchKeyTarget struct {
+	Provider string `json:"provider"`
+	APIKey   string `json:"api-key"`
+	All      bool   `json:"all"`
+}
+
+func bindSearchKeyTarget(c *gin.Context) (searchKeyTarget, bool) {
+	var body searchKeyTarget
+	if errBind := c.ShouldBindJSON(&body); errBind != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return body, false
+	}
+	body.Provider = strings.ToLower(strings.TrimSpace(body.Provider))
+	body.APIKey = strings.TrimSpace(body.APIKey)
+	if !body.All && (body.Provider == "" || body.APIKey == "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provide provider and api-key, or all=true"})
+		return body, false
+	}
+	return body, true
+}
+
+// RefreshSearchKeyQuota queries remote quota for one key or all keys and returns the updated status.
+func (h *Handler) RefreshSearchKeyQuota(c *gin.Context) {
+	target, ok := bindSearchKeyTarget(c)
+	if !ok {
+		return
+	}
+	if h.searchService != nil {
+		var ids []string
+		if !target.All {
+			ids = []string{searchproxy.KeyID(target.Provider, target.APIKey)}
+		}
+		h.searchService.RefreshQuotas(c.Request.Context(), ids)
+	}
+	c.JSON(http.StatusOK, gin.H{"keys": h.searchKeyStatusViews()})
+}
+
+// ResetSearchKeySpend clears the locally tracked month-to-date spend of one key.
+func (h *Handler) ResetSearchKeySpend(c *gin.Context) {
+	target, ok := bindSearchKeyTarget(c)
+	if !ok {
+		return
+	}
+	if target.All || h.searchService == nil || !h.searchService.ResetSpend(target.Provider, target.APIKey) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "item not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // ResetSearchKeyCooldown clears cooldowns for one key ({"provider","api-key"}) or all keys ({"all":true}).
 func (h *Handler) ResetSearchKeyCooldown(c *gin.Context) {
-	var body struct {
-		Provider string `json:"provider"`
-		APIKey   string `json:"api-key"`
-		All      bool   `json:"all"`
-	}
-	if errBind := c.ShouldBindJSON(&body); errBind != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
-		return
-	}
-	provider := strings.ToLower(strings.TrimSpace(body.Provider))
-	apiKey := strings.TrimSpace(body.APIKey)
-	if !body.All && (provider == "" || apiKey == "") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "provide provider and api-key, or all=true"})
-		return
-	}
-	if h.searchPool == nil {
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "reset": 0})
+	target, ok := bindSearchKeyTarget(c)
+	if !ok {
 		return
 	}
 	reset := 0
-	if body.All {
-		reset = h.searchPool.ResetAllCooldowns()
-	} else {
-		reset = h.searchPool.ResetCooldown(provider, apiKey)
+	if h.searchService != nil {
+		if target.All {
+			reset = h.searchService.Pool().ResetAllCooldowns()
+		} else {
+			reset = h.searchService.Pool().ResetCooldown(target.Provider, target.APIKey)
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "reset": reset})
 }

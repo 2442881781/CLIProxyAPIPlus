@@ -693,6 +693,9 @@ func appendSearchKeyChanges(changes []string, oldKeys, newKeys []config.SearchKe
 		if o.Disabled != n.Disabled {
 			changes = append(changes, fmt.Sprintf("search-api-key[%d].disabled: %t -> %t", i, o.Disabled, n.Disabled))
 		}
+		if o.Budget != n.Budget {
+			changes = append(changes, fmt.Sprintf("search-api-key[%d].budget: %g -> %g", i, o.Budget, n.Budget))
+		}
 	}
 	return changes
 }

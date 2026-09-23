@@ -2126,6 +2126,21 @@
     "usage_mcp": "MCP server (Claude Code / Codex)",
     "usage_mcp_hint": "One remote MCP exposing tavily_*, exa_* and firecrawl_* tools for providers that have keys.",
     "usage_firecrawl_mcp": "Official Firecrawl MCP",
-    "usage_firecrawl_mcp_hint": "firecrawl-mcp honours FIRECRAWL_API_URL, so it can use this pool directly."
+    "usage_firecrawl_mcp_hint": "firecrawl-mcp honours FIRECRAWL_API_URL, so it can use this pool directly.",
+    "col_quota": "Quota",
+    "refresh_quota": "Refresh quota",
+    "state_exhausted": "Out of quota",
+    "field_budget": "Monthly budget (USD)",
+    "field_budget_hint": "Exa has no balance API. CPA sums costDollars from responses per UTC month and skips the key once spend reaches this budget. Leave 0 for no budget (free plan: $10/month).",
+    "reset_spend": "Reset spend",
+    "quota_spent": "spent {{amount}} this month",
+    "quota_unknown": "Not checked",
+    "quota_checked": "checked {{time}}",
+    "quota_error": "Check failed: {{error}}",
+    "quota_reset_at": "resets {{date}}",
+    "summary_remaining": "{{amount}} left",
+    "summary_exhausted": "{{count}} out of quota",
+    "quota_refreshed": "Quota refreshed",
+    "spend_reset": "Spend reset"
   }
 }

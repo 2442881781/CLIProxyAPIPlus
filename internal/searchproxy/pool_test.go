@@ -3,6 +3,7 @@ package searchproxy
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,10 +14,24 @@ import (
 //   Keys come from config `search-api-key` entries grouped by provider
 //   (tavily / exa / firecrawl). Time is driven by an injectable clock.
 
-type fakeClock struct{ t time.Time }
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
-func (c *fakeClock) Now() time.Time          { return c.t }
-func (c *fakeClock) Advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Set(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = t
+}
+
+func (c *fakeClock) Advance(d time.Duration) { c.Set(c.Now().Add(d)) }
 
 func newTestPool(t *testing.T, keys ...config.SearchKey) (*Pool, *fakeClock) {
 	t.Helper()

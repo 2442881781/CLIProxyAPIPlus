@@ -26,6 +26,7 @@ const emptyEntry: SearchKeyEntry = {
   baseUrl: '',
   proxyUrl: '',
   disabled: false,
+  budget: 0,
 };
 
 const providerOptions = SEARCH_PROVIDERS.map((provider) => ({ value: provider, label: provider }));
@@ -57,7 +58,11 @@ export function SearchKeyEditSheet({
   const handleSubmit = async () => {
     setTouched(true);
     if (errorKey || mutating) return;
-    await onSubmit({ ...form, provider: form.provider.trim().toLowerCase(), apiKey: form.apiKey.trim() });
+    await onSubmit({
+      ...form,
+      provider: form.provider.trim().toLowerCase(),
+      apiKey: form.apiKey.trim(),
+    });
   };
 
   return (
@@ -119,6 +124,21 @@ export function SearchKeyEditSheet({
           placeholder="socks5://127.0.0.1:1080"
           hint={t('search_keys.field_proxy_url_hint')}
         />
+        {form.provider === 'exa' ? (
+          <Input
+            label={t('search_keys.field_budget')}
+            type="number"
+            min={0}
+            step="0.01"
+            value={form.budget > 0 ? String(form.budget) : ''}
+            onChange={(event) => {
+              const parsed = Number.parseFloat(event.target.value);
+              patch({ budget: Number.isFinite(parsed) && parsed > 0 ? parsed : 0 });
+            }}
+            placeholder="10"
+            hint={t('search_keys.field_budget_hint')}
+          />
+        ) : null}
         <ToggleSwitch
           checked={form.disabled}
           onChange={(disabled) => patch({ disabled })}

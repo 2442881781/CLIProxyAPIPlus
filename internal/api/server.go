@@ -56,6 +56,8 @@ type Server struct {
 
 	// searchService pools web search provider keys behind /search.
 	searchService *searchproxy.Service
+	// stopSearchQuota stops the background search quota refresher.
+	stopSearchQuota context.CancelFunc
 
 	// cfg holds the current server configuration.
 	cfg *config.Config
@@ -221,8 +223,11 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// Initialize management handler
 	s.searchService = searchproxy.NewService(nil)
 	s.searchService.UpdateConfig(cfg)
+	searchQuotaCtx, stopSearchQuota := context.WithCancel(context.Background())
+	s.stopSearchQuota = stopSearchQuota
+	s.searchService.StartQuotaRefresher(searchQuotaCtx, searchproxy.DefaultQuotaRefreshInterval)
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
-	s.mgmt.SetSearchPool(s.searchService.Pool())
+	s.mgmt.SetSearchService(s.searchService)
 	s.mgmt.SetRuntimeStatsProvider(func() (int64, int64) {
 		return s.activeRequests.Load(), s.activeWebSockets.Load()
 	})
@@ -403,6 +408,9 @@ func (s *Server) Start() error {
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
+	if s.stopSearchQuota != nil {
+		s.stopSearchQuota()
+	}
 
 	if s.keepAliveEnabled {
 		select {
