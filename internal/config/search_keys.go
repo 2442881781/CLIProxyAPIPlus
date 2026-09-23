@@ -27,6 +27,9 @@ type SearchKey struct {
 	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
 	// Disabled removes the key from rotation without deleting it.
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	// Budget is a monthly USD spend limit tracked locally; it applies to Exa, which has no balance API.
+	// Zero means no budget.
+	Budget float64 `yaml:"budget,omitempty" json:"budget,omitempty"`
 }
 
 // IsSearchProvider reports whether provider is a supported search provider name.
@@ -47,6 +50,9 @@ func NormalizeSearchKey(entry SearchKey) (SearchKey, bool) {
 	entry.Label = strings.TrimSpace(entry.Label)
 	entry.BaseURL = strings.TrimRight(strings.TrimSpace(entry.BaseURL), "/")
 	entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+	if entry.Budget < 0 {
+		entry.Budget = 0
+	}
 	if !IsSearchProvider(entry.Provider) || entry.APIKey == "" {
 		return entry, false
 	}

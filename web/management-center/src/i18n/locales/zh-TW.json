@@ -2152,6 +2152,21 @@
     "usage_mcp": "MCP 服務（Claude Code / Codex）",
     "usage_mcp_hint": "一個遠端 MCP，提供已設定 key 的 tavily_*、exa_*、firecrawl_* 工具。",
     "usage_firecrawl_mcp": "官方 Firecrawl MCP",
-    "usage_firecrawl_mcp_hint": "firecrawl-mcp 支援 FIRECRAWL_API_URL，可直接接入這個金鑰池。"
+    "usage_firecrawl_mcp_hint": "firecrawl-mcp 支援 FIRECRAWL_API_URL，可直接接入這個金鑰池。",
+    "col_quota": "額度",
+    "refresh_quota": "重新整理額度",
+    "state_exhausted": "額度用盡",
+    "field_budget": "月預算（美元）",
+    "field_budget_hint": "Exa 沒有餘額介面。CPA 依 UTC 自然月累計回應中的 costDollars，花費達到預算後略過這個 key。填 0 表示不限（免費版每月 $10）。",
+    "reset_spend": "清零花費",
+    "quota_spent": "本月已花 {{amount}}",
+    "quota_unknown": "未查詢",
+    "quota_checked": "{{time}} 查詢",
+    "quota_error": "查詢失敗：{{error}}",
+    "quota_reset_at": "{{date}} 重置",
+    "summary_remaining": "剩餘 {{amount}}",
+    "summary_exhausted": "{{count}} 個額度用盡",
+    "quota_refreshed": "額度已重新整理",
+    "spend_reset": "花費已清零"
   }
 }

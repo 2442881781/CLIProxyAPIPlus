@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,12 +23,12 @@ import (
 
 func newSearchKeyHandler(t *testing.T, keys ...config.SearchKey) *Handler {
 	t.Helper()
-	pool := searchproxy.NewPool(nil)
-	pool.Update(keys)
+	svc := searchproxy.NewService(nil)
+	svc.UpdateConfig(&config.Config{SearchKey: keys})
 	h := &Handler{
 		cfg:            &config.Config{SearchKey: append([]config.SearchKey(nil), keys...)},
 		configFilePath: writeTestConfigFile(t),
-		searchPool:     pool,
+		searchService:  svc,
 	}
 	return h
 }
@@ -202,8 +203,8 @@ func TestGetSearchKeyStatus(t *testing.T) {
 		config.SearchKey{Provider: "tavily", APIKey: secret, Label: "acc1"},
 	)
 	id := searchproxy.KeyID("tavily", secret)
-	h.searchPool.Report(id, 432, true)
-	h.searchPool.Cooldown(id, time.Hour, 432)
+	h.searchService.Pool().Report(id, 432, true)
+	h.searchService.Pool().Cooldown(id, time.Hour, 432)
 
 	rec := serveSearchKey(h, h.GetSearchKeyStatus, http.MethodGet, "/v0/management/search-api-key/status", "")
 
@@ -237,17 +238,17 @@ func TestResetSearchKeyCooldown(t *testing.T) {
 		config.SearchKey{Provider: "tavily", APIKey: "tvly-x"},
 		config.SearchKey{Provider: "exa", APIKey: "exa-x"},
 	)
-	h.searchPool.Cooldown(searchproxy.KeyID("tavily", "tvly-x"), time.Hour, 432)
-	h.searchPool.Cooldown(searchproxy.KeyID("exa", "exa-x"), time.Hour, 402)
+	h.searchService.Pool().Cooldown(searchproxy.KeyID("tavily", "tvly-x"), time.Hour, 432)
+	h.searchService.Pool().Cooldown(searchproxy.KeyID("exa", "exa-x"), time.Hour, 402)
 
 	rec := serveSearchKey(h, h.ResetSearchKeyCooldown, http.MethodPost, "/v0/management/search-api-key/reset-cooldown", `{"provider":"tavily","api-key":"tvly-x"}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"reset":1`) {
 		t.Fatalf("reset one = %d %s", rec.Code, rec.Body.String())
 	}
-	if _, err := h.searchPool.Pick("tavily", nil); err != nil {
+	if _, err := h.searchService.Pool().Pick("tavily", nil); err != nil {
 		t.Fatalf("tavily still cooling: %v", err)
 	}
-	if _, err := h.searchPool.Pick("exa", nil); err == nil {
+	if _, err := h.searchService.Pool().Pick("exa", nil); err == nil {
 		t.Fatal("exa should still be cooling")
 	}
 
@@ -255,12 +256,100 @@ func TestResetSearchKeyCooldown(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"reset":1`) {
 		t.Fatalf("reset all = %d %s", rec.Code, rec.Body.String())
 	}
-	if _, err := h.searchPool.Pick("exa", nil); err != nil {
+	if _, err := h.searchService.Pool().Pick("exa", nil); err != nil {
 		t.Fatalf("exa still cooling: %v", err)
 	}
 
 	rec = serveSearchKey(h, h.ResetSearchKeyCooldown, http.MethodPost, "/v0/management/search-api-key/reset-cooldown", `{}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("empty reset = %d, want 400", rec.Code)
+	}
+}
+
+// Scenario: Refresh quota on demand
+//
+//	When POST /search-api-key/refresh-quota with {"provider":"tavily","api-key":"tvly-x"} or {"all":true}
+//	Then the matching keys are refreshed synchronously and the updated status list is returned
+//	And an empty body returns 400
+func TestRefreshSearchKeyQuota(t *testing.T) {
+	var hits atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"key":{"usage":10,"limit":100},"account":{"current_plan":"Free","plan_usage":10,"plan_limit":1000}}`))
+	}))
+	defer up.Close()
+	h := newSearchKeyHandler(t,
+		config.SearchKey{Provider: "tavily", APIKey: "tvly-x", BaseURL: up.URL},
+		config.SearchKey{Provider: "tavily", APIKey: "tvly-y", BaseURL: up.URL},
+	)
+
+	rec := serveSearchKey(h, h.RefreshSearchKeyQuota, http.MethodPost, "/v0/management/search-api-key/refresh-quota", `{"provider":"tavily","api-key":"tvly-x"}`)
+	if rec.Code != http.StatusOK || hits.Load() != 1 {
+		t.Fatalf("refresh one = %d hits=%d body=%s", rec.Code, hits.Load(), rec.Body.String())
+	}
+	var payload struct {
+		Keys []struct {
+			searchproxy.KeyStatus
+			Index int `json:"index"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil || len(payload.Keys) != 2 {
+		t.Fatalf("payload = %s", rec.Body.String())
+	}
+	if q := payload.Keys[0].Quota; q == nil || q.Remaining == nil || *q.Remaining != 90 || q.Plan != "Free" {
+		t.Fatalf("refreshed quota = %#v", q)
+	}
+	if payload.Keys[1].Quota != nil {
+		t.Fatalf("unrefreshed key has quota: %#v", payload.Keys[1].Quota)
+	}
+
+	rec = serveSearchKey(h, h.RefreshSearchKeyQuota, http.MethodPost, "/v0/management/search-api-key/refresh-quota", `{"all":true}`)
+	if rec.Code != http.StatusOK || hits.Load() != 3 {
+		t.Fatalf("refresh all = %d hits=%d", rec.Code, hits.Load())
+	}
+
+	rec = serveSearchKey(h, h.RefreshSearchKeyQuota, http.MethodPost, "/v0/management/search-api-key/refresh-quota", `{}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty refresh = %d, want 400", rec.Code)
+	}
+}
+
+// Scenario: Reset Exa spend
+//
+//	When POST /search-api-key/reset-spend with {"provider":"exa","api-key":"exa-x"}
+//	Then that key's month-to-date spend is 0
+func TestResetSearchKeySpend(t *testing.T) {
+	h := newSearchKeyHandler(t, config.SearchKey{Provider: "exa", APIKey: "exa-x", Budget: 1})
+	h.searchService.RecordSpend(searchproxy.KeyID("exa", "exa-x"), 3)
+
+	rec := serveSearchKey(h, h.ResetSearchKeySpend, http.MethodPost, "/v0/management/search-api-key/reset-spend", `{"provider":"exa","api-key":"exa-x"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset = %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := h.searchService.Pool().Pick("exa", nil); err != nil {
+		t.Fatalf("exa key still over budget: %v", err)
+	}
+	rec = serveSearchKey(h, h.ResetSearchKeySpend, http.MethodPost, "/v0/management/search-api-key/reset-spend", `{"provider":"exa","api-key":"missing"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing key reset = %d, want 404", rec.Code)
+	}
+}
+
+// Scenario: PATCH updates the budget
+//
+//	When PATCH /search-api-key with {"index":0,"value":{"budget":10}}
+//	Then the entry budget is 10 and persisted
+func TestPatchSearchKeyBudget(t *testing.T) {
+	h := newSearchKeyHandler(t, config.SearchKey{Provider: "exa", APIKey: "exa-x"})
+
+	rec := serveSearchKey(h, h.PatchSearchKey, http.MethodPatch, "/v0/management/search-api-key", `{"index":0,"value":{"budget":10}}`)
+
+	if rec.Code != http.StatusOK || h.cfg.SearchKey[0].Budget != 10 {
+		t.Fatalf("patch = %d, keys = %#v", rec.Code, h.cfg.SearchKey)
+	}
+	saved, err := os.ReadFile(h.configFilePath)
+	if err != nil || !strings.Contains(string(saved), "budget: 10") {
+		t.Fatalf("persisted config = %s err=%v", saved, err)
 	}
 }

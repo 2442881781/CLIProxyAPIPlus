@@ -2116,6 +2116,21 @@
     "usage_mcp": "MCP-сервер (Claude Code / Codex)",
     "usage_mcp_hint": "Один удалённый MCP с инструментами tavily_*, exa_* и firecrawl_* для провайдеров с ключами.",
     "usage_firecrawl_mcp": "Официальный Firecrawl MCP",
-    "usage_firecrawl_mcp_hint": "firecrawl-mcp поддерживает FIRECRAWL_API_URL и может использовать этот пул напрямую."
+    "usage_firecrawl_mcp_hint": "firecrawl-mcp поддерживает FIRECRAWL_API_URL и может использовать этот пул напрямую.",
+    "col_quota": "Квота",
+    "refresh_quota": "Обновить квоту",
+    "state_exhausted": "Квота исчерпана",
+    "field_budget": "Месячный бюджет (USD)",
+    "field_budget_hint": "У Exa нет API баланса. CPA суммирует costDollars из ответов за месяц (UTC) и пропускает ключ, когда расход достигает бюджета. 0 — без бюджета (бесплатный план: $10 в месяц).",
+    "reset_spend": "Сбросить расход",
+    "quota_spent": "потрачено {{amount}} за месяц",
+    "quota_unknown": "Не проверено",
+    "quota_checked": "проверено {{time}}",
+    "quota_error": "Ошибка проверки: {{error}}",
+    "quota_reset_at": "сброс {{date}}",
+    "summary_remaining": "осталось {{amount}}",
+    "summary_exhausted": "исчерпано: {{count}}",
+    "quota_refreshed": "Квота обновлена",
+    "spend_reset": "Расход сброшен"
   }
 }

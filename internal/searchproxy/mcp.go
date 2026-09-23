@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -203,6 +204,9 @@ func (s *Service) runToolCall(ctx context.Context, call *upstreamCall, downstrea
 	if failed {
 		text := fmt.Sprintf("%s upstream returned HTTP %d: %s", call.provider, resp.StatusCode, strings.TrimSpace(string(body)))
 		return &mcpToolResult{Content: []mcpContent{{Type: "text", Text: text}}, IsError: true}
+	}
+	if call.provider == config.SearchProviderExa {
+		s.RecordSpend(key.ID, exaCost(body))
 	}
 	if call.method == http.MethodPost && isJobCreatePath(call.provider, call.path) {
 		if jobID := extractJobID(body); jobID != "" {

@@ -50,16 +50,29 @@ type KeyStatus struct {
 	LastUsed      time.Time `json:"last-used,omitempty"`
 	Requests      int64     `json:"requests"`
 	Failures      int64     `json:"failures"`
+	// Quota is the latest known quota; nil until a remote refresh ran (Exa always reports local spend).
+	Quota *Quota `json:"quota,omitempty"`
+	// Exhausted reports that the key is out of quota or over budget and skipped by Pick.
+	Exhausted bool `json:"exhausted"`
 }
 
 type keyState struct {
-	entry         config.SearchKey
-	id            string
-	cooldownUntil time.Time
-	lastStatus    int
-	lastUsed      time.Time
-	requests      int64
-	failures      int64
+	entry          config.SearchKey
+	id             string
+	cooldownUntil  time.Time
+	cooldownStatus int
+	lastStatus     int
+	lastUsed       time.Time
+	requests       int64
+	failures       int64
+
+	quota          *Quota
+	quotaExhausted bool
+	refreshing     bool
+
+	spentUSD    float64
+	spentMonth  string
+	spendLoaded bool
 }
 
 type providerPool struct {
@@ -149,7 +162,7 @@ func (p *Pool) Pick(provider string, exclude map[string]bool) (Key, error) {
 	for i := 0; i < n; i++ {
 		idx := (pp.cursor + i) % n
 		state := pp.keys[idx]
-		if state.entry.Disabled || exclude[state.id] {
+		if state.entry.Disabled || exclude[state.id] || state.exhausted(now) {
 			continue
 		}
 		if state.cooldownUntil.After(now) {
@@ -200,6 +213,7 @@ func (p *Pool) Cooldown(id string, d time.Duration, status int) {
 		return
 	}
 	state.cooldownUntil = p.now().Add(d)
+	state.cooldownStatus = status
 	state.lastStatus = status
 }
 
@@ -252,6 +266,8 @@ func (p *Pool) Snapshot() []KeyStatus {
 				LastUsed:   state.lastUsed,
 				Requests:   state.requests,
 				Failures:   state.failures,
+				Quota:      state.quotaView(now),
+				Exhausted:  state.exhausted(now),
 			}
 			if state.cooldownUntil.After(now) {
 				st.CooldownUntil = state.cooldownUntil

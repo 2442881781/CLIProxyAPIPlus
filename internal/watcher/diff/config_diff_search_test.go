@@ -19,7 +19,7 @@ func TestConfigDiffSearchKeysHidesKeyMaterial(t *testing.T) {
 	}}
 	sameCount := &config.Config{SearchKey: []config.SearchKey{
 		{Provider: "tavily", APIKey: "tvly-new-secret", Label: "acc2", Disabled: true},
-		{Provider: "exa", APIKey: "exa-secret", ProxyURL: "socks5://user:pass@proxy:1080"},
+		{Provider: "exa", APIKey: "exa-secret", ProxyURL: "socks5://user:pass@proxy:1080", Budget: 10},
 	}}
 
 	changes := BuildConfigChangeDetails(oldCfg, sameCount)
@@ -29,6 +29,7 @@ func TestConfigDiffSearchKeysHidesKeyMaterial(t *testing.T) {
 		"search-api-key[0].label: acc1 -> acc2",
 		"search-api-key[0].disabled: false -> true",
 		"search-api-key[1].proxy-url: updated",
+		"search-api-key[1].budget: 0 -> 10",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("changes missing %q:\n%s", want, joined)

@@ -8,11 +8,14 @@ import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { searchKeysApi, type SearchKeyEntry, type SearchKeyStatus } from '@/services/api';
 import { useAuthStore, useNotificationStore } from '@/stores';
 import { copyToClipboard } from '@/utils/clipboard';
+import { formatDateTimeValue, formatDateValue } from '@/utils/format';
 import { SearchKeyEditSheet } from './SearchKeyEditSheet';
 import {
   buildSearchKeyRows,
   buildSearchUsageSnippets,
+  describeQuota,
   formatCooldown,
+  formatQuotaAmount,
   summarizeSearchProviders,
   type SearchKeyRow,
 } from './searchKeysModel';
@@ -20,6 +23,8 @@ import styles from './SearchKeysPage.module.scss';
 
 const DASH = '—';
 const STATUS_POLL_MS = 15_000;
+
+const REMOTE_QUOTA_PROVIDERS = new Set(['tavily', 'firecrawl']);
 
 const maskKey = (key: string): string =>
   key.length <= 8 ? '****' : `${key.slice(0, 4)}****${key.slice(-4)}`;
@@ -104,8 +109,14 @@ export function SearchKeysPage() {
     [showNotification, t]
   );
 
+  const refreshQuota = (target: { provider: string; apiKey: string } | 'all') =>
+    void mutate(async () => {
+      setStatuses(await searchKeysApi.refreshQuota(target));
+    }, t('search_keys.quota_refreshed'));
+
   const stateLabel = (row: SearchKeyRow): string => {
     if (row.state === 'disabled') return t('search_keys.state_disabled');
+    if (row.state === 'exhausted') return t('search_keys.state_exhausted');
     if (row.state === 'cooling') {
       return t('search_keys.state_cooling', { time: formatCooldown(row.cooldownRemainingMs) });
     }
@@ -133,6 +144,14 @@ export function SearchKeysPage() {
               <IconRefreshCw size={15} className={loading ? styles.spinning : undefined} />
               {t('common.refresh')}
             </span>
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => refreshQuota('all')}
+            disabled={!connected || mutating || rows.length === 0}
+          >
+            {t('search_keys.refresh_quota')}
           </Button>
           {rows.some((row) => row.state === 'cooling') ? (
             <Button
@@ -176,7 +195,19 @@ export function SearchKeysPage() {
                 ? t('search_keys.summary_available', { active: item.active, total: item.total })
                 : t('search_keys.summary_none')}
             </div>
+            {item.remaining !== null && (
+              <div className={styles.summaryRemaining}>
+                {t('search_keys.summary_remaining', {
+                  amount: formatQuotaAmount(item.remaining, item.unit),
+                })}
+              </div>
+            )}
             <div className={styles.summaryMeta}>
+              {item.exhausted > 0 && (
+                <span className={styles.state_exhausted}>
+                  {t('search_keys.summary_exhausted', { count: item.exhausted })}
+                </span>
+              )}
               {item.cooling > 0 && (
                 <span className={styles.badgeCooling}>
                   {t('search_keys.summary_cooling', { count: item.cooling })}
@@ -209,6 +240,7 @@ export function SearchKeysPage() {
                   <th>{t('search_keys.col_label')}</th>
                   <th>{t('search_keys.col_key')}</th>
                   <th>{t('search_keys.col_state')}</th>
+                  <th>{t('search_keys.col_quota')}</th>
                   <th>{t('search_keys.col_usage')}</th>
                   <th>{t('search_keys.col_last_status')}</th>
                   <th>{t('search_keys.col_actions')}</th>
@@ -226,6 +258,9 @@ export function SearchKeysPage() {
                     </td>
                     <td>
                       <span className={styles[`state_${row.state}`]}>{stateLabel(row)}</span>
+                    </td>
+                    <td>
+                      <QuotaCell row={row} />
                     </td>
                     <td>
                       {row.status
@@ -260,6 +295,40 @@ export function SearchKeysPage() {
                         >
                           {row.entry.disabled ? t('search_keys.enable') : t('search_keys.disable')}
                         </Button>
+                        {REMOTE_QUOTA_PROVIDERS.has(row.entry.provider) ? (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={mutating}
+                            onClick={() =>
+                              refreshQuota({
+                                provider: row.entry.provider,
+                                apiKey: row.entry.apiKey,
+                              })
+                            }
+                          >
+                            {t('search_keys.refresh_quota')}
+                          </Button>
+                        ) : null}
+                        {row.entry.provider === 'exa' && (row.status?.quota?.used ?? 0) > 0 ? (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={mutating}
+                            onClick={() =>
+                              void mutate(
+                                () =>
+                                  searchKeysApi.resetSpend({
+                                    provider: row.entry.provider,
+                                    apiKey: row.entry.apiKey,
+                                  }),
+                                t('search_keys.spend_reset')
+                              )
+                            }
+                          >
+                            {t('search_keys.reset_spend')}
+                          </Button>
+                        ) : null}
                         {row.state === 'cooling' ? (
                           <Button
                             variant="secondary"
@@ -366,6 +435,48 @@ export function SearchKeysPage() {
       >
         <p className={styles.hint}>{t('search_keys.delete_hint')}</p>
       </Modal>
+    </div>
+  );
+}
+
+function QuotaCell({ row }: { row: SearchKeyRow }) {
+  const { t, i18n } = useTranslation();
+  const quota = row.status?.quota ?? null;
+  const display = describeQuota(quota);
+  const meta: string[] = [];
+  if (quota?.plan) meta.push(quota.plan);
+  if (quota?.checkedAt) {
+    meta.push(
+      t('search_keys.quota_checked', { time: formatDateTimeValue(quota.checkedAt, i18n.language) })
+    );
+  }
+  if (quota?.resetAt) {
+    meta.push(
+      t('search_keys.quota_reset_at', { date: formatDateValue(quota.resetAt, i18n.language) })
+    );
+  }
+  return (
+    <div className={styles.quotaCell}>
+      {display ? (
+        <span className={styles.quotaText}>
+          {display.spentOnly
+            ? t('search_keys.quota_spent', { amount: display.text })
+            : display.text}
+        </span>
+      ) : (
+        <span className={styles.quotaMuted}>{t('search_keys.quota_unknown')}</span>
+      )}
+      {display?.percentRemaining !== null && display?.percentRemaining !== undefined ? (
+        <span className={styles.quotaBar} aria-hidden="true">
+          <span style={{ width: `${Math.min(100, Math.max(0, display.percentRemaining))}%` }} />
+        </span>
+      ) : null}
+      {meta.length ? <span className={styles.quotaMeta}>{meta.join(' · ')}</span> : null}
+      {quota?.error ? (
+        <span className={styles.quotaError} title={quota.error}>
+          {t('search_keys.quota_error', { error: quota.error })}
+        </span>
+      ) : null}
     </div>
   );
 }

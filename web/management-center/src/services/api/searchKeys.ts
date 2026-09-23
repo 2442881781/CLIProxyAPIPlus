@@ -14,6 +14,20 @@ export interface SearchKeyEntry {
   baseUrl: string;
   proxyUrl: string;
   disabled: boolean;
+  /** Monthly USD budget tracked locally (Exa); 0 means none. */
+  budget: number;
+}
+
+export interface SearchKeyQuota {
+  /** 'credits' for Tavily/Firecrawl, 'usd' for Exa spend. */
+  unit: string;
+  used: number | null;
+  limit: number | null;
+  remaining: number | null;
+  plan: string;
+  resetAt: number;
+  checkedAt: number;
+  error: string;
 }
 
 export interface SearchKeyStatus {
@@ -26,6 +40,9 @@ export interface SearchKeyStatus {
   lastStatus: number;
   requests: number;
   failures: number;
+  quota: SearchKeyQuota | null;
+  /** Out of quota or over budget; skipped by rotation. */
+  exhausted: boolean;
 }
 
 type RawRecord = Record<string, unknown>;
@@ -37,6 +54,9 @@ const str = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 const num = (value: unknown): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : 0;
+
+const optionalNum = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 const timestamp = (value: unknown): number => {
   if (typeof value !== 'string' || !value) return 0;
@@ -60,6 +80,7 @@ export const parseSearchKeys = (data: unknown): SearchKeyEntry[] => {
         baseUrl: str(item['base-url']),
         proxyUrl: str(item['proxy-url']),
         disabled: item.disabled === true,
+        budget: num(item.budget),
       },
     ];
   });
@@ -79,6 +100,7 @@ export const toSearchKeyPayload = (entry: SearchKeyEntry): RawRecord => {
     if (value.trim()) payload[field] = value.trim();
   }
   if (entry.disabled) payload.disabled = true;
+  if (entry.budget > 0) payload.budget = entry.budget;
   return payload;
 };
 
@@ -94,7 +116,23 @@ export const parseSearchKeyStatuses = (data: unknown): SearchKeyStatus[] => {
     lastStatus: num(item['last-status']),
     requests: num(item.requests),
     failures: num(item.failures),
+    quota: parseQuota(item.quota),
+    exhausted: item.exhausted === true,
   }));
+};
+
+const parseQuota = (raw: unknown): SearchKeyQuota | null => {
+  if (!isRecord(raw)) return null;
+  return {
+    unit: str(raw.unit),
+    used: optionalNum(raw.used),
+    limit: optionalNum(raw.limit),
+    remaining: optionalNum(raw.remaining),
+    plan: str(raw.plan),
+    resetAt: timestamp(raw['reset-at']),
+    checkedAt: timestamp(raw['checked-at']),
+    error: str(raw.error),
+  };
 };
 
 export const searchKeysApi = {
@@ -117,15 +155,28 @@ export const searchKeysApi = {
         'base-url': '',
         'proxy-url': '',
         disabled: false,
+        budget: 0,
         ...toSearchKeyPayload(entry),
       },
     }),
 
   remove: (index: number) => apiClient.delete(`/search-api-key?index=${index}`),
 
+  async refreshQuota(
+    target: { provider: string; apiKey: string } | 'all'
+  ): Promise<SearchKeyStatus[]> {
+    return parseSearchKeyStatuses(
+      await apiClient.post('/search-api-key/refresh-quota', searchKeyTarget(target))
+    );
+  },
+
+  resetSpend: (target: { provider: string; apiKey: string }) =>
+    apiClient.post('/search-api-key/reset-spend', searchKeyTarget(target)),
+
   resetCooldown: (target: { provider: string; apiKey: string } | 'all') =>
-    apiClient.post(
-      '/search-api-key/reset-cooldown',
-      target === 'all' ? { all: true } : { provider: target.provider, 'api-key': target.apiKey }
-    ),
+    apiClient.post('/search-api-key/reset-cooldown', searchKeyTarget(target)),
 };
+
+function searchKeyTarget(target: { provider: string; apiKey: string } | 'all'): RawRecord {
+  return target === 'all' ? { all: true } : { provider: target.provider, 'api-key': target.apiKey };
+}

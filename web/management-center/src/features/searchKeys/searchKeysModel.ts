@@ -1,10 +1,11 @@
 import {
   SEARCH_PROVIDERS,
   type SearchKeyEntry,
+  type SearchKeyQuota,
   type SearchKeyStatus,
 } from '@/services/api/searchKeys';
 
-export type SearchKeyState = 'active' | 'cooling' | 'disabled';
+export type SearchKeyState = 'active' | 'cooling' | 'exhausted' | 'disabled';
 
 export interface SearchKeyRow {
   index: number;
@@ -19,7 +20,11 @@ export interface SearchProviderSummary {
   total: number;
   active: number;
   cooling: number;
+  exhausted: number;
   disabled: number;
+  /** Sum of known remaining quota of enabled keys; null when none is known. */
+  remaining: number | null;
+  unit: 'credits' | 'usd';
 }
 
 export const buildSearchKeyRows = (
@@ -34,9 +39,11 @@ export const buildSearchKeyRows = (
       !entry.disabled && status && status.cooldownUntil > nowMs ? status.cooldownUntil - nowMs : 0;
     const state: SearchKeyState = entry.disabled
       ? 'disabled'
-      : cooldownRemainingMs > 0
-        ? 'cooling'
-        : 'active';
+      : status?.exhausted
+        ? 'exhausted'
+        : cooldownRemainingMs > 0
+          ? 'cooling'
+          : 'active';
     return { index, entry, status, state, cooldownRemainingMs };
   });
 };
@@ -44,14 +51,59 @@ export const buildSearchKeyRows = (
 export const summarizeSearchProviders = (rows: SearchKeyRow[]): SearchProviderSummary[] =>
   SEARCH_PROVIDERS.map((provider) => {
     const own = rows.filter((row) => row.entry.provider === provider);
+    const known = own
+      .filter((row) => !row.entry.disabled)
+      .map((row) => row.status?.quota?.remaining)
+      .filter((value): value is number => typeof value === 'number');
     return {
       provider,
       total: own.length,
       active: own.filter((row) => row.state === 'active').length,
       cooling: own.filter((row) => row.state === 'cooling').length,
       disabled: own.filter((row) => row.state === 'disabled').length,
+      exhausted: own.filter((row) => row.state === 'exhausted').length,
+      remaining: known.length ? known.reduce((sum, value) => sum + value, 0) : null,
+      unit: provider === 'exa' ? 'usd' : 'credits',
     };
   });
+
+export const formatQuotaAmount = (value: number, unit: string): string =>
+  unit === 'usd' ? `$${value.toFixed(2)}` : Math.round(value).toLocaleString('en-US');
+
+export interface QuotaDisplay {
+  text: string;
+  /** Remaining share of the limit in percent; null when there is no limit. */
+  percentRemaining: number | null;
+  /** Only spend is known (Exa without budget). */
+  spentOnly: boolean;
+}
+
+export const describeQuota = (quota: SearchKeyQuota | null): QuotaDisplay | null => {
+  if (!quota) return null;
+  if (quota.remaining !== null && quota.limit !== null) {
+    return {
+      text: `${formatQuotaAmount(quota.remaining, quota.unit)} / ${formatQuotaAmount(quota.limit, quota.unit)}`,
+      percentRemaining:
+        quota.limit > 0 ? Math.round((quota.remaining / quota.limit) * 1000) / 10 : 0,
+      spentOnly: false,
+    };
+  }
+  if (quota.remaining !== null) {
+    return {
+      text: formatQuotaAmount(quota.remaining, quota.unit),
+      percentRemaining: null,
+      spentOnly: false,
+    };
+  }
+  if (quota.used !== null && quota.unit === 'usd') {
+    return {
+      text: formatQuotaAmount(quota.used, quota.unit),
+      percentRemaining: null,
+      spentOnly: true,
+    };
+  }
+  return null;
+};
 
 /** Returns an i18n error key, or null when the form is valid. */
 export const validateSearchKeyForm = (
@@ -66,7 +118,8 @@ export const validateSearchKeyForm = (
   }
   if (!apiKey) return 'search_keys.error_key_required';
   const duplicate = existing.some(
-    (entry, index) => index !== editingIndex && entry.provider === provider && entry.apiKey === apiKey
+    (entry, index) =>
+      index !== editingIndex && entry.provider === provider && entry.apiKey === apiKey
   );
   return duplicate ? 'search_keys.error_duplicate' : null;
 };

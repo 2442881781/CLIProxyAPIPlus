@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	proxyconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
@@ -29,6 +31,12 @@ func newCountingUpstream(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var hits atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/usage" {
+			// Background quota refresh; not a proxied search request.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"key":{"usage":0,"limit":10}}`)
+			return
+		}
 		hits.Add(1)
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/json")
@@ -138,5 +146,34 @@ func TestSearchRoutesPickUpReloadedKeys(t *testing.T) {
 
 	if rec := serveSearch(server, http.MethodPost, "/search/tavily/search", `{"query":"q"}`, auth); rec.Code != http.StatusOK {
 		t.Fatalf("after reload status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// Scenario: The server refreshes search quota in the background
+//
+//	Given a server configured with a tavily key
+//	When the server is constructed
+//	Then the tavily /usage endpoint is queried without any client request
+//	And stopping the server stops the refresher
+func TestServerRefreshesSearchQuotaInBackground(t *testing.T) {
+	usage := make(chan struct{}, 4)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/usage" {
+			usage <- struct{}{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"key":{"usage":1,"limit":10}}`)
+	}))
+	defer up.Close()
+
+	server := newSearchTestServer(t, up.URL)
+
+	select {
+	case <-usage:
+	case <-time.After(5 * time.Second):
+		t.Fatal("quota was not refreshed in the background")
+	}
+	if err := server.Stop(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
 	}
 }

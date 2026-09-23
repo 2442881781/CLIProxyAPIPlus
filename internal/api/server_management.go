@@ -167,6 +167,8 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.DELETE("/search-api-key", s.mgmt.DeleteSearchKey)
 		mgmt.GET("/search-api-key/status", s.mgmt.GetSearchKeyStatus)
 		mgmt.POST("/search-api-key/reset-cooldown", s.mgmt.ResetSearchKeyCooldown)
+		mgmt.POST("/search-api-key/refresh-quota", s.mgmt.RefreshSearchKeyQuota)
+		mgmt.POST("/search-api-key/reset-spend", s.mgmt.ResetSearchKeySpend)
 
 		mgmt.GET("/xai-api-key", s.mgmt.GetXAIKeys)
 		mgmt.PUT("/xai-api-key", s.mgmt.PutXAIKeys)

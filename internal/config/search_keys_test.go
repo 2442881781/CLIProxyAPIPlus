@@ -76,3 +76,21 @@ func TestSanitizeSearchKeysDropsInvalidEntries(t *testing.T) {
 		t.Fatalf("search keys = %#v, want %#v", cfg.SearchKey, want)
 	}
 }
+
+// Scenario: Budget is normalized
+//
+//	Given search keys with budget -5 and budget 10.5
+//	When config is sanitized
+//	Then the negative budget becomes 0 (no budget) and 10.5 is kept
+func TestSanitizeSearchKeysNormalizesBudget(t *testing.T) {
+	cfg := &Config{SearchKey: []SearchKey{
+		{Provider: "exa", APIKey: "a", Budget: -5},
+		{Provider: "exa", APIKey: "b", Budget: 10.5},
+	}}
+
+	cfg.SanitizeSearchKeys()
+
+	if cfg.SearchKey[0].Budget != 0 || cfg.SearchKey[1].Budget != 10.5 {
+		t.Fatalf("budgets = %v, %v", cfg.SearchKey[0].Budget, cfg.SearchKey[1].Budget)
+	}
+}
