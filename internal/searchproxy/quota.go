@@ -158,21 +158,30 @@ func (s *Service) RefreshQuotas(ctx context.Context, ids []string) {
 	s.launchQuotaRefreshes(ctx, ids).Wait()
 }
 
-// StartQuotaRefresher refreshes quota immediately and then every interval until ctx ends.
+// StartQuotaRefresher refreshes quota immediately, then every interval and right after each
+// UTC month rollover (when Tavily credits reset), until ctx ends.
 // The returned channel is closed once the loop has stopped.
 func (s *Service) StartQuotaRefresher(ctx context.Context, interval time.Duration) <-chan struct{} {
 	done := make(chan struct{})
-	ticks, stop := s.newTicker(interval)
+	ticks, stopTicks := s.newTicker(interval)
 	go func() {
 		defer close(done)
-		defer stop()
+		defer stopTicks()
 		s.launchQuotaRefreshes(ctx, nil)
+		now := s.now()
+		monthly, stopMonthly := s.newTimer(nextMonth(now).Sub(now))
+		defer func() { stopMonthly() }()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticks:
 				s.launchQuotaRefreshes(ctx, nil)
+			case <-monthly:
+				s.launchQuotaRefreshes(ctx, nil)
+				stopMonthly()
+				now = s.now()
+				monthly, stopMonthly = s.newTimer(nextMonth(now).Sub(now))
 			}
 		}
 	}()
@@ -200,6 +209,11 @@ func (s *Service) launchQuotaRefreshes(ctx context.Context, ids []string) *sync.
 func defaultTicker(d time.Duration) (<-chan time.Time, func()) {
 	t := time.NewTicker(d)
 	return t.C, t.Stop
+}
+
+func defaultTimer(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTimer(d)
+	return t.C, func() { t.Stop() }
 }
 
 func (s *Service) fetchQuota(ctx context.Context, key Key) (*Quota, error) {
@@ -230,14 +244,15 @@ func (s *Service) fetchQuota(ctx context.Context, key Key) (*Quota, error) {
 		return nil, fmt.Errorf("quota endpoint returned HTTP %d: %s", resp.StatusCode, truncate(strings.TrimSpace(string(body)), 200))
 	}
 	if key.Provider == config.SearchProviderTavily {
-		return parseTavilyUsage(body)
+		return parseTavilyUsage(body, s.now())
 	}
 	return parseFirecrawlCreditUsage(body)
 }
 
 // parseTavilyUsage prefers the key's own limit and caps it by the account balance;
 // without a key limit the account plan plus pay-as-you-go allowance applies.
-func parseTavilyUsage(body []byte) (*Quota, error) {
+// Tavily does not report a reset time; its credits reset on the first day of each month.
+func parseTavilyUsage(body []byte, now time.Time) (*Quota, error) {
 	if !gjson.ValidBytes(body) || !gjson.GetBytes(body, "key").Exists() {
 		return nil, fmt.Errorf("unexpected tavily usage response")
 	}
@@ -247,7 +262,7 @@ func parseTavilyUsage(body []byte) (*Quota, error) {
 	accountRemaining := nonNegative(num("account.plan_limit")-num("account.plan_usage")) +
 		nonNegative(num("account.paygo_limit")-num("account.paygo_usage"))
 
-	q := &Quota{Unit: QuotaUnitCredits, Plan: gjson.GetBytes(body, "account.current_plan").String()}
+	q := &Quota{Unit: QuotaUnitCredits, Plan: gjson.GetBytes(body, "account.current_plan").String(), ResetAt: nextMonth(now)}
 	if keyLimit := gjson.GetBytes(body, "key.limit"); keyLimit.Type == gjson.Number {
 		remaining := nonNegative(keyLimit.Float() - num("key.usage"))
 		if hasAccount && accountRemaining < remaining {

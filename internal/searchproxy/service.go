@@ -38,6 +38,7 @@ type Service struct {
 	spendPath string
 
 	newTicker func(time.Duration) (<-chan time.Time, func())
+	newTimer  func(time.Duration) (<-chan time.Time, func())
 }
 
 // NewService creates a search proxy service. now defaults to time.Now when nil.
@@ -52,6 +53,7 @@ func NewService(now func() time.Time) *Service {
 		publish:   coreusage.PublishRecord,
 		clients:   map[string]*http.Client{},
 		newTicker: defaultTicker,
+		newTimer:  defaultTimer,
 	}
 }
 

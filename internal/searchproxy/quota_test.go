@@ -472,3 +472,92 @@ func TestSnapshotIncludesQuota(t *testing.T) {
 		t.Fatal("unrefreshed firecrawl key should have no quota yet")
 	}
 }
+
+// Scenario: Tavily quota resets on the first day of the next UTC month
+//
+//	Given the clock is 2026-09-23T10:00Z and a tavily key's /usage succeeds
+//	When the quota is refreshed
+//	Then its reset-at is 2026-10-01T00:00Z (Tavily resets credits monthly regardless of billing date)
+//	And a refresh at 2026-12-15 reports reset-at 2027-01-01T00:00Z
+func TestQuotaTavilyResetAtNextMonth(t *testing.T) {
+	up := newFakeUpstream(t, func(w http.ResponseWriter, _ *http.Request, _ string) {
+		writeJSON(w, http.StatusOK, `{"key":{"usage":1,"limit":1000},"account":{"plan_usage":1,"plan_limit":1000}}`)
+	})
+	h := newHarness(t, config.SearchKey{Provider: "tavily", APIKey: "tvly-a", BaseURL: up.URL})
+	cases := []struct{ now, want time.Time }{
+		{time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)},
+		{time.Date(2026, 12, 15, 0, 0, 0, 0, time.UTC), time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, tc := range cases {
+		h.clock.Set(tc.now)
+		h.svc.RefreshQuotas(context.Background(), nil)
+		if q := statusOf(t, h, "tavily", "tvly-a").Quota; q == nil || !q.ResetAt.Equal(tc.want) {
+			t.Fatalf("at %v reset-at = %#v, want %v", tc.now, q, tc.want)
+		}
+	}
+}
+
+// Scenario: The refresher also refreshes right after each UTC month rollover
+//
+//	Given the clock is 2026-09-30T23:00Z and the refresher is started
+//	Then a month timer is armed for 1h (until 2026-10-01T00:00Z)
+//	When that timer fires
+//	Then every remote-quota key is refreshed again without waiting for the interval tick
+//	And the next month timer is armed until 2026-11-01T00:00Z
+func TestQuotaRefresherRefreshesAtMonthRollover(t *testing.T) {
+	arrived := make(chan string, 8)
+	up := newFakeUpstream(t, func(w http.ResponseWriter, r *http.Request, _ string) {
+		arrived <- upstreamKey(r)
+		writeJSON(w, http.StatusOK, `{"key":{"usage":1,"limit":10}}`)
+	})
+	h := newHarness(t, config.SearchKey{Provider: "tavily", APIKey: "tvly-a", BaseURL: up.URL})
+	h.clock.Set(time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC))
+	h.svc.newTicker = func(time.Duration) (<-chan time.Time, func()) { return make(chan time.Time), func() {} }
+	type armed struct {
+		d  time.Duration
+		ch chan time.Time
+	}
+	timers := make(chan armed, 4)
+	h.svc.newTimer = func(d time.Duration) (<-chan time.Time, func()) {
+		ch := make(chan time.Time, 1)
+		timers <- armed{d: d, ch: ch}
+		return ch, func() {}
+	}
+	nextTimer := func() armed {
+		t.Helper()
+		select {
+		case a := <-timers:
+			return a
+		case <-time.After(5 * time.Second):
+			t.Fatal("month timer not armed")
+			return armed{}
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := h.svc.StartQuotaRefresher(ctx, time.Hour)
+	waitArrivals(t, arrived, 1)
+	first := nextTimer()
+	if first.d != time.Hour {
+		t.Fatalf("first month timer = %v, want 1h", first.d)
+	}
+	waitUntil(t, func() bool {
+		q := statusOf(t, h, "tavily", "tvly-a").Quota
+		return q != nil && !q.CheckedAt.IsZero()
+	})
+
+	h.clock.Set(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	first.ch <- time.Time{}
+	waitArrivals(t, arrived, 1)
+	if second := nextTimer(); second.d != 31*24*time.Hour {
+		t.Fatalf("second month timer = %v, want %v", second.d, 31*24*time.Hour)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresher did not stop")
+	}
+}
