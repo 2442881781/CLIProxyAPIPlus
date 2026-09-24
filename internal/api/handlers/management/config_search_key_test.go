@@ -353,3 +353,75 @@ func TestPatchSearchKeyBudget(t *testing.T) {
 		t.Fatalf("persisted config = %s err=%v", saved, err)
 	}
 }
+
+// Scenario: Read search MCP settings
+//
+//	When GET /search-mcp
+//	Then the effective provider-order and expose-provider-tools are returned
+func TestGetSearchMCPSettings(t *testing.T) {
+	h := newSearchKeyHandler(t)
+	h.cfg.SearchMCP = config.SearchMCPConfig{ProviderOrder: []string{"exa"}, ExposeProviderTools: true}
+
+	rec := serveSearchKey(h, h.GetSearchMCP, http.MethodGet, "/v0/management/search-mcp", "")
+
+	var payload struct {
+		Settings config.SearchMCPConfig `json:"search-mcp"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &payload) != nil {
+		t.Fatalf("response = %d %s", rec.Code, rec.Body.String())
+	}
+	if !reflect.DeepEqual(payload.Settings, h.cfg.SearchMCP) {
+		t.Fatalf("settings = %#v", payload.Settings)
+	}
+
+	h.cfg.SearchMCP = config.SearchMCPConfig{}
+	rec = serveSearchKey(h, h.GetSearchMCP, http.MethodGet, "/v0/management/search-mcp", "")
+	if !strings.Contains(rec.Body.String(), `"provider-order":["tavily","exa","firecrawl"]`) {
+		t.Fatalf("default settings = %s", rec.Body.String())
+	}
+}
+
+// Scenario: Update search MCP settings
+//
+//	When PUT /search-mcp {"provider-order":["exa","tavily"],"expose-provider-tools":true}
+//	Then config is updated, persisted and reloaded
+//	And an unknown provider or an empty order returns 400 with config unchanged
+func TestPutSearchMCPSettings(t *testing.T) {
+	h := newSearchKeyHandler(t)
+	reloaded := make(chan *config.Config, 1)
+	h.SetConfigReloadHook(func(_ context.Context, cfg *config.Config) { reloaded <- cfg })
+
+	rec := serveSearchKey(h, h.PutSearchMCP, http.MethodPut, "/v0/management/search-mcp", `{"provider-order":[" EXA ","tavily"],"expose-provider-tools":true}`)
+
+	want := config.SearchMCPConfig{ProviderOrder: []string{"exa", "tavily"}, ExposeProviderTools: true}
+	if rec.Code != http.StatusOK || !reflect.DeepEqual(h.cfg.SearchMCP, want) {
+		t.Fatalf("put = %d %s, settings = %#v", rec.Code, rec.Body.String(), h.cfg.SearchMCP)
+	}
+	saved, err := os.ReadFile(h.configFilePath)
+	if err != nil || !strings.Contains(string(saved), "search-mcp:") || !strings.Contains(string(saved), "expose-provider-tools: true") {
+		t.Fatalf("persisted config = %s err=%v", saved, err)
+	}
+	select {
+	case cfg := <-reloaded:
+		if !reflect.DeepEqual(cfg.SearchMCP, want) {
+			t.Fatalf("reloaded settings = %#v", cfg.SearchMCP)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reload hook not called")
+	}
+
+	for _, body := range []string{
+		`{"provider-order":["bing"]}`,
+		`{"provider-order":[]}`,
+		`{"provider-order":["tavily","tavily"]}`,
+		`not json`,
+	} {
+		rec = serveSearchKey(h, h.PutSearchMCP, http.MethodPut, "/v0/management/search-mcp", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("PUT %s = %d, want 400", body, rec.Code)
+		}
+	}
+	if !reflect.DeepEqual(h.cfg.SearchMCP, want) {
+		t.Fatalf("settings changed after invalid PUT: %#v", h.cfg.SearchMCP)
+	}
+}

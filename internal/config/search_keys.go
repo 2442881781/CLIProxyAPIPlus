@@ -81,3 +81,39 @@ func (cfg *Config) SanitizeSearchKeys() {
 	}
 	cfg.SearchKey = out
 }
+
+// SearchMCPConfig controls the /search/mcp tool surface.
+type SearchMCPConfig struct {
+	// ProviderOrder is the priority order used by the provider-agnostic tools (web_search, web_fetch).
+	// Only listed providers are used; empty means tavily, exa, firecrawl.
+	ProviderOrder []string `yaml:"provider-order,omitempty" json:"provider-order,omitempty"`
+	// ExposeProviderTools also lists the per-provider tools (tavily_*, exa_*, firecrawl_*).
+	ExposeProviderTools bool `yaml:"expose-provider-tools,omitempty" json:"expose-provider-tools,omitempty"`
+}
+
+// NormalizeSearchProviderOrder lower-cases the order and drops unknown or duplicate providers.
+// It returns the default order when nothing valid remains.
+func NormalizeSearchProviderOrder(order []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(order))
+	for _, raw := range order {
+		provider := strings.ToLower(strings.TrimSpace(raw))
+		if !IsSearchProvider(provider) || seen[provider] {
+			continue
+		}
+		seen[provider] = true
+		out = append(out, provider)
+	}
+	if len(out) == 0 {
+		return append([]string(nil), SearchProviders...)
+	}
+	return out
+}
+
+// SanitizeSearchMCP normalizes the search MCP settings.
+func (cfg *Config) SanitizeSearchMCP() {
+	if cfg == nil {
+		return
+	}
+	cfg.SearchMCP.ProviderOrder = NormalizeSearchProviderOrder(cfg.SearchMCP.ProviderOrder)
+}

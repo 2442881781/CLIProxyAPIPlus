@@ -2124,7 +2124,7 @@
     "usage_rest": "REST 地址",
     "usage_rest_hint": "SDK 指向这里即可，例如 TavilyClient(api_base_url=...)、Exa(key, base_url=...)、Firecrawl(api_url=...)。",
     "usage_mcp": "MCP 服务（Claude Code / Codex）",
-    "usage_mcp_hint": "一个远程 MCP，提供已配置 key 的 tavily_*、exa_*、firecrawl_* 工具。",
+    "usage_mcp_hint": "一个远程 MCP，提供 web_search 和 web_fetch 两个工具。每次调用按下方顺序只选一家服务商；按服务商拆开的工具可选择开放。",
     "usage_firecrawl_mcp": "官方 Firecrawl MCP",
     "usage_firecrawl_mcp_hint": "firecrawl-mcp 支持 FIRECRAWL_API_URL，可直接接入这个密钥池。",
     "col_quota": "额度",
@@ -2141,6 +2141,15 @@
     "summary_remaining": "剩余 {{amount}}",
     "summary_exhausted": "{{count}} 个额度用尽",
     "quota_refreshed": "额度已刷新",
-    "spend_reset": "花费已清零"
+    "spend_reset": "花费已清零",
+    "mcp_title": "MCP 设置",
+    "mcp_description": "web_search 和 web_fetch 只使用已启用的服务商，并按这个顺序选择。只有当前这家没有可用 key 或上游出错时，才会换下一家。",
+    "mcp_order": "服务商顺序",
+    "mcp_expose_tools": "同时开放按服务商拆开的工具（tavily_*、exa_*、firecrawl_*）",
+    "mcp_expose_tools_hint": "默认关闭，避免 AI 为同一个问题调用多家服务商。",
+    "mcp_saved": "MCP 设置已保存",
+    "move_up": "上移",
+    "move_down": "下移",
+    "provider_enabled": "启用"
   }
 }

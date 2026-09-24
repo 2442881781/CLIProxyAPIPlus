@@ -2114,7 +2114,7 @@
     "usage_rest": "Базовые REST-адреса",
     "usage_rest_hint": "Укажите их в SDK, например TavilyClient(api_base_url=...), Exa(key, base_url=...), Firecrawl(api_url=...).",
     "usage_mcp": "MCP-сервер (Claude Code / Codex)",
-    "usage_mcp_hint": "Один удалённый MCP с инструментами tavily_*, exa_* и firecrawl_* для провайдеров с ключами.",
+    "usage_mcp_hint": "Один удалённый MCP с инструментами web_search и web_fetch. Каждый вызов обслуживает один провайдер в порядке ниже; инструменты отдельных провайдеров можно открыть.",
     "usage_firecrawl_mcp": "Официальный Firecrawl MCP",
     "usage_firecrawl_mcp_hint": "firecrawl-mcp поддерживает FIRECRAWL_API_URL и может использовать этот пул напрямую.",
     "col_quota": "Квота",
@@ -2131,6 +2131,15 @@
     "summary_remaining": "осталось {{amount}}",
     "summary_exhausted": "исчерпано: {{count}}",
     "quota_refreshed": "Квота обновлена",
-    "spend_reset": "Расход сброшен"
+    "spend_reset": "Расход сброшен",
+    "mcp_title": "Настройки MCP",
+    "mcp_description": "web_search и web_fetch используют только включённых провайдеров в этом порядке. Следующий пробуется, только если у текущего нет доступного ключа или он вернул ошибку.",
+    "mcp_order": "Порядок провайдеров",
+    "mcp_expose_tools": "Также открыть инструменты провайдеров (tavily_*, exa_*, firecrawl_*)",
+    "mcp_expose_tools_hint": "По умолчанию выключено, чтобы ИИ не вызывал нескольких провайдеров на один запрос.",
+    "mcp_saved": "Настройки MCP сохранены",
+    "move_up": "Выше",
+    "move_down": "Ниже",
+    "provider_enabled": "Включён"
   }
 }

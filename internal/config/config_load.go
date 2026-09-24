@@ -182,6 +182,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Sanitize web search provider keys.
 	cfg.SanitizeSearchKeys()
+	cfg.SanitizeSearchMCP()
 
 	// Sanitize Codex header defaults.
 	cfg.SanitizeCodexHeaderDefaults()

@@ -287,3 +287,80 @@ func TestMCPGetReturns405(t *testing.T) {
 		t.Fatalf("response = %d allow=%q", rec.Code, rec.Header().Get("Allow"))
 	}
 }
+
+// Scenario: Only unified tools are listed by default
+//
+//	Given keys for all providers and expose-provider-tools unset
+//	When the client calls tools/list
+//	Then exactly web_search and web_fetch are listed
+func TestMCPToolsListDefaultsToUnifiedTools(t *testing.T) {
+	h := newHarnessMCP(t, config.SearchMCPConfig{}, allProviderKeys("http://127.0.0.1:1")...)
+
+	if names := listToolNames(t, h); !reflect.DeepEqual(names, []string{"web_search", "web_fetch"}) {
+		t.Fatalf("tools = %v", names)
+	}
+}
+
+func listToolNames(t *testing.T, h *testHarness) []string {
+	t.Helper()
+	_, resp := h.mcp(t, `{"jsonrpc":"2.0","id":"list","method":"tools/list"}`)
+	var result struct {
+		Tools []struct {
+			Name        string         `json:"name"`
+			InputSchema map[string]any `json:"inputSchema"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("tools/list: %v", err)
+	}
+	names := []string{}
+	for _, tool := range result.Tools {
+		if tool.InputSchema["type"] != "object" {
+			t.Fatalf("tool %s schema = %#v", tool.Name, tool.InputSchema)
+		}
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+// Scenario: Provider tools are listed and callable only when exposed
+//
+//	Given expose-provider-tools false
+//	When tools/call tavily_search is sent
+//	Then it is rejected with -32602
+//	Given expose-provider-tools true
+//	Then tools/list has web_search, web_fetch and the provider tools, and tavily_search works
+func TestMCPProviderToolsRequireExposure(t *testing.T) {
+	up := newFakeUpstream(t, func(w http.ResponseWriter, _ *http.Request, _ string) {
+		writeJSON(w, http.StatusOK, `{"results":[]}`)
+	})
+	hidden := newHarnessMCP(t, config.SearchMCPConfig{}, config.SearchKey{Provider: "tavily", APIKey: "T", BaseURL: up.URL})
+	_, resp := hidden.mcp(t, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tavily_search","arguments":{"query":"q"}}}`)
+	if resp.Error == nil || resp.Error.Code != rpcInvalidParams {
+		t.Fatalf("hidden provider tool call = %#v", resp.Error)
+	}
+	if len(up.Requests()) != 0 {
+		t.Fatal("hidden provider tool reached upstream")
+	}
+
+	exposed := newHarnessMCP(t, config.SearchMCPConfig{ExposeProviderTools: true}, config.SearchKey{Provider: "tavily", APIKey: "T", BaseURL: up.URL})
+	names := listToolNames(t, exposed)
+	if len(names) < 3 || names[0] != "web_search" || names[1] != "web_fetch" || !strings.Contains(strings.Join(names, ","), "tavily_search") {
+		t.Fatalf("exposed tools = %v", names)
+	}
+	if res := exposed.callTool(t, "tavily_search", `{"query":"q"}`); res.IsError {
+		t.Fatalf("exposed tavily_search = %#v", res)
+	}
+}
+
+// Scenario: No unified tools without any keys
+//
+//	Given no search keys at all
+//	Then tools/list is empty
+func TestMCPToolsListEmptyWithoutKeys(t *testing.T) {
+	h := newHarnessMCP(t, config.SearchMCPConfig{ExposeProviderTools: true})
+
+	if names := listToolNames(t, h); len(names) != 0 {
+		t.Fatalf("tools = %v, want none", names)
+	}
+}

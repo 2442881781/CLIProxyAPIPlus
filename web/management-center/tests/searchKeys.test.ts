@@ -3,7 +3,9 @@ import i18n from '@/i18n';
 import {
   parseSearchKeyStatuses,
   parseSearchKeys,
+  parseSearchMcpSettings,
   toSearchKeyPayload,
+  toSearchMcpPayload,
   type SearchKeyStatus,
 } from '@/services/api/searchKeys';
 import {
@@ -11,7 +13,9 @@ import {
   buildSearchUsageSnippets,
   describeQuota,
   formatCooldown,
+  moveProvider,
   summarizeSearchProviders,
+  toggleProvider,
   validateSearchKeyForm,
 } from '@/features/searchKeys/searchKeysModel';
 
@@ -464,5 +468,53 @@ describe('search key quota', () => {
       parseSearchKeys({ 'search-api-key': [{ provider: 'exa', 'api-key': 'e', budget: 12.5 }] })[0]
         .budget
     ).toBe(12.5);
+  });
+});
+
+// Feature: MCP provider order settings
+describe('search MCP settings', () => {
+  test('parses settings with default order', () => {
+    expect(
+      parseSearchMcpSettings({
+        'search-mcp': { 'provider-order': ['exa'], 'expose-provider-tools': true },
+      })
+    ).toEqual({ providerOrder: ['exa'], exposeProviderTools: true });
+    expect(parseSearchMcpSettings({})).toEqual({
+      providerOrder: ['tavily', 'exa', 'firecrawl'],
+      exposeProviderTools: false,
+    });
+    expect(
+      toSearchMcpPayload({ providerOrder: ['firecrawl', 'tavily'], exposeProviderTools: false })
+    ).toEqual({ 'provider-order': ['firecrawl', 'tavily'], 'expose-provider-tools': false });
+  });
+
+  test('moves providers up and down', () => {
+    const order = ['tavily', 'exa', 'firecrawl'];
+    expect(moveProvider(order, 'exa', -1)).toEqual(['exa', 'tavily', 'firecrawl']);
+    expect(moveProvider(order, 'exa', 1)).toEqual(['tavily', 'firecrawl', 'exa']);
+    expect(moveProvider(order, 'tavily', -1)).toEqual(order);
+    expect(moveProvider(order, 'firecrawl', 1)).toEqual(order);
+    expect(moveProvider(['tavily'], 'exa', 1)).toEqual(['tavily']);
+  });
+
+  test('toggles providers without emptying the order', () => {
+    expect(toggleProvider(['tavily', 'exa'], 'tavily')).toEqual(['exa']);
+    expect(toggleProvider(['exa'], 'firecrawl')).toEqual(['exa', 'firecrawl']);
+    expect(toggleProvider(['exa'], 'exa')).toEqual(['exa']);
+  });
+
+  test('usage hint mentions unified tools', () => {
+    for (const locale of LOCALES) {
+      const hint = i18n.t('search_keys.usage_mcp_hint', { lng: locale });
+      expect(hint).toContain('web_search');
+      expect(hint).toContain('web_fetch');
+      for (const key of [
+        'search_keys.mcp_title',
+        'search_keys.mcp_expose_tools',
+        'search_keys.mcp_saved',
+      ]) {
+        expect(i18n.exists(key, { lng: locale })).toBe(true);
+      }
+    }
   });
 });

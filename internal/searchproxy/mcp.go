@@ -118,12 +118,19 @@ func (s *Service) mcpInitialize(params json.RawMessage) map[string]any {
 		"protocolVersion": version,
 		"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 		"serverInfo":      map[string]any{"name": mcpServerName, "version": mcpServerVersion},
-		"instructions":    "Web search, extraction and crawling tools backed by pooled Tavily, Exa and Firecrawl keys.",
+		"instructions": "Use web_search to search the web and web_fetch to read pages. Each call is served by one " +
+			"provider (Tavily, Exa or Firecrawl) chosen by the server, so call web_search once per query.",
 	}
 }
 
 func (s *Service) mcpToolList() []map[string]any {
-	tools := make([]map[string]any, 0, len(mcpTools))
+	tools := make([]map[string]any, 0, len(unifiedTools)+len(mcpTools))
+	if s.hasUnifiedProvider() {
+		tools = append(tools, unifiedTools...)
+	}
+	if _, expose := s.mcpSettings(); !expose {
+		return tools
+	}
 	for _, tool := range mcpTools {
 		if !s.pool.HasProvider(tool.Provider) {
 			continue
@@ -145,8 +152,15 @@ func (s *Service) mcpCallTool(c *gin.Context, params json.RawMessage) (*mcpToolR
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, &rpcError{Code: rpcInvalidParams, Message: "invalid tools/call params"}
 	}
+	if isUnifiedTool(p.Name) {
+		if !s.hasUnifiedProvider() {
+			return nil, &rpcError{Code: rpcInvalidParams, Message: fmt.Sprintf("unknown tool %q", p.Name)}
+		}
+		return s.callUnified(c.Request.Context(), p.Name, p.Arguments, c.GetString("userApiKey"))
+	}
+	_, expose := s.mcpSettings()
 	tool, ok := findMCPTool(p.Name)
-	if !ok || !s.pool.HasProvider(tool.Provider) {
+	if !ok || !expose || !s.pool.HasProvider(tool.Provider) {
 		return nil, &rpcError{Code: rpcInvalidParams, Message: fmt.Sprintf("unknown tool %q", p.Name)}
 	}
 	args := map[string]any{}
@@ -181,32 +195,14 @@ func (s *Service) mcpCallTool(c *gin.Context, params json.RawMessage) (*mcpToolR
 	return s.runToolCall(c.Request.Context(), call, c.GetString("userApiKey")), nil
 }
 
-// runToolCall executes a tool through the key pool and converts the outcome to an MCP tool result.
+// runToolCall executes a provider tool through the key pool and converts the outcome to an MCP tool result.
 func (s *Service) runToolCall(ctx context.Context, call *upstreamCall, downstreamKey string) *mcpToolResult {
-	started := s.now()
-	resp, key, err := s.execute(ctx, call)
+	status, body, key, err := s.callUpstream(ctx, call, downstreamKey)
 	if err != nil {
-		s.recordUsage(ctx, call.provider, downstreamKey, key, started, true)
-		return &mcpToolResult{Content: []mcpContent{{Type: "text", Text: err.Error()}}, IsError: true}
+		return toolError(err.Error())
 	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Debugf("search mcp: close %s response body: %v", call.provider, errClose)
-		}
-	}()
-	failed := resp.StatusCode >= http.StatusBadRequest
-	s.recordUsage(ctx, call.provider, downstreamKey, key, started, failed)
-
-	body, errRead := io.ReadAll(resp.Body)
-	if errRead != nil {
-		return &mcpToolResult{Content: []mcpContent{{Type: "text", Text: "failed to read upstream response: " + errRead.Error()}}, IsError: true}
-	}
-	if failed {
-		text := fmt.Sprintf("%s upstream returned HTTP %d: %s", call.provider, resp.StatusCode, strings.TrimSpace(string(body)))
-		return &mcpToolResult{Content: []mcpContent{{Type: "text", Text: text}}, IsError: true}
-	}
-	if call.provider == config.SearchProviderExa {
-		s.RecordSpend(key.ID, exaCost(body))
+	if status >= http.StatusBadRequest {
+		return toolError(fmt.Sprintf("%s upstream returned HTTP %d: %s", call.provider, status, strings.TrimSpace(string(body))))
 	}
 	if call.method == http.MethodPost && isJobCreatePath(call.provider, call.path) {
 		if jobID := extractJobID(body); jobID != "" {
@@ -214,6 +210,33 @@ func (s *Service) runToolCall(ctx context.Context, call *upstreamCall, downstrea
 		}
 	}
 	return &mcpToolResult{Content: []mcpContent{{Type: "text", Text: string(body)}}}
+}
+
+// callUpstream executes one call through the key pool, records usage (only when an upstream
+// attempt happened) and Exa spend, and returns the upstream status and body.
+func (s *Service) callUpstream(ctx context.Context, call *upstreamCall, downstreamKey string) (int, []byte, Key, error) {
+	started := s.now()
+	resp, key, err := s.execute(ctx, call)
+	if err != nil {
+		if key.ID != "" {
+			s.recordUsage(ctx, call.provider, downstreamKey, key, started, true)
+		}
+		return 0, nil, key, err
+	}
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Debugf("search mcp: close %s response body: %v", call.provider, errClose)
+		}
+	}()
+	s.recordUsage(ctx, call.provider, downstreamKey, key, started, resp.StatusCode >= http.StatusBadRequest)
+	body, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		return resp.StatusCode, nil, key, fmt.Errorf("read %s upstream response: %w", call.provider, errRead)
+	}
+	if call.provider == config.SearchProviderExa && resp.StatusCode < http.StatusMultipleChoices {
+		s.RecordSpend(key.ID, exaCost(body))
+	}
+	return resp.StatusCode, body, key, nil
 }
 
 func writeRPCError(c *gin.Context, id json.RawMessage, code int, message string) {
