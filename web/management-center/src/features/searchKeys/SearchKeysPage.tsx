@@ -10,6 +10,7 @@ import { useAuthStore, useNotificationStore } from '@/stores';
 import { copyToClipboard } from '@/utils/clipboard';
 import { formatDateTimeValue, formatDateValue } from '@/utils/format';
 import { SearchKeyEditSheet } from './SearchKeyEditSheet';
+import { SearchMcpSettingsCard } from './SearchMcpSettingsCard';
 import {
   buildSearchKeyRows,
   buildSearchUsageSnippets,
@@ -363,6 +364,8 @@ export function SearchKeysPage() {
           </div>
         </div>
       )}
+
+      <SearchMcpSettingsCard connected={connected} />
 
       <section className={styles.usageCard}>
         <h2>{t('search_keys.usage_title')}</h2>

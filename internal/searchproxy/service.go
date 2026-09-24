@@ -30,9 +30,11 @@ type Service struct {
 	jobs    *jobStore
 	publish UsagePublisher
 
-	mu          sync.RWMutex
-	globalProxy string
-	clients     map[string]*http.Client
+	mu                  sync.RWMutex
+	globalProxy         string
+	clients             map[string]*http.Client
+	mcpOrder            []string
+	exposeProviderTools bool
 
 	spendMu   sync.Mutex
 	spendPath string
@@ -76,6 +78,8 @@ func (s *Service) UpdateConfig(cfg *config.Config) {
 	s.setSpendPath(strings.TrimSpace(cfg.AuthDir))
 	s.mu.Lock()
 	s.globalProxy = strings.TrimSpace(cfg.ProxyURL)
+	s.mcpOrder = config.NormalizeSearchProviderOrder(cfg.SearchMCP.ProviderOrder)
+	s.exposeProviderTools = cfg.SearchMCP.ExposeProviderTools
 	s.mu.Unlock()
 }
 

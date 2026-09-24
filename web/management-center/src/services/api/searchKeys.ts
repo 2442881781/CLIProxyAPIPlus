@@ -135,6 +135,32 @@ const parseQuota = (raw: unknown): SearchKeyQuota | null => {
   };
 };
 
+export interface SearchMcpSettings {
+  /** Priority order used by web_search / web_fetch; unlisted providers are not used. */
+  providerOrder: string[];
+  /** Also expose the per-provider tools (tavily_*, exa_*, firecrawl_*). */
+  exposeProviderTools: boolean;
+}
+
+export const parseSearchMcpSettings = (data: unknown): SearchMcpSettings => {
+  const raw = isRecord(data) && isRecord(data['search-mcp']) ? data['search-mcp'] : {};
+  const order = Array.isArray(raw['provider-order'])
+    ? raw['provider-order'].filter(
+        (item): item is string =>
+          typeof item === 'string' && (SEARCH_PROVIDERS as readonly string[]).includes(item)
+      )
+    : [];
+  return {
+    providerOrder: order.length ? order : [...SEARCH_PROVIDERS],
+    exposeProviderTools: raw['expose-provider-tools'] === true,
+  };
+};
+
+export const toSearchMcpPayload = (settings: SearchMcpSettings): RawRecord => ({
+  'provider-order': settings.providerOrder,
+  'expose-provider-tools': settings.exposeProviderTools,
+});
+
 export const searchKeysApi = {
   async list(): Promise<SearchKeyEntry[]> {
     return parseSearchKeys(await apiClient.get<unknown>('/search-api-key'));
@@ -169,6 +195,13 @@ export const searchKeysApi = {
       await apiClient.post('/search-api-key/refresh-quota', searchKeyTarget(target))
     );
   },
+
+  async mcpSettings(): Promise<SearchMcpSettings> {
+    return parseSearchMcpSettings(await apiClient.get<unknown>('/search-mcp'));
+  },
+
+  saveMcpSettings: (settings: SearchMcpSettings) =>
+    apiClient.put('/search-mcp', toSearchMcpPayload(settings)),
 
   resetSpend: (target: { provider: string; apiKey: string }) =>
     apiClient.post('/search-api-key/reset-spend', searchKeyTarget(target)),

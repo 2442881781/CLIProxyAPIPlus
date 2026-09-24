@@ -165,3 +165,19 @@ export const formatCooldown = (ms: number): string => {
   const trimmed = parts.filter((part, index) => index === 0 || !part.startsWith('0'));
   return trimmed.length ? trimmed.join(' ') : '0s';
 };
+
+/** Moves a provider one step up (-1) or down (+1); moves past either end are ignored. */
+export const moveProvider = (order: string[], provider: string, delta: -1 | 1): string[] => {
+  const index = order.indexOf(provider);
+  const target = index + delta;
+  if (index < 0 || target < 0 || target >= order.length) return order;
+  const next = [...order];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+};
+
+/** Removes an enabled provider or appends a disabled one; the last provider cannot be removed. */
+export const toggleProvider = (order: string[], provider: string): string[] => {
+  if (!order.includes(provider)) return [...order, provider];
+  return order.length > 1 ? order.filter((item) => item !== provider) : order;
+};

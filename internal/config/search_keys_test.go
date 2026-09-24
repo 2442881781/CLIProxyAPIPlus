@@ -94,3 +94,34 @@ func TestSanitizeSearchKeysNormalizesBudget(t *testing.T) {
 		t.Fatalf("budgets = %v, %v", cfg.SearchKey[0].Budget, cfg.SearchKey[1].Budget)
 	}
 }
+
+// Scenario: search-mcp settings are normalized
+//
+//	Given provider-order [" Exa ", "bing", "exa", "TAVILY"]
+//	When config is sanitized
+//	Then provider-order is [exa, tavily] (lower-cased, unknown and duplicate entries dropped)
+//	And an empty or fully invalid order yields the default [tavily, exa, firecrawl]
+func TestSanitizeSearchMCPProviderOrder(t *testing.T) {
+	cfg := &Config{SearchMCP: SearchMCPConfig{ProviderOrder: []string{" Exa ", "bing", "exa", "TAVILY"}, ExposeProviderTools: true}}
+	cfg.SanitizeSearchMCP()
+	if !reflect.DeepEqual(cfg.SearchMCP.ProviderOrder, []string{"exa", "tavily"}) || !cfg.SearchMCP.ExposeProviderTools {
+		t.Fatalf("search-mcp = %#v", cfg.SearchMCP)
+	}
+
+	for _, order := range [][]string{nil, {"bing", " "}} {
+		cfg = &Config{SearchMCP: SearchMCPConfig{ProviderOrder: order}}
+		cfg.SanitizeSearchMCP()
+		if !reflect.DeepEqual(cfg.SearchMCP.ProviderOrder, []string{"tavily", "exa", "firecrawl"}) {
+			t.Fatalf("order %v -> %v, want default", order, cfg.SearchMCP.ProviderOrder)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("search-mcp:\n  provider-order: [firecrawl, Tavily]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig(path)
+	if err != nil || !reflect.DeepEqual(loaded.SearchMCP.ProviderOrder, []string{"firecrawl", "tavily"}) {
+		t.Fatalf("loaded = %#v err=%v", loaded.SearchMCP, err)
+	}
+}

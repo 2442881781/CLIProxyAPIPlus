@@ -265,6 +265,45 @@ func (h *Handler) ResetSearchKeyCooldown(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "reset": reset})
 }
 
+// GetSearchMCP returns the effective /search/mcp settings.
+func (h *Handler) GetSearchMCP(c *gin.Context) {
+	h.mu.Lock()
+	settings := h.cfg.SearchMCP
+	h.mu.Unlock()
+	settings.ProviderOrder = config.NormalizeSearchProviderOrder(settings.ProviderOrder)
+	c.JSON(http.StatusOK, gin.H{"search-mcp": settings})
+}
+
+// PutSearchMCP replaces the /search/mcp settings. The provider order must list at least one
+// known provider without duplicates.
+func (h *Handler) PutSearchMCP(c *gin.Context) {
+	var body config.SearchMCPConfig
+	if errBind := c.ShouldBindJSON(&body); errBind != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	seen := map[string]bool{}
+	order := make([]string, 0, len(body.ProviderOrder))
+	for _, raw := range body.ProviderOrder {
+		provider := strings.ToLower(strings.TrimSpace(raw))
+		if !config.IsSearchProvider(provider) || seen[provider] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("provider-order must list distinct providers from %s", strings.Join(config.SearchProviders, ", "))})
+			return
+		}
+		seen[provider] = true
+		order = append(order, provider)
+	}
+	if len(order) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provider-order must not be empty"})
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cfg.SearchMCP = config.SearchMCPConfig{ProviderOrder: order, ExposeProviderTools: body.ExposeProviderTools}
+	h.persistLocked(c)
+}
+
 func invalidSearchKeyMessage(index int, entry config.SearchKey) string {
 	if !config.IsSearchProvider(entry.Provider) {
 		return fmt.Sprintf("search-api-key[%d].provider must be one of %s", index, strings.Join(config.SearchProviders, ", "))

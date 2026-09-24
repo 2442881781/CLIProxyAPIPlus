@@ -46,3 +46,23 @@ func TestConfigDiffSearchKeysHidesKeyMaterial(t *testing.T) {
 		t.Fatalf("count change missing:\n%s", countChanges)
 	}
 }
+
+// Scenario: search-mcp changes are logged
+//
+//	Given provider-order changes from [tavily, exa] to [exa] and expose-provider-tools becomes true
+//	Then the diff mentions "search-mcp.provider-order: tavily,exa -> exa" and "search-mcp.expose-provider-tools: false -> true"
+func TestConfigDiffSearchMCP(t *testing.T) {
+	oldCfg := &config.Config{SearchMCP: config.SearchMCPConfig{ProviderOrder: []string{"tavily", "exa"}}}
+	newCfg := &config.Config{SearchMCP: config.SearchMCPConfig{ProviderOrder: []string{"exa"}, ExposeProviderTools: true}}
+
+	joined := strings.Join(BuildConfigChangeDetails(oldCfg, newCfg), "\n")
+
+	for _, want := range []string{
+		"search-mcp.provider-order: tavily,exa -> exa",
+		"search-mcp.expose-provider-tools: false -> true",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("changes missing %q:\n%s", want, joined)
+		}
+	}
+}

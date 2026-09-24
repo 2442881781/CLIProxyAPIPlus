@@ -137,6 +137,9 @@ type Config struct {
 	// pooled behind the /search routes.
 	SearchKey []SearchKey `yaml:"search-api-key" json:"search-api-key"`
 
+	// SearchMCP controls the provider-agnostic tools served by /search/mcp.
+	SearchMCP SearchMCPConfig `yaml:"search-mcp" json:"search-mcp"`
+
 	// XAI configures provider-wide xAI request behavior.
 	XAI XAIConfig `yaml:"xai" json:"xai"`
 

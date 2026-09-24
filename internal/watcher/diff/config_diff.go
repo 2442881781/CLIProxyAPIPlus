@@ -365,6 +365,12 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	}
 
 	changes = appendSearchKeyChanges(changes, oldCfg.SearchKey, newCfg.SearchKey)
+	if oldOrder, newOrder := strings.Join(oldCfg.SearchMCP.ProviderOrder, ","), strings.Join(newCfg.SearchMCP.ProviderOrder, ","); oldOrder != newOrder {
+		changes = append(changes, fmt.Sprintf("search-mcp.provider-order: %s -> %s", oldOrder, newOrder))
+	}
+	if oldCfg.SearchMCP.ExposeProviderTools != newCfg.SearchMCP.ExposeProviderTools {
+		changes = append(changes, fmt.Sprintf("search-mcp.expose-provider-tools: %t -> %t", oldCfg.SearchMCP.ExposeProviderTools, newCfg.SearchMCP.ExposeProviderTools))
+	}
 
 	// xAI keys (do not print key material)
 	if len(oldCfg.XAIKey) != len(newCfg.XAIKey) {

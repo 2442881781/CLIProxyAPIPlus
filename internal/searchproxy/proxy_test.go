@@ -81,7 +81,13 @@ type testHarness struct {
 	records []coreusage.Record
 }
 
+// newHarness exposes the per-provider MCP tools so provider-level behavior can be exercised directly.
 func newHarness(t *testing.T, keys ...config.SearchKey) *testHarness {
+	t.Helper()
+	return newHarnessMCP(t, config.SearchMCPConfig{ExposeProviderTools: true}, keys...)
+}
+
+func newHarnessMCP(t *testing.T, mcp config.SearchMCPConfig, keys ...config.SearchKey) *testHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	h := &testHarness{clock: &fakeClock{t: time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)}}
@@ -91,7 +97,7 @@ func newHarness(t *testing.T, keys ...config.SearchKey) *testHarness {
 		h.records = append(h.records, rec)
 		h.mu.Unlock()
 	})
-	h.svc.UpdateConfig(&config.Config{SearchKey: keys})
+	h.svc.UpdateConfig(&config.Config{SearchKey: keys, SearchMCP: mcp})
 	h.engine = gin.New()
 	h.engine.Any("/search/*path", func(c *gin.Context) {
 		c.Set("userApiKey", testDownstreamKey)

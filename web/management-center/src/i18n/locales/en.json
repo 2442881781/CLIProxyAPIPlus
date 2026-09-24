@@ -2124,7 +2124,7 @@
     "usage_rest": "REST base URLs",
     "usage_rest_hint": "Point SDKs here, e.g. TavilyClient(api_base_url=...), Exa(key, base_url=...), Firecrawl(api_url=...).",
     "usage_mcp": "MCP server (Claude Code / Codex)",
-    "usage_mcp_hint": "One remote MCP exposing tavily_*, exa_* and firecrawl_* tools for providers that have keys.",
+    "usage_mcp_hint": "One remote MCP exposing web_search and web_fetch. Each call is served by one provider in the order below; per-provider tools are optional.",
     "usage_firecrawl_mcp": "Official Firecrawl MCP",
     "usage_firecrawl_mcp_hint": "firecrawl-mcp honours FIRECRAWL_API_URL, so it can use this pool directly.",
     "col_quota": "Quota",
@@ -2141,6 +2141,15 @@
     "summary_remaining": "{{amount}} left",
     "summary_exhausted": "{{count}} out of quota",
     "quota_refreshed": "Quota refreshed",
-    "spend_reset": "Spend reset"
+    "spend_reset": "Spend reset",
+    "mcp_title": "MCP settings",
+    "mcp_description": "web_search and web_fetch use only the enabled providers, in this order. The next provider is tried only when the current one has no usable key or fails upstream.",
+    "mcp_order": "Provider order",
+    "mcp_expose_tools": "Also expose per-provider tools (tavily_*, exa_*, firecrawl_*)",
+    "mcp_expose_tools_hint": "Off by default so the AI cannot call several providers for one query.",
+    "mcp_saved": "MCP settings saved",
+    "move_up": "Move up",
+    "move_down": "Move down",
+    "provider_enabled": "Enabled"
   }
 }
