@@ -178,11 +178,14 @@ func codexAuthUsesAPIKey(auth *cliproxyauth.Auth) bool {
 	if auth == nil {
 		return false
 	}
+	if auth.AuthKind() == cliproxyauth.AuthKindOAuth {
+		return false
+	}
 	if auth.AuthKind() == cliproxyauth.AuthKindAPIKey {
 		return true
 	}
 	if auth.Attributes != nil {
-		return strings.TrimSpace(auth.Attributes["api_key"]) != ""
+		return strings.TrimSpace(auth.Attributes[cliproxyauth.AttributeAPIKey]) != ""
 	}
 	return false
 }

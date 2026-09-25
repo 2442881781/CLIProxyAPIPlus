@@ -38,6 +38,10 @@ export function SectionAdvanced({ values, disabled, animateIn, onChange }: Confi
     (antigravitySensitiveWords: string[]) => onChange({ antigravitySensitiveWords }),
     [onChange]
   );
+  const handleCodexBasispointsModelsChange = useCallback(
+    (codexBasispointsModels: string[]) => onChange({ codexBasispointsModels }),
+    [onChange]
+  );
 
   return (
     <SectionCard
@@ -176,6 +180,74 @@ export function SectionAdvanced({ values, disabled, animateIn, onChange }: Confi
                 />
               </FieldAnchor>
             </FieldGrid>
+          </FieldStack>
+        </Collapsible>
+
+        <Collapsible
+          label={t('config_management.visual.sections.advanced.codex_basispoints_title')}
+          hint={t('config_management.visual.sections.codex_basispoints.description')}
+          defaultOpen={false}
+        >
+          <FieldStack>
+            <FieldGrid>
+              <FieldAnchor fieldId="codexBasispointsEnabled">
+                <ToggleRow
+                  title={t('config_management.visual.sections.codex_basispoints.enabled')}
+                  description={t(
+                    'config_management.visual.sections.codex_basispoints.enabled_desc'
+                  )}
+                  checked={values.codexBasispointsEnabled}
+                  disabled={disabled}
+                  onChange={(codexBasispointsEnabled) => onChange({ codexBasispointsEnabled })}
+                />
+              </FieldAnchor>
+              <FieldAnchor fieldId="codexBasispointsNativeFallback">
+                <ToggleRow
+                  title={t('config_management.visual.sections.codex_basispoints.native_fallback')}
+                  description={t(
+                    'config_management.visual.sections.codex_basispoints.native_fallback_desc'
+                  )}
+                  checked={values.codexBasispointsNativeFallback}
+                  disabled={disabled}
+                  onChange={(codexBasispointsNativeFallback) =>
+                    onChange({ codexBasispointsNativeFallback })
+                  }
+                />
+              </FieldAnchor>
+            </FieldGrid>
+            <FieldAnchor fieldId="codexBasispointsBaseUrl">
+              <Input
+                label={t('config_management.visual.sections.codex_basispoints.base_url')}
+                placeholder="https://bps.openai.com/basispoints/api/responses"
+                hint={t('config_management.visual.sections.codex_basispoints.base_url_desc')}
+                value={values.codexBasispointsBaseUrl}
+                onChange={(e) => onChange({ codexBasispointsBaseUrl: e.target.value })}
+                disabled={disabled}
+              />
+            </FieldAnchor>
+            <FieldAnchor fieldId="codexBasispointsModels">
+              <FieldGroup
+                title={t('config_management.visual.sections.codex_basispoints.models')}
+                description={t(
+                  'config_management.visual.sections.codex_basispoints.models_desc'
+                )}
+              >
+                <FieldShell
+                  label={t('config_management.visual.sections.codex_basispoints.models_label')}
+                  hint={t('config_management.visual.sections.codex_basispoints.models_hint')}
+                >
+                  <StringListEditor
+                    value={values.codexBasispointsModels}
+                    disabled={disabled}
+                    placeholder="gpt-5.6-sol"
+                    inputAriaLabel={t(
+                      'config_management.visual.sections.codex_basispoints.models_label'
+                    )}
+                    onChange={handleCodexBasispointsModelsChange}
+                  />
+                </FieldShell>
+              </FieldGroup>
+            </FieldAnchor>
           </FieldStack>
         </Collapsible>
 

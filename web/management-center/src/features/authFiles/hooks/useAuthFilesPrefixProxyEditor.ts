@@ -4,13 +4,16 @@ import { authFilesApi, type AuthFileFieldsPatch } from '@/services/api';
 import type { AuthFileItem } from '@/types';
 import { useNotificationStore } from '@/stores';
 import {
+  applyAuthFileBasispoints,
   applyAuthFileWebsockets,
   applyAuthFileUsingApi,
   normalizeProviderKey,
   parsePriorityValue,
+  readAuthFileBasispoints,
   readAuthFileDisableCooling,
   readAuthFileWebsockets,
   readAuthFileUsingApi,
+  supportsAuthFileBasispoints,
   supportsAuthFileWebsockets,
   supportsAuthFileUsingApi,
 } from '@/features/authFiles/constants';
@@ -39,6 +42,7 @@ export type PrefixProxyEditorField =
   | 'disableCooling'
   | 'websockets'
   | 'usingApi'
+  | 'basispoints'
   | 'note'
   | 'excludedModelsText'
   | 'headersText';
@@ -67,6 +71,8 @@ export type PrefixProxyEditorState = {
   websocketsTouched: boolean;
   usingApi: boolean;
   usingApiTouched: boolean;
+  basispoints: boolean;
+  basispointsTouched: boolean;
   note: string;
   noteTouched: boolean;
   excludedModelsText: string;
@@ -361,6 +367,14 @@ export const buildAuthFileFieldsPatch = (
     }
   }
 
+  if (supportsAuthFileBasispoints(editor.providerKey) && editor.basispointsTouched) {
+    const originalBasispoints = readAuthFileBasispoints(original);
+    const nextBasispoints = Boolean(editor.basispoints);
+    if (nextBasispoints !== originalBasispoints) {
+      patch.basispoints = nextBasispoints;
+    }
+  }
+
   if (editor.headersTouched) {
     const { value: parsedHeaders, errorKey } = parseHeadersText(editor.headersText);
     if (errorKey) {
@@ -448,6 +462,10 @@ const buildPrefixProxyUpdatedText = (
     next = applyAuthFileUsingApi(next, patch.using_api);
   }
 
+  if (patch.basispoints !== undefined) {
+    next = applyAuthFileBasispoints(next, patch.basispoints);
+  }
+
   return JSON.stringify(next);
 };
 
@@ -512,6 +530,8 @@ export function useAuthFilesPrefixProxyEditor(
       websocketsTouched: false,
       usingApi: false,
       usingApiTouched: false,
+      basispoints: false,
+      basispointsTouched: false,
       note: '',
       noteTouched: false,
       excludedModelsText: '',
@@ -564,6 +584,9 @@ export function useAuthFilesPrefixProxyEditor(
         ? readAuthFileWebsockets(json)
         : false;
       const usingApi = supportsAuthFileUsingApi(providerKey) ? readAuthFileUsingApi(json) : false;
+      const basispoints = supportsAuthFileBasispoints(providerKey)
+        ? readAuthFileBasispoints(json)
+        : false;
       const note = typeof json.note === 'string' ? json.note : '';
       const excludedModelsText = readExcludedModels(json).join('\n');
       const headers = json.headers;
@@ -596,6 +619,8 @@ export function useAuthFilesPrefixProxyEditor(
           websocketsTouched: false,
           usingApi,
           usingApiTouched: false,
+          basispoints,
+          basispointsTouched: false,
           note,
           noteTouched: false,
           excludedModelsText,
@@ -646,6 +671,9 @@ export function useAuthFilesPrefixProxyEditor(
       }
       if (field === 'usingApi') {
         return { ...prev, usingApi: Boolean(value), usingApiTouched: true };
+      }
+      if (field === 'basispoints') {
+        return { ...prev, basispoints: Boolean(value), basispointsTouched: true };
       }
       if (field === 'note') return { ...prev, note: String(value), noteTouched: true };
       if (field === 'excludedModelsText') {

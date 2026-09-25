@@ -365,6 +365,8 @@
     "websockets_hint": "Enable Responses API websocket transport for this credential.",
     "using_api_label": "Use official API (using_api)",
     "using_api_hint": "Use the official xAI API when enabled; use Grok CLI chat-proxy when disabled.",
+    "basispoints_label": "Use Basispoints (basispoints)",
+    "basispoints_hint": "Opt this Codex OAuth credential into the global Basispoints route. The global switch and model allowlist must also permit the request.",
     "note_label": "Note",
     "note_placeholder": "Enter a note, e.g.: John's account",
     "note_hint": "Optional. Used to describe the purpose or owner of this credential; leave empty to omit.",
@@ -934,7 +936,8 @@
           "description": "Header spoofing, signature cache, plugin sources, and other rarely changed settings",
           "plugins_title": "Plugins",
           "antigravity_title": "Antigravity",
-          "signature_title": "Signature Validation"
+          "signature_title": "Signature Validation",
+          "codex_basispoints_title": "Codex Basispoints"
         },
         "server": {
           "host": "Host Address",
@@ -1018,6 +1021,19 @@
           "antigravity_signature_cache_desc": "Prefer and validate cached thinking-block signatures",
           "antigravity_signature_strict": "Strict Bypass Signature Validation",
           "antigravity_signature_strict_desc": "Only applies when the signature cache is disabled; validates the full Claude protobuf tree"
+        },
+        "codex_basispoints": {
+          "description": "Global routing settings for the opt-in ChatGPT Excel/Basispoints endpoint",
+          "enabled": "Enable Basispoints routing",
+          "enabled_desc": "Allow eligible Codex OAuth credentials and models to use Basispoints; each credential must also opt in",
+          "base_url": "Basispoints Base URL",
+          "base_url_desc": "Leave empty to use the backend default; override only for development or a controlled reverse proxy",
+          "models": "Allowed model families",
+          "models_desc": "Only these exact families and their YYYY-MM-DD snapshots can use Basispoints",
+          "models_label": "Model family (codex.basispoints.models)",
+          "models_hint": "One model family per row. Use * or all to allow every model.",
+          "native_fallback": "Fallback to native Codex",
+          "native_fallback_desc": "Route requests with unsupported hosted tools, image inputs, or output formats back to native Codex"
         },
         "headers": {
           "title": "Header Defaults",

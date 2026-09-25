@@ -425,6 +425,39 @@ export const CONFIG_FIELD_SEARCH_INDEX: ConfigFieldSearchEntry[] = [
     yamlKeys: ['codex-header-defaults', 'beta-features'],
     keywords: ['codex'],
   },
+  // Codex Basispoints routing.
+  {
+    fieldId: 'codexBasispointsEnabled',
+    sectionId: 'advanced',
+    labelKey: L('sections.codex_basispoints.enabled'),
+    hintKey: L('sections.codex_basispoints.enabled_desc'),
+    yamlKeys: ['codex', 'basispoints', 'enabled'],
+    keywords: ['codex', 'bps', 'basispoints', 'excel'],
+  },
+  {
+    fieldId: 'codexBasispointsBaseUrl',
+    sectionId: 'advanced',
+    labelKey: L('sections.codex_basispoints.base_url'),
+    hintKey: L('sections.codex_basispoints.base_url_desc'),
+    yamlKeys: ['codex', 'basispoints', 'base-url'],
+    keywords: ['codex', 'bps', 'basispoints', 'endpoint'],
+  },
+  {
+    fieldId: 'codexBasispointsModels',
+    sectionId: 'advanced',
+    labelKey: L('sections.codex_basispoints.models'),
+    hintKey: L('sections.codex_basispoints.models_desc'),
+    yamlKeys: ['codex', 'basispoints', 'models'],
+    keywords: ['codex', 'bps', 'basispoints', 'allowlist'],
+  },
+  {
+    fieldId: 'codexBasispointsNativeFallback',
+    sectionId: 'advanced',
+    labelKey: L('sections.codex_basispoints.native_fallback'),
+    hintKey: L('sections.codex_basispoints.native_fallback_desc'),
+    yamlKeys: ['codex', 'basispoints', 'native-fallback'],
+    keywords: ['codex', 'bps', 'basispoints', 'fallback'],
+  },
   // ── payload (coarse: one entry per rule group) ──────────────────────────────
   {
     fieldId: 'payloadDefaultRules',

@@ -1091,6 +1091,9 @@ function getNextDirtyFields(
       'claudeHeaderStabilizeDeviceProfile',
       'codexHeaderUserAgent',
       'codexHeaderBetaFeatures',
+      'codexBasispointsEnabled',
+      'codexBasispointsBaseUrl',
+      'codexBasispointsNativeFallback',
       'host',
       'port',
       'tlsEnable',
@@ -1134,6 +1137,12 @@ function getNextDirtyFields(
         nextValues.antigravitySensitiveWords,
         baselineValues.antigravitySensitiveWords
       )
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'codexBasispointsModels')) {
+    updateDirty(
+      'codexBasispointsModels',
+      areStringArraysEqual(nextValues.codexBasispointsModels, baselineValues.codexBasispointsModels)
     );
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'pluginStoreAuth')) {
@@ -1284,6 +1293,8 @@ export function useVisualConfig() {
       const antigravity = asRecord(parsed.antigravity);
       const claudeHeaderDefaults = asRecord(parsed['claude-header-defaults']);
       const codexHeaderDefaults = asRecord(parsed['codex-header-defaults']);
+      const codex = asRecord(parsed.codex);
+      const codexBasispoints = asRecord(codex?.basispoints);
 
       const newValues: VisualConfigValues = {
         host: typeof parsed.host === 'string' ? parsed.host : '',
@@ -1371,6 +1382,13 @@ export function useVisualConfig() {
           typeof codexHeaderDefaults?.['beta-features'] === 'string'
             ? codexHeaderDefaults['beta-features']
             : '',
+        codexBasispointsEnabled: Boolean(codexBasispoints?.enabled),
+        codexBasispointsBaseUrl:
+          typeof codexBasispoints?.['base-url'] === 'string'
+            ? codexBasispoints['base-url']
+            : '',
+        codexBasispointsModels: parseStringList(codexBasispoints?.models),
+        codexBasispointsNativeFallback: Boolean(codexBasispoints?.['native-fallback']),
 
         quotaSwitchProject: Boolean(
           quotaExceeded?.['switch-project'] ?? DEFAULT_VISUAL_VALUES.quotaSwitchProject
@@ -1673,6 +1691,46 @@ export function useVisualConfig() {
             );
           }
           deleteIfMapEmpty(doc, ['codex-header-defaults']);
+        }
+
+        const codexBasispointsDirty =
+          dirtyFields.has('codexBasispointsEnabled') ||
+          dirtyFields.has('codexBasispointsBaseUrl') ||
+          dirtyFields.has('codexBasispointsModels') ||
+          dirtyFields.has('codexBasispointsNativeFallback');
+        if (codexBasispointsDirty) {
+          ensureMapInDoc(doc, ['codex']);
+          ensureMapInDoc(doc, ['codex', 'basispoints']);
+          if (dirtyFields.has('codexBasispointsEnabled')) {
+            setBooleanInDoc(
+              doc,
+              ['codex', 'basispoints', 'enabled'],
+              values.codexBasispointsEnabled
+            );
+          }
+          if (dirtyFields.has('codexBasispointsBaseUrl')) {
+            setStringInDoc(
+              doc,
+              ['codex', 'basispoints', 'base-url'],
+              values.codexBasispointsBaseUrl
+            );
+          }
+          if (dirtyFields.has('codexBasispointsModels')) {
+            setStringListInDoc(
+              doc,
+              ['codex', 'basispoints', 'models'],
+              values.codexBasispointsModels
+            );
+          }
+          if (dirtyFields.has('codexBasispointsNativeFallback')) {
+            setBooleanInDoc(
+              doc,
+              ['codex', 'basispoints', 'native-fallback'],
+              values.codexBasispointsNativeFallback
+            );
+          }
+          deleteIfMapEmpty(doc, ['codex', 'basispoints']);
+          deleteIfMapEmpty(doc, ['codex']);
         }
 
         const quotaDirty =

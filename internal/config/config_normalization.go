@@ -43,6 +43,28 @@ func (cfg *Config) SanitizeCodexHeaderDefaults() {
 	cfg.CodexHeaderDefaults.BetaFeatures = strings.TrimSpace(cfg.CodexHeaderDefaults.BetaFeatures)
 }
 
+// SanitizeCodexBasispoints normalizes the optional Basispoints endpoint and model allowlist.
+func (cfg *Config) SanitizeCodexBasispoints() {
+	if cfg == nil {
+		return
+	}
+	cfg.Codex.Basispoints.BaseURL = strings.TrimSpace(cfg.Codex.Basispoints.BaseURL)
+	seen := make(map[string]struct{}, len(cfg.Codex.Basispoints.Models))
+	models := make([]string, 0, len(cfg.Codex.Basispoints.Models))
+	for _, raw := range cfg.Codex.Basispoints.Models {
+		model := strings.ToLower(strings.TrimSpace(raw))
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		models = append(models, model)
+	}
+	cfg.Codex.Basispoints.Models = models
+}
+
 // SanitizeClaudeHeaderDefaults trims surrounding whitespace from the
 // configured Claude fingerprint baseline values.
 func (cfg *Config) SanitizeClaudeHeaderDefaults() {

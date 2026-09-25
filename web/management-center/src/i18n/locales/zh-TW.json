@@ -365,6 +365,8 @@
     "websockets_hint": "為該憑證開啟 Responses API 的 websocket 傳輸。",
     "using_api_label": "使用官方 API（using_api）",
     "using_api_hint": "開啟後使用 xAI 官方 API；關閉時使用 Grok CLI chat-proxy。",
+    "basispoints_label": "使用 Basispoints（basispoints）",
+    "basispoints_hint": "允許該 Codex OAuth 憑證使用全域 Basispoints 路由；全域開關與模型白名單也必須允許本次請求。",
     "note_label": "備註（note）",
     "note_placeholder": "輸入備註資訊，例如：張三的帳號",
     "note_hint": "選填，用於標記憑證用途或歸屬；留空則不寫入。",
@@ -960,7 +962,8 @@
           "description": "請求標頭偽裝、簽章快取、外掛來源等不常修改的設定",
           "plugins_title": "外掛",
           "antigravity_title": "Antigravity",
-          "signature_title": "簽章驗證"
+          "signature_title": "簽章驗證",
+          "codex_basispoints_title": "Codex Basispoints"
         },
         "server": {
           "host": "主機位址",
@@ -1044,6 +1047,19 @@
           "antigravity_signature_cache_desc": "優先使用並校驗快取的 thinking block 簽名",
           "antigravity_signature_strict": "嚴格校驗旁路簽名",
           "antigravity_signature_strict_desc": "僅在關閉簽名快取時生效，按完整 Claude protobuf 樹校驗"
+        },
+        "codex_basispoints": {
+          "description": "ChatGPT Excel/Basispoints 可選端點的全域路由設定",
+          "enabled": "啟用 Basispoints 路由",
+          "enabled_desc": "允許符合條件的 Codex OAuth 憑證與模型使用 Basispoints；每個憑證仍須個別開啟",
+          "base_url": "Basispoints 基礎 URL",
+          "base_url_desc": "留空時使用後端預設位址；僅在開發環境或受控反向代理中覆寫",
+          "models": "允許的模型系列",
+          "models_desc": "僅這些精確模型系列及其 YYYY-MM-DD 快照可使用 Basispoints",
+          "models_label": "模型系列（codex.basispoints.models）",
+          "models_hint": "每列一個模型系列；填寫 * 或 all 可允許全部模型。",
+          "native_fallback": "回退到原生 Codex",
+          "native_fallback_desc": "遇到不支援的託管工具、圖片輸入或輸出格式時，改走原生 Codex"
         },
         "headers": {
           "title": "Header 預設值",

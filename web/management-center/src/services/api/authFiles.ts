@@ -26,6 +26,7 @@ export type AuthFileFieldsPatch = {
   'disable-cooling'?: boolean;
   websockets?: boolean;
   using_api?: boolean;
+  basispoints?: boolean;
   note?: string;
   excluded_models?: string[];
   'excluded-models'?: string[];

@@ -12,6 +12,7 @@ import type {
   PrefixProxyEditorState,
 } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
 import {
+  supportsAuthFileBasispoints,
   supportsAuthFileUsingApi,
   supportsAuthFileWebsockets,
 } from '@/features/authFiles/constants';
@@ -240,6 +241,18 @@ export function AuthFileDetailsSheet(props: AuthFileDetailsSheetProps) {
                         ariaLabel={t('auth_files.using_api_label')}
                       />
                       <div className="hint">{t('auth_files.using_api_hint')}</div>
+                    </div>
+                  )}
+                  {supportsAuthFileBasispoints(editor.providerKey) && (
+                    <div className="form-group">
+                      <label>{t('auth_files.basispoints_label')}</label>
+                      <ToggleSwitch
+                        checked={editor.basispoints}
+                        onChange={(value) => onChange('basispoints', value)}
+                        disabled={disableControls || editor.saving || !editor.json}
+                        ariaLabel={t('auth_files.basispoints_label')}
+                      />
+                      <div className="hint">{t('auth_files.basispoints_hint')}</div>
                     </div>
                   )}
                   <AuthFileExcludedModelsField

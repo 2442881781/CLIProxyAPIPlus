@@ -215,11 +215,22 @@ type CodexConfig struct {
 	// ModelLevelCooling scopes Codex usage_limit_reached quota cooldowns to the requested model
 	// rather than cooling down the entire credential across all sibling models.
 	ModelLevelCooling bool `yaml:"model-level-cooling" json:"model-level-cooling"`
+	// Basispoints enables the opt-in ChatGPT Excel/Basispoints Responses route.
+	Basispoints CodexBasispointsConfig `yaml:"basispoints" json:"basispoints"`
 	// LiveMediaRelay terminates and relays Codex Live WebRTC media in this process.
 	LiveMediaRelay CodexLiveMediaRelayConfig `yaml:"live-media-relay" json:"live-media-relay"`
 	// ResponseSteering enables full-duplex Codex WebSockets, bound to one
 	// upstream model/account/socket for their entire lifetime. Default is false.
 	ResponseSteering bool `yaml:"response-steering" json:"response-steering"`
+}
+
+// CodexBasispointsConfig controls the optional ChatGPT Excel/Basispoints route.
+// Both Enabled and a credential-level basispoints flag are required.
+type CodexBasispointsConfig struct {
+	Enabled        bool     `yaml:"enabled" json:"enabled"`
+	BaseURL        string   `yaml:"base-url,omitempty" json:"base-url,omitempty"`
+	Models         []string `yaml:"models,omitempty" json:"models,omitempty"`
+	NativeFallback bool     `yaml:"native-fallback" json:"native-fallback"`
 }
 
 // DefaultCodexStreamBootstrapTimeout is the default maximum duration to buffer bootstrap events.

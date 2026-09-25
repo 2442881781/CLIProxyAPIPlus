@@ -361,6 +361,18 @@ codex:
   # than cooling down the entire credential across all sibling models.
   # Default: false
   model-level-cooling: false
+  # Optional ChatGPT Excel/Basispoints route. This remains disabled unless both
+  # enabled is true and the selected Codex OAuth auth file contains "basispoints": true.
+  basispoints:
+    enabled: false
+    # Override only for development or a controlled reverse proxy.
+    base-url: "https://bps.openai.com/basispoints/api/responses"
+    # Exact model families allowed on Basispoints. YYYY-MM-DD snapshots also match.
+    models:
+      - "gpt-5.6-sol"
+      - "gpt-6-astra"
+    # Route unsupported hosted tools, image inputs and output formats back to native Codex.
+    native-fallback: true
   # Terminate and relay Codex Live WebRTC audio and DataChannel traffic in this process.
   # This requires inbound UDP reachability. Keep disabled to preserve direct media behavior.
   live-media-relay:

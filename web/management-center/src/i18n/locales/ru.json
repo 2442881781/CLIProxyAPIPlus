@@ -364,6 +364,8 @@
     "websockets_hint": "Включает websocket-транспорт Responses API для этих учётных данных.",
     "using_api_label": "Использовать официальный API (using_api)",
     "using_api_hint": "Если включено, используется официальный API xAI; если выключено — Grok CLI chat-proxy.",
+    "basispoints_label": "Использовать Basispoints (basispoints)",
+    "basispoints_hint": "Разрешает этим OAuth-учётным данным Codex использовать глобальный маршрут Basispoints. Глобальный переключатель и список моделей также должны разрешать запрос.",
     "headers_label": "Пользовательские заголовки (headers)",
     "headers_placeholder": "{\n  \"Header-Name\": \"value\"\n}",
     "headers_hint": "Введите пользовательские HTTP-заголовки в виде JSON-объекта, например: {\"X-My-Header\": \"value\"}",
@@ -933,7 +935,8 @@
           "description": "Подмена заголовков, кэш подписей, источники плагинов и другие редко изменяемые настройки",
           "plugins_title": "Плагины",
           "antigravity_title": "Antigravity",
-          "signature_title": "Проверка подписей"
+          "signature_title": "Проверка подписей",
+          "codex_basispoints_title": "Codex Basispoints"
         },
         "server": {
           "host": "Адрес хоста",
@@ -1017,6 +1020,19 @@
           "antigravity_signature_cache_desc": "Предпочитать и проверять кэшированные подписи thinking-блоков",
           "antigravity_signature_strict": "Строгая проверка bypass-подписи",
           "antigravity_signature_strict_desc": "Применяется только при отключённом кэше подписей; проверяет полное дерево Claude protobuf"
+        },
+        "codex_basispoints": {
+          "description": "Глобальные настройки маршрутизации для опционального endpoint ChatGPT Excel/Basispoints",
+          "enabled": "Включить маршрутизацию Basispoints",
+          "enabled_desc": "Разрешает подходящим OAuth-учётным данным Codex и моделям использовать Basispoints; каждые учётные данные также включаются отдельно",
+          "base_url": "Базовый URL Basispoints",
+          "base_url_desc": "Оставьте пустым для значения backend по умолчанию; меняйте только для разработки или контролируемого reverse proxy",
+          "models": "Разрешённые семейства моделей",
+          "models_desc": "Basispoints доступен только этим семействам и их snapshot-версиям YYYY-MM-DD",
+          "models_label": "Семейство модели (codex.basispoints.models)",
+          "models_hint": "Одно семейство в строке. * или all разрешает все модели.",
+          "native_fallback": "Возврат к native Codex",
+          "native_fallback_desc": "Направляет запросы с неподдерживаемыми hosted tools, изображениями или форматами вывода обратно в native Codex"
         },
         "headers": {
           "title": "Заголовки по умолчанию",
