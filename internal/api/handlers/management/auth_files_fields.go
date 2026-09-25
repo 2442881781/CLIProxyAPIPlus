@@ -629,6 +629,9 @@ func syncAuthFileMetadataFields(auth *coreauth.Auth, touchedRoots map[string]str
 	if _, ok := touchedRoots["websockets"]; ok {
 		syncAuthFileWebsocketsAttribute(auth)
 	}
+	if _, ok := touchedRoots[coreauth.AttributeCodexBasispoints]; ok {
+		syncAuthFileBooleanAttribute(auth, coreauth.AttributeCodexBasispoints)
+	}
 	if _, ok := touchedRoots["disabled"]; ok {
 		syncAuthFileDisabledState(auth)
 	}
@@ -772,6 +775,21 @@ func syncAuthFileWebsocketsAttribute(auth *coreauth.Auth) {
 		return
 	}
 	auth.Attributes["websockets"] = strconv.FormatBool(websockets)
+}
+
+func syncAuthFileBooleanAttribute(auth *coreauth.Auth, key string) {
+	if auth == nil {
+		return
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	value, ok := authFileBoolValue(auth.Metadata[key])
+	if !ok {
+		delete(auth.Attributes, key)
+		return
+	}
+	auth.Attributes[key] = strconv.FormatBool(value)
 }
 
 func authFileBoolValue(value any) (bool, bool) {

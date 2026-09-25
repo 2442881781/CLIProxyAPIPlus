@@ -509,6 +509,18 @@ func (h *Handler) listAuthFilesFromDisk(c *gin.Context, pagination authFilesPagi
 					}
 				}
 			}
+			if bv := gjson.GetBytes(data, coreauth.AttributeCodexBasispoints); bv.Exists() {
+				switch bv.Type {
+				case gjson.True:
+					fileData[coreauth.AttributeCodexBasispoints] = true
+				case gjson.False:
+					fileData[coreauth.AttributeCodexBasispoints] = false
+				case gjson.String:
+					if parsed, errParse := strconv.ParseBool(strings.TrimSpace(bv.String())); errParse == nil {
+						fileData[coreauth.AttributeCodexBasispoints] = parsed
+					}
+				}
+			}
 			if requestRetry, okRetry := authFileRequestRetryFromJSON(data); okRetry {
 				fileData["request_retry"] = requestRetry
 			}
@@ -825,6 +837,9 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quotaSupported .
 	if websockets, ok := authWebsocketsValue(auth); ok {
 		entry["websockets"] = websockets
 	}
+	if basispoints, ok := authBooleanValue(auth, coreauth.AttributeCodexBasispoints); ok {
+		entry[coreauth.AttributeCodexBasispoints] = basispoints
+	}
 	if requestRetry, ok := auth.RequestRetryOverride(); ok {
 		entry["request_retry"] = requestRetry
 	}
@@ -896,6 +911,36 @@ func authWeightValue(auth *coreauth.Auth) (int64, bool) {
 	}
 	weight, errWeight := credentialweight.ParseValue(rawWeight)
 	return weight, errWeight == nil
+}
+
+func authBooleanValue(auth *coreauth.Auth, key string) (bool, bool) {
+	if auth == nil {
+		return false, false
+	}
+	if auth.Attributes != nil {
+		if raw := strings.TrimSpace(auth.Attributes[key]); raw != "" {
+			parsed, errParse := strconv.ParseBool(raw)
+			if errParse == nil {
+				return parsed, true
+			}
+		}
+	}
+	if auth.Metadata == nil {
+		return false, false
+	}
+	raw, ok := auth.Metadata[key]
+	if !ok || raw == nil {
+		return false, false
+	}
+	switch value := raw.(type) {
+	case bool:
+		return value, true
+	case string:
+		parsed, errParse := strconv.ParseBool(strings.TrimSpace(value))
+		return parsed, errParse == nil
+	default:
+		return false, false
+	}
 }
 
 func authWebsocketsValue(auth *coreauth.Auth) (bool, bool) {

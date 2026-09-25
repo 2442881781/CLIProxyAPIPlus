@@ -248,6 +248,17 @@ export const applyAuthFileUsingApi = (
   usingApi: boolean
 ): Record<string, unknown> => ({ ...value, using_api: usingApi });
 
+export const supportsAuthFileBasispoints = (providerKey: string): boolean =>
+  normalizeProviderKey(providerKey) === 'codex';
+
+export const readAuthFileBasispoints = (value: Record<string, unknown>): boolean =>
+  parseDisableCoolingValue(value.basispoints) ?? false;
+
+export const applyAuthFileBasispoints = (
+  value: Record<string, unknown>,
+  basispoints: boolean
+): Record<string, unknown> => ({ ...value, basispoints });
+
 export function isRuntimeOnlyAuthFile(file: AuthFileItem): boolean {
   const raw = file['runtime_only'] ?? file.runtimeOnly;
   if (typeof raw === 'boolean') return raw;

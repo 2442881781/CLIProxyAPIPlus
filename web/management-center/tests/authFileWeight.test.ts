@@ -27,6 +27,8 @@ const makeEditor = (json: Record<string, unknown>, weight: string): PrefixProxyE
   websocketsTouched: false,
   usingApi: false,
   usingApiTouched: false,
+  basispoints: false,
+  basispointsTouched: false,
   note: '',
   noteTouched: false,
   excludedModelsText: '',

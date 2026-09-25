@@ -263,6 +263,9 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 				}
 			}
 		}
+		if enabled, ok := metadata[coreauth.AttributeCodexBasispoints].(bool); ok {
+			a.Attributes[coreauth.AttributeCodexBasispoints] = strconv.FormatBool(enabled)
+		}
 	}
 	return []*coreauth.Auth{a}, nil
 }

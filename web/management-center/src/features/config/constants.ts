@@ -150,6 +150,10 @@ export const FIELD_VALUE_KEYS: Record<string, readonly string[]> = {
   claudeHeaderStabilizeDeviceProfile: ['claudeHeaderStabilizeDeviceProfile'],
   codexHeaderUserAgent: ['codexHeaderUserAgent'],
   codexHeaderBetaFeatures: ['codexHeaderBetaFeatures'],
+  codexBasispointsEnabled: ['codexBasispointsEnabled'],
+  codexBasispointsBaseUrl: ['codexBasispointsBaseUrl'],
+  codexBasispointsModels: ['codexBasispointsModels'],
+  codexBasispointsNativeFallback: ['codexBasispointsNativeFallback'],
   // ── payload ───────────────────────────────────────────────────────────────
   payloadDefaultRules: ['payloadDefaultRules'],
   payloadDefaultRawRules: ['payloadDefaultRawRules'],

@@ -134,6 +134,10 @@ export type VisualConfigValues = {
   claudeHeaderStabilizeDeviceProfile: boolean;
   codexHeaderUserAgent: string;
   codexHeaderBetaFeatures: string;
+  codexBasispointsEnabled: boolean;
+  codexBasispointsBaseUrl: string;
+  codexBasispointsModels: string[];
+  codexBasispointsNativeFallback: boolean;
   payloadDefaultRules: PayloadRule[];
   payloadDefaultRawRules: PayloadRule[];
   payloadOverrideRules: PayloadRule[];
@@ -199,6 +203,10 @@ export const DEFAULT_VISUAL_VALUES: VisualConfigValues = {
   claudeHeaderStabilizeDeviceProfile: false,
   codexHeaderUserAgent: '',
   codexHeaderBetaFeatures: '',
+  codexBasispointsEnabled: false,
+  codexBasispointsBaseUrl: '',
+  codexBasispointsModels: [],
+  codexBasispointsNativeFallback: false,
   payloadDefaultRules: [],
   payloadDefaultRawRules: [],
   payloadOverrideRules: [],
