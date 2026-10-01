@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	proxyconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	proxyconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
 // Feature: /search routes are wired into the CPA server with downstream auth

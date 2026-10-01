@@ -55,6 +55,9 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	if errValidate := cfg.ValidateCredentialWeights(); errValidate != nil {
 		return nil, errValidate
 	}
+	if errValidate := cfg.Codex.LiveMediaRelay.Validate(); errValidate != nil {
+		return nil, errValidate
+	}
 	if cfg.Discovery.ServiceType == "" {
 		cfg.Discovery.ServiceType = DefaultDiscoveryServiceType
 	}
@@ -112,6 +115,8 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	cfg.SanitizeCodexKeys()
 	cfg.SanitizeXAIKeys()
 	cfg.SanitizeMetaKeys()
+	cfg.SanitizeSearchKeys()
+	cfg.SanitizeSearchMCP()
 	cfg.SanitizeCodexHeaderDefaults()
 	cfg.SanitizeCodexBasispoints()
 	cfg.SanitizeClaudeHeaderDefaults()
@@ -120,6 +125,7 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	cfg.OAuthAllowedModels = NormalizeOAuthAllowedModels(cfg.OAuthAllowedModels)
 	cfg.OAuthExcludedModels = NormalizeOAuthExcludedModels(cfg.OAuthExcludedModels)
 	cfg.SanitizeOAuthModelAlias()
+	cfg.SanitizeOAuthSettings()
 	cfg.SanitizeOAuthRequestScopedErrors()
 	cfg.SanitizePayloadRules()
 

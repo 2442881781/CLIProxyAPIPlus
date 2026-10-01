@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
 func setupAccessKeyRouter(t *testing.T) *gin.Engine {

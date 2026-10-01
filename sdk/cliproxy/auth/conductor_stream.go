@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 func discardStreamChunks(ch <-chan cliproxyexecutor.StreamChunk) {
@@ -210,6 +210,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 	if executor == nil {
 		return nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
+	executor = executorForAuth(executor, auth)
 	ctx = contextWithRequestedModelAlias(ctx, opts, routeModel)
 	var lastErr error
 	var upstreamErr error
@@ -228,9 +229,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		if errIntercept != nil {
 			return nil, errIntercept
 		}
-		if executionModel == "" {
-			execReq = attachResolvedAPIKeyModelInfo(routing, execReq, auth, routeModel, execModel)
-		}
+		execReq = attachResolvedExecutionModelInfo(routing, execReq, auth, routeModel, execModel, executionModel != "")
 		if errCtx := ctx.Err(); errCtx != nil {
 			return nil, errCtx
 		}
