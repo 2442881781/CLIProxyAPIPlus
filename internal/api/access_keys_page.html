@@ -68,6 +68,12 @@
   .modal-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
   .modal-actions button { margin:0; }
   .edit-note { margin-top:14px; font-size:12px; color:var(--text-tertiary); }
+  .jbset { display:flex; gap:10px; flex-wrap:wrap; }
+  .jbset .field { min-width:104px; }
+  .jbset select { min-width:104px; }
+  .jbbadges { display:inline-flex; gap:4px; flex-wrap:wrap; }
+  .jbglobal { font-size:12px; line-height:1.7; }
+  .jbglobal .mono { font-size:11px; }
   #keyModal .k { word-break:break-all; background:var(--bg-tertiary); padding:14px; border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:13px; margin:14px 0; }
   #login { max-width:360px; margin:15vh auto; }
 </style>
@@ -88,6 +94,8 @@
   <h1>API Key 管理</h1>
   <p class="sub">为员工签发、限额和吊销访问密钥<a class="back-link" href="/management.html"> · 返回管理面板</a></p>
 
+  <div class="card jbglobal" id="jbglobal" style="display:none"></div>
+
   <div class="card">
     <div class="row">
       <div class="field"><label>名称</label><input id="f_name" placeholder="张三"></div>
@@ -99,11 +107,17 @@
       <div class="field"><label>过期时间</label><input id="f_exp" type="datetime-local"></div>
       <button onclick="createKey()">签发 Key</button>
     </div>
+    <div class="row" style="margin-top:12px;align-items:flex-start">
+      <div class="field" style="flex:1">
+        <label>破甲（「继承」= 跟随分组 → 全局默认）</label>
+        <div id="f_jbset" class="jbset"></div>
+      </div>
+    </div>
   </div>
 
   <div class="card">
     <table>
-      <thead><tr><th>名称</th><th>Key</th><th>分组</th><th>状态</th><th>用量 / 限额</th><th>流量 / 成本</th><th>有效模型</th><th>过期</th><th class="actions">操作</th></tr></thead>
+      <thead><tr><th>名称</th><th>Key</th><th>分组</th><th>状态</th><th>用量 / 限额</th><th>流量 / 成本</th><th>有效模型</th><th>破甲</th><th>过期</th><th class="actions">操作</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
   </div>
@@ -132,11 +146,17 @@
         <div id="g_auths" class="authgrid muted">加载中…</div>
       </div>
     </div>
+    <div class="row" style="margin-top:12px;align-items:flex-start">
+      <div class="field" style="flex:1">
+        <label>破甲默认（组内 Key 未设置时继承此层）</label>
+        <div id="g_jbset" class="jbset"></div>
+      </div>
+    </div>
   </div>
 
   <div class="card">
     <table>
-      <thead><tr><th>分组</th><th>账号池</th><th>模型</th><th>并发/限流</th><th>组用量</th><th class="actions">操作</th></tr></thead>
+      <thead><tr><th>分组</th><th>账号池</th><th>模型</th><th>破甲</th><th>并发/限流</th><th>组用量</th><th class="actions">操作</th></tr></thead>
       <tbody id="gbody"></tbody>
     </table>
   </div>
@@ -162,6 +182,12 @@
     <div class="field"><label>周期</label><select id="e_period"><option value="">总量</option><option value="daily">每日</option><option value="monthly">每月</option></select></div>
     <div class="field"><label>Key 模型白名单</label><input id="e_models" placeholder="空=继承分组/全部" style="min-width:240px"></div>
     <div class="field"><label>过期时间</label><input id="e_exp" type="datetime-local"></div>
+  </div>
+  <div class="row" style="margin-top:12px;align-items:flex-start">
+    <div class="field" style="flex:1">
+      <label>破甲（「继承」= 跟随分组 → 全局默认）</label>
+      <div id="e_jbset" class="jbset"></div>
+    </div>
   </div>
   <p class="edit-note" id="e_effective_models"></p>
   <div class="modal-actions">
@@ -289,6 +315,55 @@ function displayModels(key) {
   return '<span class="muted">全部</span>';
 }
 
+// JB (jailbreak-assist) controls. Each toggle is tri-state: 继承 (omitted from
+// the JSON so the layer above supplies the value), 开 (true), 关 (false).
+const JB_TOGGLES = [
+  ['jb', '破甲'],
+  ['nsfw', 'NSFW'],
+  ['disambig', '词表改写'],
+  ['refusal-retry', '续写重试'],
+];
+function renderJBControls(containerId, prefix, prefs) {
+  prefs = prefs || {};
+  document.getElementById(containerId).innerHTML = JB_TOGGLES.map(([field, label]) => {
+    const v = prefs[field];
+    return `<div class="field"><label>${label}</label><select id="${prefix}_${field}">
+      <option value=""${v === undefined ? ' selected' : ''}>继承</option>
+      <option value="on"${v === true ? ' selected' : ''}>开</option>
+      <option value="off"${v === false ? ' selected' : ''}>关</option>
+    </select></div>`;
+  }).join('');
+}
+function readJBControls(prefix) {
+  const out = {};
+  for (const [field] of JB_TOGGLES) {
+    const el = document.getElementById(prefix + '_' + field);
+    if (!el) continue;
+    if (el.value === 'on') out[field] = true;
+    else if (el.value === 'off') out[field] = false;
+  }
+  return out;
+}
+function jbBadges(prefs) {
+  if (!prefs) return '<span class="muted">继承</span>';
+  const parts = JB_TOGGLES.filter(([f]) => prefs[f] !== undefined)
+    .map(([f, label]) => `<span class="tag ${prefs[f] ? 'on' : 'off'}">${label}${prefs[f] ? '开' : '关'}</span>`);
+  return parts.length ? `<span class="jbbadges">${parts.join('')}</span>` : '<span class="muted">继承</span>';
+}
+function loadJBGlobal() {
+  api('GET', '/access-jb').then(d => {
+    const el = document.getElementById('jbglobal');
+    const defaults = d.defaults || {};
+    const set = JB_TOGGLES.filter(([f]) => defaults[f] !== undefined)
+      .map(([f, label]) => `<span class="tag ${defaults[f] ? 'on' : 'off'}">${label}${defaults[f] ? '开' : '关'}</span>`).join(' ');
+    el.innerHTML = d.enabled
+      ? `<b>破甲已启用</b> · 全局默认：${set || '<span class="muted">未显式设置</span>'}
+         <span class="muted">— Key/分组未设置的项按「Key → 分组 → 全局」继承；词表改写与续写重试还需客户端请求头 X-JB 未被收窄。</span>`
+      : `<b>破甲未启用</b> <span class="muted">— 配置项 <span class="mono">jb.enabled</span> 为 false，Key/分组的破甲设置当前不会生效。</span>`;
+    el.style.display = '';
+  }).catch(() => {});
+}
+
 function login() {
   MGMT = document.getElementById('mgmtKey').value.trim();
   api('GET','/access-keys').then(() => {
@@ -317,13 +392,15 @@ function load() {
         <td>${used} / ${limit}<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
         ${trafficCell(k)}
         <td class="mono" style="font-size:11px">${displayModels(k)}</td>
+        <td>${jbBadges(k.jb)}</td>
         <td>${exp}</td>
         <td class="actions">
 		  <button class="ghost" onclick="openKeyEdit('${k.id}')">编辑</button>
         </td></tr>`;
-    }).join('') || '<tr><td colspan="9" class="muted" style="text-align:center;padding:30px">暂无 key</td></tr>';
+    }).join('') || '<tr><td colspan="10" class="muted" style="text-align:center;padding:30px">暂无 key</td></tr>';
   }).catch(e => toast('加载失败: ' + e.message));
   loadGroups();
+  loadJBGlobal();
 }
 
 let AUTHS = [];
@@ -350,13 +427,14 @@ function loadGroups() {
         <td>${esc(g.name)}</td>
         <td class="mono" style="font-size:11px">${auths.startsWith('<')?auths:esc(auths)}</td>
         <td class="mono" style="font-size:11px">${models.startsWith('<')?models:esc(models)}</td>
+        <td>${jbBadges(g.jb)}</td>
         <td>${limits.startsWith('<')?limits:esc(limits)}</td>
         <td>${fmt(u.total_tokens)} tok<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''} · ${fmtBytes(groupBytes)}</span></td>
         <td class="actions">
           <button class="ghost" data-g="${esc(g.name)}" onclick="editGroup(this.dataset.g)">编辑</button>
           <button class="danger" data-g="${esc(g.name)}" onclick="delGroup(this.dataset.g)">删除</button>
         </td></tr>`;
-    }).join('') || '<tr><td colspan="6" class="muted" style="text-align:center;padding:30px">暂无分组</td></tr>';
+    }).join('') || '<tr><td colspan="7" class="muted" style="text-align:center;padding:30px">暂无分组</td></tr>';
   }).catch(e => toast('分组加载失败: ' + e.message));
   api('GET','/access-auths').then(d => {
     AUTHS = d.auths || [];
@@ -380,6 +458,7 @@ function renderKeys() {
       <td>${used} / ${limit}<br><span class="muted">${fmt(u.requests)} 次请求${u.failed?` · ${fmt(u.failed)} 失败`:''}</span></td>
       ${trafficCell(k)}
       <td class="mono" style="font-size:11px">${displayModels(k)}</td>
+      <td>${jbBadges(k.jb)}</td>
       <td>${exp}</td>
       <td class="actions"><button class="ghost" onclick="openKeyEdit('${k.id}')">编辑</button></td>
     </tr>`;
@@ -405,7 +484,8 @@ function saveGroup() {
     allowed_auths: auths.length ? auths : undefined,
     allowed_models: models.length ? models : undefined,
     max_concurrency: parseInt(document.getElementById('g_conc').value)||0,
-    rate_limit_rpm: parseInt(document.getElementById('g_rpm').value)||0
+    rate_limit_rpm: parseInt(document.getElementById('g_rpm').value)||0,
+    jb: readJBControls('g')
   }).then(() => { toast('分组已保存',1); clearGroupForm(); loadGroups(); }).catch(e => toast('保存失败: ' + e.message));
 }
 function editGroup(name) {
@@ -417,19 +497,22 @@ function editGroup(name) {
     document.getElementById('g_conc').value = g.max_concurrency || '';
     document.getElementById('g_rpm').value = g.rate_limit_rpm || '';
     renderAuthPicker(g.allowed_auths || []);
+    renderJBControls('g_jbset','g', g.jb);
     window.scrollTo(0, document.body.scrollHeight);
   });
 }
-function clearGroupForm() { ['g_name','g_models','g_conc','g_rpm'].forEach(id => document.getElementById(id).value=''); renderAuthPicker([]); }
+function clearGroupForm() { ['g_name','g_models','g_conc','g_rpm'].forEach(id => document.getElementById(id).value=''); renderAuthPicker([]); renderJBControls('g_jbset','g', {}); }
 function delGroup(name) { if(confirm(`删除分组「${name}」？组内 key 将变为无限制。`)) api('DELETE','/access-groups?name='+encodeURIComponent(name)).then(()=>{toast('已删除',1);loadGroups();}).catch(e=>toast(e.message)); }
 
 function createKey() {
   const models = document.getElementById('f_models').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const jb = readJBControls('f');
   api('POST','/access-keys', {
     name: document.getElementById('f_name').value.trim(),
     group: document.getElementById('f_group').value,
     expires_at: (() => { const v = document.getElementById('f_exp').value; return v ? new Date(v).toISOString() : ''; })(),
     allowed_models: models.length ? models : undefined,
+    jb: Object.keys(jb).length ? jb : undefined,
     quota: {
       token_limit: parseInt(document.getElementById('f_quota').value)||0,
       byte_limit: gbToBytes(document.getElementById('f_quota_bytes').value),
@@ -475,6 +558,7 @@ function openKeyEdit(id) {
   document.getElementById('e_models').value = (key.allowed_models || []).join(', ');
   document.getElementById('e_exp').value = toLocalDateTime(key.expires_at);
   document.getElementById('e_toggle').textContent = key.disabled ? '启用' : '禁用';
+  renderJBControls('e_jbset','e', key.jb);
   updateEffectiveModelNote();
   document.getElementById('editKeyModal').style.display = 'flex';
 }
@@ -487,6 +571,7 @@ function saveKeyEdit() {
     name: document.getElementById('e_name').value.trim(),
     group: document.getElementById('e_group').value,
     allowed_models: models,
+    jb: readJBControls('e'),
     expires_at: expiry ? new Date(expiry).toISOString() : '',
     quota: {
       token_limit: parseInt(document.getElementById('e_quota').value)||0,
@@ -544,6 +629,8 @@ if (EMBEDDED) {
   } catch (e) {}
 }
 syncTheme();
+renderJBControls('f_jbset','f', {});
+renderJBControls('g_jbset','g', {});
 document.getElementById('f_price').value = localStorage.getItem('akTrafficPrice') || '';
 if (MGMT) { document.getElementById('login').style.display='none'; document.getElementById('main').style.display=''; load(); }
 document.getElementById('mgmtKey').addEventListener('keydown', e => { if (e.key==='Enter') login(); });

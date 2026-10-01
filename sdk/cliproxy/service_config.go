@@ -179,6 +179,13 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 	}
 
 	registrationCtx := coreauth.WithSkipPersist(ctx)
+
+	// Reload the JB engine before rebinding executors so freshly-registered
+	// OpenAI-compat executors see the latest wordlists/corpus/spec. Rebinding
+	// runs right below, so the same config pass updates both policy and
+	// executor wiring in one step.
+	s.reloadJBEngine(cfg)
+
 	s.syncPluginRuntimeConfigForConfig(registrationCtx, cfg)
 	if errContext := ctx.Err(); errContext != nil {
 		return false

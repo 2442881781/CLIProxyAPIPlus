@@ -12,6 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/homeplugins"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/jb"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/watcher"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/wsrelay"
@@ -105,11 +106,12 @@ type Service struct {
 	providerQuotaRefreshCancel  context.CancelFunc
 	providerQuotaRefreshDone    chan struct{}
 	providerQuotaRefreshRunning atomic.Bool
-
 	// pluginHost owns dynamic plugin lifecycle and runtime capability adapters.
 	pluginHost *pluginhost.Host
 
-	// shutdownOnce ensures shutdown is called only once.
+	// jbEngine is the shared JB transform engine, hot-reloaded on config
+	// changes and bound to each OpenAI-compat executor at registration.
+	jbEngine     *jb.Engine
 	shutdownOnce sync.Once
 
 	// wsGateway manages websocket Gemini providers.

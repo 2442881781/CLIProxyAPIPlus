@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -202,7 +203,7 @@ func executionPassthroughHeaders(cfg *config.SDKConfig, internal bool) bool {
 	return internal || PassthroughHeadersEnabled(cfg)
 }
 
-func requestExecutionMetadata(ctx context.Context) map[string]any {
+func requestExecutionMetadata(ctx context.Context, cfg *config.SDKConfig) map[string]any {
 	// Idempotency-Key is an optional client-supplied header used to correlate retries.
 	// Only include it if the client explicitly provides it.
 	key := ""
@@ -247,6 +248,26 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 		if rawAllowed, okAllowed := ginCtx.Get("accessAllowedAuths"); okAllowed {
 			meta[coreexecutor.AllowedAuthsMetadataKey] = rawAllowed
 		}
+		// Resolve the JB ceiling for this request. The auth middleware
+		// populated accessMetadata during authentication; a missing map
+		// means the request ran under a config key or no provider, so the
+		// global defaults apply directly.
+		var accessMeta map[string]string
+		if raw, ok := ginCtx.Get("accessMetadata"); ok {
+			switch m := raw.(type) {
+			case map[string]string:
+				accessMeta = m
+			case map[string]any:
+				accessMeta = make(map[string]string, len(m))
+				for k, v := range m {
+					if s, okCast := v.(string); okCast {
+						accessMeta[k] = s
+					}
+				}
+			}
+		}
+		snap := storeaccess.ResolveJB(cfg, accessMeta, ginCtx.Request.Header)
+		snap.InjectMetadata(meta)
 	}
 	if disallowFreeAuthFromContext(ctx) {
 		meta[coreexecutor.DisallowFreeAuthMetadataKey] = true
