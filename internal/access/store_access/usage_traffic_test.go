@@ -118,13 +118,13 @@ func TestTraffic_PeriodWindowResetsPeriodBytes(t *testing.T) {
 	// When the UTC month rolls over
 	// Then the period counter resets while the all-time total keeps growing
 	s, clk := newRateLimitTestStore(t)
-	s.now = clk.now
+	clk.t = time.Date(2026, time.October, 31, 23, 59, 59, 0, time.UTC)
 	entry, err := s.Create("sk-cpa-window", AccessKey{Name: "w", Quota: Quota{Period: "monthly"}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	s.RecordTraffic(entry.ID, TrafficEvent{InBytes: 100, OutBytes: 400})
-	clk.t = clk.t.Add(26 * 24 * time.Hour)
+	clk.t = clk.t.Add(time.Second)
 	s.RecordTraffic(entry.ID, TrafficEvent{InBytes: 10, OutBytes: 40})
 
 	got := s.Get(entry.ID)

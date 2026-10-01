@@ -134,6 +134,12 @@ CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-fo
 
 请参见 [MANAGEMENT_API_CN.md](https://help.router-for.me/cn/management/api)
 
+## 本地测试
+
+运行 `go test ./...` 前，请确认本机允许在所选物理网卡上发送和接收 mDNS 多播（UDP 5353）。`TestAdvertiserAndBrowser_Integration` 使用真实局域网，不是隔离的单元测试；VPN 路由或防火墙导致的 `sendmsg: no route to host` 会使发现失败。底层 zeroconf 库忽略发送错误，因此注册成功并不证明多播可达。
+
+月度流量窗口回归测试使用固定 UTC 月末和可控时钟；Home 旧连接关闭等待测试使用回环 IP，避免 go-redis 构造时的外部 DNS 查询干扰生命周期断言。
+
 ## 使用量统计
 
 自v6.10.0版本以后，CLIProxyAPI及 [CPAMC](https://github.com/router-for-me/Cli-Proxy-API-Management-Center) 项目不再预置数据统计功能，如果有数据统计需求的请使用以下项目：
