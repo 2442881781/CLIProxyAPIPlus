@@ -3,7 +3,7 @@ package storeaccess
 import (
 	"sort"
 
-	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 // KeyRateRow is one key's live throughput gauge for admin dashboards.

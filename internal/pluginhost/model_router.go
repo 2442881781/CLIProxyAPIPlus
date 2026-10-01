@@ -5,9 +5,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
-
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
 )
 

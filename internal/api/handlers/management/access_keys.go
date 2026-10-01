@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
 )
 
 func (h *Handler) accessKeyStore(c *gin.Context) *storeaccess.Store {

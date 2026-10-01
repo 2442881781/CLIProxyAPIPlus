@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
 // Feature: MCP server at /search/mcp (Streamable HTTP, stateless JSON responses)

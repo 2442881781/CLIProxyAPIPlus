@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
 )
 
 // Feature: self-service usage never reveals traffic (bandwidth) accounting.

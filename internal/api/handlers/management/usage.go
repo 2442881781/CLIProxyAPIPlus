@@ -9,10 +9,10 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	storeaccess "github.com/router-for-me/CLIProxyAPI/v7/internal/access/store_access"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
-	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 type usageQueueRecord []byte
