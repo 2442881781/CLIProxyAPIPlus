@@ -218,11 +218,12 @@ func (e *jbWiringExecutor) jbContinuation(snap storeaccess.JBSnapshot, payload [
 	return e.engine.ContinuationFor(payload, completionText, format)
 }
 
-// ExecuteStream runs the inner stream executor with injection. The buffered
-// refusal retry applies only when the inner executor's stream can be drained
-// before delivery; for safety, streaming requests get injection + the
-// disambig retry on connection errors, and refusal retry is skipped (the
-// compat executor's own buffered implementation covers that channel).
+// ExecuteStream runs the inner stream executor with injection, the cyber-400
+// disambig retry on connection errors, and — when refusal retry is enabled —
+// the buffered soft-refusal continuation retry: the first upstream stream is
+// drained fully before any byte reaches the client, classified, and either
+// replayed verbatim or replaced by one continuation response (design §4.5:
+// never stream half a refusal and then change course).
 func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	snap := e.jbSnapshotFor(opts)
 	state := jbWiringInitialToken(snap)
@@ -258,8 +259,95 @@ func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Aut
 		return result2, nil
 	}
 
-	result.Headers = jbSetState(result.Headers, state)
-	return result, nil
+	// Buffered refusal retry runs only when the key opted in. The stream is
+	// fully consumed before the client sees a byte, so TTFB becomes total
+	// upstream latency — the same tradeoff the non-streaming retry makes.
+	if !snap.RefusalRetry || e.engine == nil {
+		result.Headers = jbSetState(result.Headers, state)
+		return result, nil
+	}
+
+	format := jbSourceFormat(opts)
+	responseFormat := jbWiringResponseFormat(opts, format)
+
+	firstBuffered, assembled, failed := jbWiringDrain(result.Chunks, responseFormat)
+	if failed || !jb.IsSoftRefusal(assembled) {
+		headers := jbSetState(result.Headers, state)
+		return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringReplay(firstBuffered)}, nil
+	}
+
+	if cont := e.jbContinuation(snap, req.Payload, assembled, format); cont != nil {
+		log.WithFields(log.Fields{
+			"key_id": snap.KeyID, "provider": e.channelFor(auth),
+		}).Info("jb: stream soft refusal detected, retrying with continuation")
+		resp2, err2 := e.inner.Execute(ctx, auth, cliproxyexecutor.Request{
+			Model:   req.Model,
+			Payload: cont,
+			Format:  req.Format,
+		}, opts)
+		if err2 == nil && !jb.IsSoftRefusal(jb.CompletionText(resp2.Payload, responseFormat)) {
+			// The continuation delivered: emit it as a single non-stream
+			// payload chunk. The handler layer receives opts.Stream=true, but
+			// the source-format completion payload is what the client parser
+			// expects for a completed response in this format.
+			headers := jbSetState(resp2.Headers, jb.StateRetryWrote)
+			return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringSingleChunk(resp2.Payload)}, nil
+		}
+	}
+
+	// refusal stands (leak rule, no continuation, retry failed or still
+	// refused): the client receives the ORIGINAL refusal stream, never the
+	// retried output.
+	headers := jbSetState(result.Headers, jb.StateRefusalStands)
+	return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringReplay(firstBuffered)}, nil
+}
+
+// jbWiringDrain consumes one stream fully, buffering payloads and assembling
+// the assistant-visible text. It reports whether the stream failed mid-flight.
+func jbWiringDrain(chunks <-chan cliproxyexecutor.StreamChunk, responseFormat string) (buffered []cliproxyexecutor.StreamChunk, assembled string, failed bool) {
+	for chunk := range chunks {
+		if chunk.Err != nil {
+			failed = true
+			return
+		}
+		if len(chunk.Payload) > 0 {
+			buffered = append(buffered, cliproxyexecutor.StreamChunk{Payload: chunk.Payload})
+			assembled += jb.StreamFrameText(jbWiringFramePayload(chunk.Payload), responseFormat)
+		}
+	}
+	return
+}
+
+// jbWiringFramePayload strips a leading SSE "data:" marker when present so
+// StreamFrameText sees the JSON frame body.
+func jbWiringFramePayload(payload []byte) []byte {
+	if bytes.HasPrefix(payload, []byte("data: ")) {
+		return payload[len("data: "):]
+	}
+	if bytes.HasPrefix(payload, []byte("data:")) {
+		return payload[len("data:"):]
+	}
+	return payload
+}
+
+// jbWiringReplay turns buffered chunks into a replay channel.
+func jbWiringReplay(buffered []cliproxyexecutor.StreamChunk) <-chan cliproxyexecutor.StreamChunk {
+	out := make(chan cliproxyexecutor.StreamChunk, len(buffered)+1)
+	for _, chunk := range buffered {
+		out <- chunk
+	}
+	close(out)
+	return out
+}
+
+// jbWiringSingleChunk wraps one completed payload as a single-chunk stream.
+func jbWiringSingleChunk(payload []byte) <-chan cliproxyexecutor.StreamChunk {
+	out := make(chan cliproxyexecutor.StreamChunk, 1)
+	if len(payload) > 0 {
+		out <- cliproxyexecutor.StreamChunk{Payload: payload}
+	}
+	close(out)
+	return out
 }
 
 // channelFor resolves the wordlist channel for the wrapped provider.
