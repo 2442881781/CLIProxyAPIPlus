@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/constant"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/jb"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -194,8 +195,31 @@ func (s *Service) registerAvailableExecutors(ctx context.Context, opts executorR
 		s.registerExecutorsForAuths(opts.auths, opts.forceReplaceAuths)
 	}
 	if opts.includePlugins && s.pluginHost != nil {
-		registerPluginExecutors(s.pluginHost, s.coreManager)
+		registerPluginExecutors(s.pluginHost, &jbAwareExecutorManager{inner: s.coreManager, engine: s.jbEngine})
 	}
+}
+
+// jbAwareExecutorManager wraps plugin-registered executors with the JB state
+// machine at registration time, so plugin channels (commandcode, opencode-go,
+// ...) get the same injection/retry behavior as native ones.
+type jbAwareExecutorManager struct {
+	inner  pluginhost.ExecutorManager
+	engine *jb.Engine
+}
+
+func (m *jbAwareExecutorManager) Executor(provider string) (coreauth.ProviderExecutor, bool) {
+	return m.inner.Executor(provider)
+}
+
+func (m *jbAwareExecutorManager) UnregisterExecutor(provider string) {
+	m.inner.UnregisterExecutor(provider)
+}
+
+func (m *jbAwareExecutorManager) RegisterExecutor(exec coreauth.ProviderExecutor) {
+	if m == nil || m.inner == nil || exec == nil {
+		return
+	}
+	m.inner.RegisterExecutor(executor.NewJBWiringExecutor(exec, m.engine))
 }
 
 func baselineExecutorAuths() []*coreauth.Auth {
@@ -253,13 +277,13 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 		if !forceReplace {
 			existingExecutor, hasExecutor := s.coreManager.Executor("codex")
 			if hasExecutor {
-				_, isCodexAutoExecutor := existingExecutor.(*executor.CodexAutoExecutor)
+				_, isCodexAutoExecutor := executor.UnwrapJBWiringExecutor(existingExecutor).(*executor.CodexAutoExecutor)
 				if isCodexAutoExecutor {
 					return
 				}
 			}
 		}
-		s.coreManager.RegisterExecutor(executor.NewCodexAutoExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewCodexAutoExecutor(cfg), s.jbEngine))
 		return
 	}
 	// Skip disabled auth entries when (re)binding executors.
@@ -280,37 +304,37 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 	}
 	switch strings.ToLower(a.Provider) {
 	case constant.Gemini:
-		s.coreManager.RegisterExecutor(executor.NewGeminiExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewGeminiExecutor(cfg), s.jbEngine))
 	case constant.GeminiInteractions:
-		s.coreManager.RegisterExecutor(executor.NewGeminiInteractionsExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewGeminiInteractionsExecutor(cfg), s.jbEngine))
 	case "vertex":
-		s.coreManager.RegisterExecutor(executor.NewGeminiVertexExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewGeminiVertexExecutor(cfg), s.jbEngine))
 	case "aistudio":
 		if s.wsGateway != nil {
-			s.coreManager.RegisterExecutor(executor.NewAIStudioExecutor(cfg, a.ID, s.wsGateway))
+			s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewAIStudioExecutor(cfg, a.ID, s.wsGateway), s.jbEngine))
 		}
 		return
 	case "antigravity":
-		s.coreManager.RegisterExecutor(executor.NewAntigravityExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewAntigravityExecutor(cfg), s.jbEngine))
 	case "claude":
-		s.coreManager.RegisterExecutor(executor.NewClaudeExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewClaudeExecutor(cfg), s.jbEngine))
 	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
-		s.coreManager.RegisterExecutor(executor.NewKimiExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewKimiExecutor(cfg), s.jbEngine))
 	case "xai":
 		if !forceReplace {
 			existingExecutor, hasExecutor := s.coreManager.Executor("xai")
 			if hasExecutor {
-				existingXAIAutoExecutor, isXAIAutoExecutor := existingExecutor.(*executor.XAIAutoExecutor)
+				existingXAIAutoExecutor, isXAIAutoExecutor := executor.UnwrapJBWiringExecutor(existingExecutor).(*executor.XAIAutoExecutor)
 				if isXAIAutoExecutor && existingXAIAutoExecutor.UsesConfig(cfg) {
 					return
 				}
 			}
 		}
-		s.coreManager.RegisterExecutor(executor.NewXAIAutoExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewXAIAutoExecutor(cfg), s.jbEngine))
 	case "devin":
-		s.coreManager.RegisterExecutor(executor.NewDevinExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewDevinExecutor(cfg), s.jbEngine))
 	case "meta":
-		s.coreManager.RegisterExecutor(executor.NewMetaExecutor(cfg))
+		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewMetaExecutor(cfg), s.jbEngine))
 	default:
 		providerKey := strings.ToLower(strings.TrimSpace(a.Provider))
 		if providerKey == "" {

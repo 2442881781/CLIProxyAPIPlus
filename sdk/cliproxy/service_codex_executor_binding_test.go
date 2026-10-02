@@ -155,7 +155,7 @@ func TestEnsureExecutorsForAuth_XAIDoesNotReplaceInNormalMode(t *testing.T) {
 	if !okFirst || firstExecutor == nil {
 		t.Fatal("expected xai executor after first bind")
 	}
-	if _, isXAIAutoExecutor := firstExecutor.(*executor.XAIAutoExecutor); !isXAIAutoExecutor {
+	if _, isXAIAutoExecutor := executor.UnwrapJBWiringExecutor(firstExecutor).(*executor.XAIAutoExecutor); !isXAIAutoExecutor {
 		t.Fatalf("xai executor type = %T, want *executor.XAIAutoExecutor", firstExecutor)
 	}
 
@@ -194,7 +194,7 @@ func TestEnsureExecutorsForAuthWithMode_XAIForceReplace(t *testing.T) {
 	if firstExecutor == secondExecutor {
 		t.Fatal("expected xai executor replacement in force mode")
 	}
-	if _, isXAIAutoExecutor := secondExecutor.(*executor.XAIAutoExecutor); !isXAIAutoExecutor {
+	if _, isXAIAutoExecutor := executor.UnwrapJBWiringExecutor(secondExecutor).(*executor.XAIAutoExecutor); !isXAIAutoExecutor {
 		t.Fatalf("xai executor type = %T, want *executor.XAIAutoExecutor", secondExecutor)
 	}
 }
@@ -231,7 +231,7 @@ func TestEnsureExecutorsForAuth_XAIReplacesExecutorAfterConfigUpdate(t *testing.
 	if firstExecutor == secondExecutor {
 		t.Fatal("expected stale xai executor replacement after config update")
 	}
-	if _, isXAIAutoExecutor := secondExecutor.(*executor.XAIAutoExecutor); !isXAIAutoExecutor {
+	if _, isXAIAutoExecutor := executor.UnwrapJBWiringExecutor(secondExecutor).(*executor.XAIAutoExecutor); !isXAIAutoExecutor {
 		t.Fatalf("xai executor type = %T, want *executor.XAIAutoExecutor", secondExecutor)
 	}
 }
