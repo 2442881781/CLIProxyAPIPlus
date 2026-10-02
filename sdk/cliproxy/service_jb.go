@@ -36,6 +36,29 @@ func (s *Service) reloadJBEngine(cfg *config.Config) {
 	}
 }
 
+// ensureJBEngine lazily creates the shared JB engine when executor
+// registration runs before any config apply (boot, plugin commits, auth
+// events). Without it, decorated executors registered before the first apply
+// would capture a nil engine permanently. Callers must not hold
+// configRuntimeMu: the config-apply path already created the engine and takes
+// the fast path here.
+func (s *Service) ensureJBEngine() {
+	if s == nil || s.jbEngine != nil {
+		return
+	}
+	s.configRuntimeMu.Lock()
+	defer s.configRuntimeMu.Unlock()
+	if s.jbEngine != nil {
+		return
+	}
+	s.cfgMu.RLock()
+	cfg := s.cfg
+	s.cfgMu.RUnlock()
+	if cfg != nil {
+		s.reloadJBEngine(cfg)
+	}
+}
+
 // jbAssetPollInterval bounds how quickly an edit to a corpus/spec/wordlist
 // file takes effect. The config watcher only observes config.yaml and the
 // auth directory, so asset-only edits need their own poller.

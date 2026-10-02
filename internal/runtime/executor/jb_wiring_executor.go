@@ -92,6 +92,63 @@ func (e *jbWiringExecutor) HttpRequest(ctx context.Context, auth *coreauth.Auth,
 	return e.inner.HttpRequest(ctx, auth, req)
 }
 
+// The manager and the plugin host assert optional interfaces on the
+// *registered* executor (sdk/cliproxy/auth/conductor*.go, internal/pluginhost).
+// Decorating an executor must not hide the capabilities it advertises, so every
+// optional interface inspected at registration level is forwarded below.
+
+// PrepareRequest forwards credential injection to the wrapped executor. The
+// manager reports not_supported for executors without RequestPreparer support,
+// so the same error is produced when the inner executor cannot prepare.
+func (e *jbWiringExecutor) PrepareRequest(req *http.Request, auth *coreauth.Auth) error {
+	if preparer, ok := e.inner.(coreauth.RequestPreparer); ok && preparer != nil {
+		return preparer.PrepareRequest(req, auth)
+	}
+	return &coreauth.Error{Code: "not_supported", Message: "executor does not support http request preparation"}
+}
+
+// ShouldPrepareRequestAuth reports whether the wrapped executor wants to
+// refresh auth metadata immediately before a request.
+func (e *jbWiringExecutor) ShouldPrepareRequestAuth(auth *coreauth.Auth) bool {
+	if preparer, ok := e.inner.(coreauth.RequestAuthPreparer); ok && preparer != nil {
+		return preparer.ShouldPrepareRequestAuth(auth)
+	}
+	return false
+}
+
+// PrepareRequestAuth forwards pre-request auth preparation to the wrapped
+// executor.
+func (e *jbWiringExecutor) PrepareRequestAuth(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	if preparer, ok := e.inner.(coreauth.RequestAuthPreparer); ok && preparer != nil {
+		return preparer.PrepareRequestAuth(ctx, auth)
+	}
+	return auth, nil
+}
+
+// CloseExecutionSession forwards session cleanup to the wrapped executor.
+func (e *jbWiringExecutor) CloseExecutionSession(sessionID string) {
+	if closer, ok := e.inner.(coreauth.ExecutionSessionCloser); ok && closer != nil {
+		closer.CloseExecutionSession(sessionID)
+	}
+}
+
+// RequestToFormat forwards the executor's preferred upstream format; an empty
+// result keeps the manager's default format resolution.
+func (e *jbWiringExecutor) RequestToFormat(req cliproxyexecutor.Request, opts cliproxyexecutor.Options) sdktranslator.Format {
+	if resolver, ok := e.inner.(interface {
+		RequestToFormat(cliproxyexecutor.Request, cliproxyexecutor.Options) sdktranslator.Format
+	}); ok && resolver != nil {
+		return resolver.RequestToFormat(req, opts)
+	}
+	return ""
+}
+
+// UnwrapExecutor exposes the decorated executor so identity checks (for
+// example the plugin host's ownership test) reach it through the wrapper.
+func (e *jbWiringExecutor) UnwrapExecutor() coreauth.ProviderExecutor {
+	return e.inner
+}
+
 // jbSnapshotFor returns the resolved snapshot for a request, or the zero
 // snapshot (all off) when JB is not enabled.
 func (e *jbWiringExecutor) jbSnapshotFor(opts cliproxyexecutor.Options) storeaccess.JBSnapshot {
@@ -109,9 +166,6 @@ func (e *jbWiringExecutor) injectRequest(req cliproxyexecutor.Request, opts clip
 		req.Payload = e.engine.InjectSystemFor(req.Payload, model, format, true)
 	} else {
 		req.Payload = e.engine.InjectSystemFor(req.Payload, model, format, false)
-	}
-	if len(opts.OriginalRequest) > 0 && bytes.Equal(opts.OriginalRequest, req.Payload) {
-		// nothing changed; leave as-is
 	}
 	return req
 }
@@ -280,18 +334,28 @@ func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Aut
 		log.WithFields(log.Fields{
 			"key_id": snap.KeyID, "provider": e.channelFor(auth),
 		}).Info("jb: stream soft refusal detected, retrying with continuation")
-		resp2, err2 := e.inner.Execute(ctx, auth, cliproxyexecutor.Request{
+		// The retry is a real upstream stream so the client receives the frame
+		// shapes a normal stream delivers (deltas and terminal events), never a
+		// lone non-stream completion body.
+		retryResult, errRetry := e.inner.ExecuteStream(ctx, auth, cliproxyexecutor.Request{
 			Model:   req.Model,
 			Payload: cont,
 			Format:  req.Format,
 		}, opts)
-		if err2 == nil && !jb.IsSoftRefusal(jb.CompletionText(resp2.Payload, responseFormat)) {
-			// The continuation delivered: emit it as a single non-stream
-			// payload chunk. The handler layer receives opts.Stream=true, but
-			// the source-format completion payload is what the client parser
-			// expects for a completed response in this format.
-			headers := jbSetState(resp2.Headers, jb.StateRetryWrote)
-			return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringSingleChunk(resp2.Payload)}, nil
+		if errRetry == nil && retryResult != nil {
+			retryBuffered, retryText, retryFailed := jbWiringDrain(retryResult.Chunks, responseFormat)
+			if !retryFailed && !jb.IsSoftRefusal(retryText) {
+				headers := retryResult.Headers
+				if headers == nil {
+					headers = result.Headers
+				}
+				headers = jbSetState(headers, jb.StateRetryWrote)
+				jbWiringLogRetryBilled(ctx, e.inner, []byte(assembled), []byte(retryText))
+				return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringReplay(retryBuffered)}, nil
+			}
+			// The retried stream failed or refused again; the discarded attempt
+			// is still billed upstream.
+			jbWiringLogRetryBilled(ctx, e.inner, []byte(retryText), nil)
 		}
 	}
 
@@ -302,16 +366,23 @@ func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Aut
 	return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringReplay(firstBuffered)}, nil
 }
 
-// jbWiringDrain consumes one stream fully, buffering payloads and assembling
-// the assistant-visible text. It reports whether the stream failed mid-flight.
+// jbWiringDrain consumes one stream fully, buffering every chunk and
+// assembling the assistant-visible text. A mid-stream error frame is buffered
+// too, so a replayed stream still surfaces the failure instead of ending as a
+// silent truncation; text assembling stops at the first failure.
 func jbWiringDrain(chunks <-chan cliproxyexecutor.StreamChunk, responseFormat string) (buffered []cliproxyexecutor.StreamChunk, assembled string, failed bool) {
+	if chunks == nil {
+		return nil, "", false
+	}
 	for chunk := range chunks {
 		if chunk.Err != nil {
 			failed = true
-			return
 		}
-		if len(chunk.Payload) > 0 {
-			buffered = append(buffered, cliproxyexecutor.StreamChunk{Payload: chunk.Payload})
+		if len(chunk.Payload) == 0 && chunk.Err == nil {
+			continue
+		}
+		buffered = append(buffered, chunk)
+		if !failed && len(chunk.Payload) > 0 {
 			assembled += jb.StreamFrameText(jbWiringFramePayload(chunk.Payload), responseFormat)
 		}
 	}
@@ -335,16 +406,6 @@ func jbWiringReplay(buffered []cliproxyexecutor.StreamChunk) <-chan cliproxyexec
 	out := make(chan cliproxyexecutor.StreamChunk, len(buffered)+1)
 	for _, chunk := range buffered {
 		out <- chunk
-	}
-	close(out)
-	return out
-}
-
-// jbWiringSingleChunk wraps one completed payload as a single-chunk stream.
-func jbWiringSingleChunk(payload []byte) <-chan cliproxyexecutor.StreamChunk {
-	out := make(chan cliproxyexecutor.StreamChunk, 1)
-	if len(payload) > 0 {
-		out <- cliproxyexecutor.StreamChunk{Payload: payload}
 	}
 	close(out)
 	return out

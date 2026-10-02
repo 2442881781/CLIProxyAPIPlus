@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -303,5 +304,136 @@ func TestJBWiring_ClaudeFormatInjectionAndRetry(t *testing.T) {
 	}
 	if got := resp.Headers.Get(jb.HeaderName); got != string(jb.StateDisambigRetry) {
 		t.Fatalf("X-JB = %q, want %q", got, jb.StateDisambigRetry)
+	}
+}
+
+// capableJBInner implements the optional interfaces the manager and plugin
+// host assert on a registered executor.
+type capableJBInner struct {
+	fakeJBInner
+	preparedReq     *http.Request
+	preparedAuth    *coreauth.Auth
+	shouldPrepare   bool
+	preparedUpdated *coreauth.Auth
+	closedSession   string
+	formatTo        sdktranslator.Format
+}
+
+func (c *capableJBInner) PrepareRequest(req *http.Request, auth *coreauth.Auth) error {
+	c.preparedReq = req
+	c.preparedAuth = auth
+	return nil
+}
+
+func (c *capableJBInner) ShouldPrepareRequestAuth(auth *coreauth.Auth) bool {
+	return c.shouldPrepare
+}
+
+func (c *capableJBInner) PrepareRequestAuth(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	return c.preparedUpdated, nil
+}
+
+func (c *capableJBInner) CloseExecutionSession(sessionID string) {
+	c.closedSession = sessionID
+}
+
+func (c *capableJBInner) RequestToFormat(req cliproxyexecutor.Request, opts cliproxyexecutor.Options) sdktranslator.Format {
+	return c.formatTo
+}
+
+func TestJBWiring_OptionalInterfacesForwarded(t *testing.T) {
+	engine := newJBWiringTestEngine(t)
+	inner := &capableJBInner{
+		fakeJBInner:     fakeJBInner{provider: "fake"},
+		shouldPrepare:   true,
+		preparedUpdated: &coreauth.Auth{ID: "updated"},
+		formatTo:        sdktranslator.FormatClaude,
+	}
+	wrapped := NewJBWiringExecutor(inner, engine)
+
+	preparer, okPrepare := wrapped.(coreauth.RequestPreparer)
+	if !okPrepare {
+		t.Fatal("decorated executor must satisfy RequestPreparer")
+	}
+	req, errReq := http.NewRequest(http.MethodPost, "https://upstream.example", nil)
+	if errReq != nil {
+		t.Fatal(errReq)
+	}
+	if err := preparer.PrepareRequest(req, nil); err != nil {
+		t.Fatalf("PrepareRequest: %v", err)
+	}
+	if inner.preparedReq != req {
+		t.Fatal("PrepareRequest must reach the wrapped executor")
+	}
+
+	authPreparer, okAuth := wrapped.(coreauth.RequestAuthPreparer)
+	if !okAuth {
+		t.Fatal("decorated executor must satisfy RequestAuthPreparer")
+	}
+	if !authPreparer.ShouldPrepareRequestAuth(nil) {
+		t.Fatal("ShouldPrepareRequestAuth must be forwarded")
+	}
+	updated, errPrepare := authPreparer.PrepareRequestAuth(context.Background(), nil)
+	if errPrepare != nil || updated == nil || updated.ID != "updated" {
+		t.Fatalf("PrepareRequestAuth must return the wrapped result, got %v %v", updated, errPrepare)
+	}
+
+	closer, okClose := wrapped.(coreauth.ExecutionSessionCloser)
+	if !okClose {
+		t.Fatal("decorated executor must satisfy ExecutionSessionCloser")
+	}
+	closer.CloseExecutionSession("session-1")
+	if inner.closedSession != "session-1" {
+		t.Fatal("CloseExecutionSession must be forwarded")
+	}
+
+	resolver, okResolver := wrapped.(interface {
+		RequestToFormat(cliproxyexecutor.Request, cliproxyexecutor.Options) sdktranslator.Format
+	})
+	if !okResolver {
+		t.Fatal("decorated executor must satisfy the format resolver")
+	}
+	if got := resolver.RequestToFormat(cliproxyexecutor.Request{}, cliproxyexecutor.Options{}); got != sdktranslator.FormatClaude {
+		t.Fatalf("RequestToFormat = %q, want %q", got, sdktranslator.FormatClaude)
+	}
+
+	unwrapper, okUnwrap := wrapped.(interface {
+		UnwrapExecutor() coreauth.ProviderExecutor
+	})
+	if !okUnwrap || unwrapper.UnwrapExecutor() != coreauth.ProviderExecutor(inner) {
+		t.Fatal("UnwrapExecutor must expose the wrapped executor")
+	}
+}
+
+func TestJBWiring_OptionalInterfacesDegradeWithoutInnerSupport(t *testing.T) {
+	engine := newJBWiringTestEngine(t)
+	inner := &fakeJBInner{provider: "fake"}
+	wrapped := NewJBWiringExecutor(inner, engine)
+
+	preparer, okPrepare := wrapped.(coreauth.RequestPreparer)
+	if !okPrepare {
+		t.Fatal("decorated executor must satisfy RequestPreparer")
+	}
+	prepErr := preparer.PrepareRequest(&http.Request{}, nil)
+	var apiErr *coreauth.Error
+	if !errors.As(prepErr, &apiErr) || apiErr.Code != "not_supported" {
+		t.Fatalf("unsupported PrepareRequest must report not_supported, got %v", prepErr)
+	}
+
+	authPreparer := wrapped.(coreauth.RequestAuthPreparer)
+	if authPreparer.ShouldPrepareRequestAuth(nil) {
+		t.Fatal("ShouldPrepareRequestAuth must be false without inner support")
+	}
+	if _, err := authPreparer.PrepareRequestAuth(context.Background(), nil); err != nil {
+		t.Fatalf("PrepareRequestAuth must be a no-op without inner support: %v", err)
+	}
+
+	wrapped.(coreauth.ExecutionSessionCloser).CloseExecutionSession("s")
+
+	resolver := wrapped.(interface {
+		RequestToFormat(cliproxyexecutor.Request, cliproxyexecutor.Options) sdktranslator.Format
+	})
+	if got := resolver.RequestToFormat(cliproxyexecutor.Request{}, cliproxyexecutor.Options{}); got != "" {
+		t.Fatalf("RequestToFormat must be empty without inner support, got %q", got)
 	}
 }
