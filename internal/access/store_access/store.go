@@ -903,7 +903,12 @@ func (s *Store) UpsertGroup(grp Group) (*Group, error) {
 		existing.MaxConcurrency = grp.MaxConcurrency
 		existing.RateLimitRPM = grp.RateLimitRPM
 		existing.PerKeyLimits = grp.PerKeyLimits
-		existing.JB = grp.JB
+		// JB prefs follow patch semantics, not replace: callers that predate the
+		// field (or simply omit it) must not wipe stored settings. Send an empty
+		// object to clear the group's JB layer back to inherit.
+		if grp.JB != nil {
+			existing.JB = grp.JB
+		}
 		existing.UpdatedAt = now
 	} else {
 		existing = &Group{Name: grp.Name, CreatedAt: now}

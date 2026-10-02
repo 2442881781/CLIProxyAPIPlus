@@ -146,3 +146,42 @@ func TestJBSnapshot_RoundTripMetadata(t *testing.T) {
 		t.Fatalf("snapshot lost fields: %+v", got)
 	}
 }
+
+func TestUpsertGroup_JBOmittedLeavesStoredLayerUntouched(t *testing.T) {
+	// Clients that predate the jb field (or simply omit it) must not wipe a
+	// group's stored JB layer; only an explicit object replaces it.
+	s, err := Configure(t.TempDir())
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	on := true
+	if _, err := s.UpsertGroup(Group{Name: "infra", JB: &config.JBPrefs{JB: &on}}); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	// A later PUT without jb keeps the stored layer.
+	if _, err := s.UpsertGroup(Group{Name: "infra", AllowedModels: []string{"gpt-*"}}); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	grp := s.GetGroup("infra")
+	if grp == nil || grp.JB == nil || grp.JB.JB == nil || !*grp.JB.JB {
+		t.Fatalf("omitted jb must preserve the stored layer, got %+v", grp)
+	}
+
+	// An explicit empty object clears the layer back to inherit.
+	if _, err := s.UpsertGroup(Group{Name: "infra", JB: &config.JBPrefs{}}); err != nil {
+		t.Fatalf("clear group jb: %v", err)
+	}
+	grp = s.GetGroup("infra")
+	if grp == nil || grp.JB == nil || grp.JB.JB != nil {
+		t.Fatalf("empty jb object must clear the layer, got %+v", grp)
+	}
+
+	// The peer group stays independent.
+	if _, err := s.UpsertGroup(Group{Name: "other"}); err != nil {
+		t.Fatalf("create other group: %v", err)
+	}
+	if other := s.GetGroup("other"); other == nil || other.JB != nil {
+		t.Fatalf("fresh group must start with no jb layer, got %+v", other)
+	}
+}

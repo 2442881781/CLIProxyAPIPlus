@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import { Sheet } from '@/components/ui/Sheet/Sheet';
-import type { AccessAuthItem, AccessGroup, RateLimitSpec } from '@/types';
+import type { AccessAuthItem, AccessGroup, JBPreferences, RateLimitSpec } from '@/types';
 import type { AccessGroupPayload } from '@/services/api/accessControl';
 import { ModelAllowlistPicker } from './ModelAllowlistPicker';
 import styles from './AccessGroupsPage.module.scss';
@@ -30,6 +31,10 @@ interface FormState {
   perKeyRpd: string;
   perKeyConcurrency: string;
   allowedAuths: string[];
+  jb: string;
+  nsfw: string;
+  disambig: string;
+  refusalRetry: string;
 }
 
 const emptyForm: FormState = {
@@ -42,11 +47,33 @@ const emptyForm: FormState = {
   perKeyRpd: '',
   perKeyConcurrency: '',
   allowedAuths: [],
+  jb: '',
+  nsfw: '',
+  disambig: '',
+  refusalRetry: '',
+};
+
+// Tri-state mapping between the tri-state selects ('' | 'on' | 'off') and the
+// server-side optional booleans (absent = inherit).
+const jbPreferences = (form: FormState): JBPreferences => {
+  const out: JBPreferences = {};
+  const pairs: Array<[keyof JBPreferences, string]> = [
+    ['jb', form.jb],
+    ['nsfw', form.nsfw],
+    ['disambig', form.disambig],
+    ['refusal-retry', form.refusalRetry],
+  ];
+  for (const [key, state] of pairs) {
+    if (state === 'on') out[key] = true;
+    else if (state === 'off') out[key] = false;
+  }
+  return out;
 };
 
 const formFromGroup = (group: AccessGroup | null): FormState => {
   if (!group) return emptyForm;
   const pk = group.perKeyLimits;
+  const jb = group.jb ?? {};
   const num = (v: number) => (v > 0 ? String(v) : '');
   return {
     name: group.name,
@@ -58,6 +85,10 @@ const formFromGroup = (group: AccessGroup | null): FormState => {
     perKeyRpd: num(pk.rpd),
     perKeyConcurrency: num(pk.maxConcurrency),
     allowedAuths: [...group.allowedAuths],
+    jb: jb.jb === true ? 'on' : jb.jb === false ? 'off' : '',
+    nsfw: jb.nsfw === true ? 'on' : jb.nsfw === false ? 'off' : '',
+    disambig: jb.disambig === true ? 'on' : jb.disambig === false ? 'off' : '',
+    refusalRetry: jb['refusal-retry'] === true ? 'on' : jb['refusal-retry'] === false ? 'off' : '',
   };
 };
 
@@ -119,6 +150,7 @@ export function GroupEditSheet({
       maxConcurrency: toInt(form.maxConcurrency),
       rateLimitRpm: toInt(form.rateLimitRpm),
       perKeyLimits,
+      jb: jbPreferences(form),
     });
   };
 
@@ -195,6 +227,36 @@ export function GroupEditSheet({
             {numberField('perKeyTpm', t('access_groups.field_tpm'))}
             {numberField('perKeyRpd', t('access_groups.field_rpd'))}
             {numberField('perKeyConcurrency', t('access_groups.field_key_concurrency'))}
+          </div>
+        </fieldset>
+
+        <fieldset className={styles.fieldset}>
+          <legend className={styles.label}>{t('access_groups.field_jb')}</legend>
+          <span className={styles.hint}>{t('access_groups.field_jb_hint')}</span>
+          <div className={styles.gridTwo}>
+            {(
+              [
+                ['jb', t('access_groups.jb_jb')],
+                ['nsfw', t('access_groups.jb_nsfw')],
+                ['disambig', t('access_groups.jb_disambig')],
+                ['refusalRetry', t('access_groups.jb_refusal_retry')],
+              ] as Array<[keyof FormState, string]>
+            ).map(([key, label]) => (
+              <div className={styles.field} key={key}>
+                <label className={styles.label}>{label}</label>
+                <Select
+                  value={form[key] as string}
+                  options={[
+                    { value: '', label: t('access_groups.jb_inherit') },
+                    { value: 'on', label: t('access_groups.jb_on') },
+                    { value: 'off', label: t('access_groups.jb_off') },
+                  ]}
+                  onChange={(value) => patch({ [key]: value } as Partial<FormState>)}
+                  disabled={mutating}
+                  size="sm"
+                />
+              </div>
+            ))}
           </div>
         </fieldset>
 
