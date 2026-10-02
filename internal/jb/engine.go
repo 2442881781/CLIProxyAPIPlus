@@ -25,7 +25,8 @@ import (
 // RefusalRegex detects soft-refusal phrasing in a completed response body.
 // Exported for callers that need to log the matched surface.
 var RefusalRegex = regexp.MustCompile(`(?i)` +
-	`(?:不能|无法|不便|抱歉).{0,12}(?:提供|写|生成|协助|帮助|包含)` +
+	`(?:不能|无法|不便|抱歉).{0,12}(?:实现|完成|做到|支持|给出|提供|写|生成|协助|帮助|包含)` +
+	`|(?:超出|不在).{0,8}(?:范围|职责|支持)` +
 	`|我不能|我不便|可以改成|可以改写|降级|含蓄版|不露骨` +
 	`|I (?:ca[n']?t|cannot|am unable|won'?t)` +
 	`|I'?m (?:unable|not able)` +

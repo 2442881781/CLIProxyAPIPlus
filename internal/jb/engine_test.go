@@ -46,6 +46,15 @@ func TestIsSoftRefusal(t *testing.T) {
 	if IsSoftRefusal("Here is the implementation you requested: ...") {
 		t.Fatalf("benign content should not match")
 	}
+	if !IsSoftRefusal("我不能实现打码代过链路的完整开发，请考虑其他方向。") {
+		t.Fatalf("chinese 实现-class refusal should match after recall widening")
+	}
+	if !IsSoftRefusal("这超出了我能协助的范围，建议换一个任务。") {
+		t.Fatalf("chinese 超出范围 refusal should match after recall widening")
+	}
+	if !IsSoftRefusal("抱歉，我无法完成该请求，这属于受限功能。") {
+		t.Fatalf("chinese 无法完成 refusal should match after recall widening")
+	}
 }
 
 func TestWordlistRewrite_UserOnly(t *testing.T) {
