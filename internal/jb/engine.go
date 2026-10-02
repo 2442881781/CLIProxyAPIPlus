@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -154,6 +155,10 @@ func (e *Engine) AssetSignature() string {
 	for _, path := range e.sdkCfg.JB.Wordlists {
 		paths = append(paths, path)
 	}
+	// Wordlists come from a map, so the raw order is random per call; sorting
+	// keeps the signature stable while files are unchanged, otherwise the
+	// asset poller would see a "change" on every tick.
+	sort.Strings(paths)
 	var b strings.Builder
 	for _, path := range paths {
 		path = strings.TrimSpace(path)

@@ -328,3 +328,29 @@ func TestInjectNarrative_OrdersSpecCorpusOMN(t *testing.T) {
 		t.Fatalf("expected spec < corpus < omn order, got %d/%d/%d", specAt, corpusAt, omnAt)
 	}
 }
+
+func TestAssetSignature_StableAcrossCalls(t *testing.T) {
+	// Regression: the wordlist map iterates in random order, so an unsorted
+	// signature made the production asset poller "detect" a change on every
+	// tick and reload in a loop.
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.yaml")
+	b := filepath.Join(dir, "b.yaml")
+	for path, body := range map[string]string{a: "entries: []\n", b: "entries: []\n"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &config.SDKConfig{}
+	cfg.JB.Wordlists = map[string]string{"openai": a, "zhipu": b}
+	engine := NewEngine(cfg, dir)
+	if err := engine.Load(); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	first := engine.AssetSignature()
+	for i := 0; i < 50; i++ {
+		if got := engine.AssetSignature(); got != first {
+			t.Fatalf("signature must be deterministic while files are unchanged (iteration %d)", i)
+		}
+	}
+}
