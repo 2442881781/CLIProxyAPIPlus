@@ -42,7 +42,7 @@ type executorRegistrationOptions struct {
 	auths             []*coreauth.Auth
 }
 
-var registerPluginExecutors = func(host *pluginhost.Host, manager *coreauth.Manager) {
+var registerPluginExecutors = func(host *pluginhost.Host, manager pluginhost.ExecutorManager) {
 	if host == nil || manager == nil {
 		return
 	}

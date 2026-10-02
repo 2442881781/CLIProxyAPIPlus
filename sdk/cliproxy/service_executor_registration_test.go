@@ -46,13 +46,13 @@ func TestRegisterAvailableExecutors(t *testing.T) {
 	pluginRegisterCalls := 0
 	var expectedPluginHost *pluginhost.Host
 	var expectedManager *coreauth.Manager
-	registerPluginExecutors = func(host *pluginhost.Host, manager *coreauth.Manager) {
+	registerPluginExecutors = func(host *pluginhost.Host, manager pluginhost.ExecutorManager) {
 		pluginRegisterCalls++
 		if host != expectedPluginHost {
 			t.Fatalf("plugin executor registration host = %p, want %p", host, expectedPluginHost)
 		}
-		if manager != expectedManager {
-			t.Fatalf("plugin executor registration manager = %p, want %p", manager, expectedManager)
+		if wrapper, okCast := manager.(*jbAwareExecutorManager); !okCast || wrapper.inner != expectedManager {
+			t.Fatalf("plugin executor registration manager = %T, want jbAwareExecutorManager around %p", manager, expectedManager)
 		}
 		manager.RegisterExecutor(serviceTestPluginExecutor{})
 	}
@@ -102,7 +102,12 @@ func TestRegisterAvailableExecutors(t *testing.T) {
 
 	resolved, _ := service.coreManager.Executor("plugin-provider")
 	if _, isPlugin := resolved.(serviceTestPluginExecutor); !isPlugin {
-		t.Fatalf("executor type = %T, want serviceTestPluginExecutor", resolved)
+		// Plugin executors are wrapped by the JB decorator at registration;
+		// unwrap and verify the inner adapter is still the plugin executor.
+		unwrapped := runtimeexecutor.UnwrapJBWiringExecutor(resolved)
+		if _, isPlugin = unwrapped.(serviceTestPluginExecutor); !isPlugin {
+			t.Fatalf("executor type = %T, want serviceTestPluginExecutor (unwrapped: %T)", resolved, unwrapped)
+		}
 	}
 }
 
@@ -166,7 +171,7 @@ func TestRegisterExecutorForAuth_OpenAICompatUsesNamespacedProviderKey(t *testin
 			if !okNative {
 				t.Fatal("expected native kimi executor")
 			}
-			if _, okKimi := nativeExecutor.(*runtimeexecutor.KimiExecutor); !okKimi {
+			if _, okKimi := runtimeexecutor.UnwrapJBWiringExecutor(nativeExecutor).(*runtimeexecutor.KimiExecutor); !okKimi {
 				t.Fatalf("native executor type = %T, want *executor.KimiExecutor", nativeExecutor)
 			}
 

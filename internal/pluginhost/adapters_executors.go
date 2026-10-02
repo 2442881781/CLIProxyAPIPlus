@@ -21,7 +21,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type executorManager interface {
+// ExecutorManager is the registration surface RegisterExecutors needs.
+type ExecutorManager interface {
 	Executor(provider string) (coreauth.ProviderExecutor, bool)
 	RegisterExecutor(coreauth.ProviderExecutor)
 	UnregisterExecutor(provider string)
@@ -38,7 +39,7 @@ type executorRegistration struct {
 	staticCandidate bool
 }
 
-func (h *Host) RegisterExecutors(manager executorManager, modelRegistry modelProviderRegistry) {
+func (h *Host) RegisterExecutors(manager ExecutorManager, modelRegistry modelProviderRegistry) {
 	if h == nil || manager == nil {
 		return
 	}
@@ -131,7 +132,7 @@ func pluginExecutorModelClientID(pluginID, provider string) string {
 	return "plugin:" + pluginID + ":" + provider + ":executor"
 }
 
-func (h *Host) commitExecutorState(ctx context.Context, snap *Snapshot, manager executorManager, modelRegistry modelRegistry, providerModels map[string][]*registry.ModelInfo, registrations []executorRegistration, nextProviders map[string]struct{}, modelClientRegistrations []modelClientRegistration, nextModelClients map[string]struct{}) {
+func (h *Host) commitExecutorState(ctx context.Context, snap *Snapshot, manager ExecutorManager, modelRegistry modelRegistry, providerModels map[string][]*registry.ModelInfo, registrations []executorRegistration, nextProviders map[string]struct{}, modelClientRegistrations []modelClientRegistration, nextModelClients map[string]struct{}) {
 	if h == nil || manager == nil {
 		return
 	}
@@ -304,7 +305,7 @@ func (h *Host) callExecutorIdentifier(pluginID string, executor pluginapi.Provid
 	return executor.Identifier(), true
 }
 
-func (h *Host) providerHasNativeExecutor(manager executorManager, provider string) bool {
+func (h *Host) providerHasNativeExecutor(manager ExecutorManager, provider string) bool {
 	if h == nil || manager == nil {
 		return false
 	}
