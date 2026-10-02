@@ -1,0 +1,11 @@
+name: zhipu
+version: "1"
+# Disambiguation wordlist for the Zhipu channel.
+#
+# This channel's classifier keys on adult-content terms rather than the
+# cybersecurity list used by the OpenAI channel, so the OpenAI table does not
+# apply. Fill this file with the replacements calibrated against the Zhipu
+# channel (the same literal matching rules as jb-words-openai.yaml apply); an
+# empty table is a valid deployment: requests pass through untouched and every
+# decision is still auditable in the logs and the X-JB response header.
+entries: []

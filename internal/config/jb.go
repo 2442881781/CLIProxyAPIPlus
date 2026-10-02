@@ -93,10 +93,14 @@ func jbBool(v *bool, def bool) bool {
 
 // WordlistEntry maps a source surface form to the replacement that will be
 // written into user-role message content. Match is a plain substring match
-// performed case-insensitively against each user message.
+// performed case-insensitively against each user message, unless Regex is set,
+// in which case Match is compiled as a case-insensitive pattern (needed for
+// boundary-anchored terms such as \bRAT\b, whose literal form would match
+// inside ordinary words like "generate").
 type WordlistEntry struct {
 	Match   string `yaml:"match" json:"match"`
 	Replace string `yaml:"replace" json:"replace"`
+	Regex   bool   `yaml:"regex,omitempty" json:"regex,omitempty"`
 }
 
 // Wordlist is a named, versioned, per-channel replacement table.
@@ -132,6 +136,12 @@ type JBConfig struct {
 	// corpus. Hot-loaded. The literal token {model} inside the file is
 	// replaced with the upstream model name at request time.
 	SpecFile string `yaml:"spec-file,omitempty" json:"spec-file,omitempty"`
+
+	// OMNFile is the optional interpretive-framework text appended after the
+	// corpus for narrative requests (the reference profile's OMN layer). It is
+	// kept separate from SpecFile so operators can version the two documents
+	// independently. Hot-loaded.
+	OMNFile string `yaml:"omn-file,omitempty" json:"omn-file,omitempty"`
 
 	// Wordlists maps channel identifier (provider key, e.g. "openai",
 	// "zhipu") to a wordlist file path, resolved relative to the config dir.
@@ -172,6 +182,7 @@ func (cfg *Config) SanitizeJB() {
 	}
 	cfg.JB.CorpusFile = strings.TrimSpace(cfg.JB.CorpusFile)
 	cfg.JB.SpecFile = strings.TrimSpace(cfg.JB.SpecFile)
+	cfg.JB.OMNFile = strings.TrimSpace(cfg.JB.OMNFile)
 	cfg.JB.NarrativeRegex = strings.TrimSpace(cfg.JB.NarrativeRegex)
 	if len(cfg.JB.Wordlists) > 0 {
 		clean := make(map[string]string, len(cfg.JB.Wordlists))

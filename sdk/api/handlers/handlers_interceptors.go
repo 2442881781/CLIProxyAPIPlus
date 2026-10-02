@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/jb"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -288,18 +289,34 @@ func finalInterceptorHeaders(current, intercepted http.Header) http.Header {
 	return cloneHeader(intercepted)
 }
 
+// withJBState copies the gateway-produced X-JB state token onto the downstream
+// header set. The token describes what the jailbreak-assist layer did with the
+// request (it is not an upstream header), so it must survive regardless of
+// whether upstream header passthrough is enabled.
+func withJBState(out, source http.Header) http.Header {
+	state := source.Get(jb.HeaderName)
+	if state == "" {
+		return out
+	}
+	if out == nil {
+		out = make(http.Header, 1)
+	}
+	out.Set(jb.HeaderName, state)
+	return out
+}
+
 func downstreamHeadersFromExecutor(headers http.Header, passthrough bool) http.Header {
 	if !passthrough {
-		return nil
+		return withJBState(nil, headers)
 	}
-	return FilterUpstreamHeaders(headers)
+	return withJBState(FilterUpstreamHeaders(headers), headers)
 }
 
 func downstreamHeadersAfterInterceptors(baseRaw, finalRaw http.Header, passthrough bool) http.Header {
 	if passthrough {
-		return FilterUpstreamHeaders(finalRaw)
+		return withJBState(FilterUpstreamHeaders(finalRaw), finalRaw)
 	}
-	return FilterUpstreamHeaders(diffHeaders(baseRaw, finalRaw))
+	return withJBState(FilterUpstreamHeaders(diffHeaders(baseRaw, finalRaw)), finalRaw)
 }
 
 func diffHeaders(base, next http.Header) http.Header {

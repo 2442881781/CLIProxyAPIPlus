@@ -245,9 +245,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 						jbState = jb.StateDisambigFailed
 					}
 				}
-			} else {
-				jbState = jb.StateDisambigFailed
 			}
+			// No wordlist entry matched: nothing was rewritten or retried, so
+			// the state stays passthrough rather than claiming a failed retry.
 		}
 		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 			b, _ = io.ReadAll(httpResp.Body)
@@ -284,10 +284,16 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 						if errRead == nil && httpResp2.StatusCode >= 200 && httpResp2.StatusCode < 300 &&
 							!jb.IsSoftRefusal(jb.ExtractCompletionText(body2)) {
 							jbState = jb.StateRetryWrote
+							// Cost accounting sees both upstream calls: the
+							// discarded refusal is billed as its own attempt.
+							reporter.PublishRetryAttempt(ctx, helps.ParseOpenAIUsage(body))
 							body = body2
 							httpResp.Header = httpResp2.Header.Clone()
 						} else {
 							jbState = jb.StateRefusalStands
+							// The delivered answer is the original refusal, so
+							// the discarded attempt is the continuation.
+							reporter.PublishRetryAttempt(ctx, helps.ParseOpenAIUsage(body2))
 						}
 					}
 				}
@@ -538,9 +544,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 						jbState = jb.StateDisambigFailed
 					}
 				}
-			} else {
-				jbState = jb.StateDisambigFailed
 			}
+			// No wordlist entry matched: nothing was rewritten or retried, so
+			// the state stays passthrough rather than claiming a failed retry.
 		}
 		if httpResp == nil || httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 			var statusCode int
@@ -585,7 +591,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	// through the response-format translator and handed to emit (as either a
 	// payload or an error chunk). Returns the assembled assistant delta text
 	// for refusal classification plus terminal flags.
-	pumpStream := func(body io.Reader, emit func(cliproxyexecutor.StreamChunk) bool) (assembled string, failed, sawDone, aborted bool) {
+	pumpStream := func(body io.Reader, emit func(cliproxyexecutor.StreamChunk) bool, usageBuf *helps.StreamUsageBuffer) (assembled string, failed, sawDone, aborted bool) {
 		var textBuf strings.Builder
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(nil, 52_428_800) // 50MB
@@ -665,7 +671,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			reporter.ObserveResponseModel(line)
-			streamUsage.ObserveOpenAIStream(line)
+			usageBuf.ObserveOpenAIStream(line)
 			trimmedLine := bytes.TrimSpace(line)
 			if len(trimmedLine) == 0 {
 				if processFrame() {
@@ -746,8 +752,14 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			return true
 		}
 
-		assembled, failed1, _, aborted1 := pumpStream(httpResp.Body, collect)
+		// The first pass accumulates its own usage so a discarded refusal (or a
+		// discarded continuation) can still be billed as its own attempt.
+		var firstUsage helps.StreamUsageBuffer
+		assembled, failed1, _, aborted1 := pumpStream(httpResp.Body, collect, &firstUsage)
 		closeBody(httpResp)
+		// Default: the client receives the first stream, so its usage is the
+		// primary record unless the retried stream replaces it.
+		streamUsage = firstUsage
 		if !failed1 && !aborted1 && jb.IsSoftRefusal(assembled) {
 			isNarrative := jbSnap.Narrative || jbEngine.IsNarrative(translated)
 			if !(isNarrative && !jbSnap.NSFW) {
@@ -762,6 +774,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 						httpResp2, errDo := httpClient.Do(httpReq2)
 						if errDo == nil && httpResp2 != nil && httpResp2.StatusCode >= 200 && httpResp2.StatusCode < 300 {
 							var buffered2 []cliproxyexecutor.StreamChunk
+							var secondUsage helps.StreamUsageBuffer
 							collect2 := func(c cliproxyexecutor.StreamChunk) bool {
 								select {
 								case <-ctx.Done():
@@ -771,17 +784,24 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 								buffered2 = append(buffered2, c)
 								return true
 							}
-							assembled2, failed2, _, aborted2 := pumpStream(httpResp2.Body, collect2)
+							assembled2, failed2, _, aborted2 := pumpStream(httpResp2.Body, collect2, &secondUsage)
 							closeBody(httpResp2)
 							if !failed2 && !aborted2 && !jb.IsSoftRefusal(assembled2) {
 								// The continuation delivered: the retried stream
-								// replaces the refusal buffer entirely.
+								// replaces the refusal buffer and becomes the
+								// primary record; the refusal is billed as its
+								// own discarded attempt.
 								buffered = buffered2
 								jbState = jb.StateRetryWrote
 								retried = true
+								firstUsage.PublishRetry(ctx, reporter)
+								streamUsage = secondUsage
+							} else {
+								// The client keeps the original refusal stream,
+								// so the discarded continuation is the extra
+								// upstream call to bill.
+								secondUsage.PublishRetry(ctx, reporter)
 							}
-						} else if httpResp2 != nil {
-							closeBody(httpResp2)
 						}
 					}
 				}
@@ -806,7 +826,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		go func() {
 			defer close(out)
 			defer closeBody(httpResp)
-			_, _, _, _ = pumpStream(httpResp.Body, emitDirect)
+			_, _, _, _ = pumpStream(httpResp.Body, emitDirect, &streamUsage)
 			streamUsage.Publish(ctx, reporter)
 			reporter.EnsurePublished(ctx)
 		}()

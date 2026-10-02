@@ -111,15 +111,26 @@ access:
 #   # Narrative classifier regex. Drives corpus injection, refusal-retry
 #   # suppression under nsfw=off (the leak rule), and the `narrative` header
 #   # validator. Edit once; do not duplicate per call site.
-#   narrative-regex: "情色|色情|床笫|亲密|性爱|角色?扮演|erotic|explicit|nsfw|roleplay|intimate"
+#   narrative-regex: "情色|色情|床笫|亲密|性爱|小说|短篇|描写的?片段|角色?扮演|erotic|explicit|nsfw|roleplay|intimate"
 #
-#   # Asset paths resolve relative to this config file's directory and are
-#   # hot-reloaded on every config change.
+#   # Asset paths resolve relative to this config file's directory:
+#   #   corpus-file = the many-shot demonstration corpus (behavioral evidence)
+#   #   spec-file   = the refusal-judgment framework; {model} is replaced
+#   #   omn-file    = optional interpretive framework appended after the corpus
+#   # The shipped config/ directory contains the per-channel wordlists; the
+#   # corpus/spec/omn documents are operator-supplied and are expected to live
+#   # in the deployment's config directory, not in the repository.
+#   # Editing any asset file is picked up within a few seconds without a config
+#   # change or a restart; a config change reloads everything immediately.
 #   corpus-file: config/jb-corpus.md
-#   spec-file:   config/jb-spec.md    # {model} placeholder is filled per-request
+#   spec-file:   config/jb-spec.md
+#   omn-file:    config/jb-omn.md
 #
 #   # Per-channel wordlists keyed by provider key (or compat_name when the
 #   # request routes through openai-compatibility). "*" is the fallback.
+#   # Entries match literally and case-insensitively; add `regex: true` to a
+#   # wordlist entry when the term needs boundaries (e.g. '\bRATs?\b'), because
+#   # a literal "rat" would also match inside ordinary words.
 #   wordlists:
 #     openai: config/jb-words-openai.yaml
 #     zhipu:  config/jb-words-zhipu.yaml

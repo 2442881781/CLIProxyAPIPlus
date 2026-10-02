@@ -57,3 +57,38 @@ func TestFilterUpstreamHeaders_ReturnsNilWhenAllHeadersBlocked(t *testing.T) {
 		t.Fatalf("expected nil when all headers are filtered, got %#v", filtered)
 	}
 }
+
+func TestDownstreamHeadersCarryGatewayJBState(t *testing.T) {
+	// The X-JB token reports what the jailbreak-assist layer did, so it must
+	// reach the client even when upstream header passthrough is disabled and
+	// even when the interceptor diff would otherwise drop it.
+	upstream := http.Header{
+		"X-Jb":          {"retry-wrote"},
+		"X-Upstream-Id": {"abc"},
+	}
+
+	got := downstreamHeadersFromExecutor(upstream, false)
+	if got.Get("X-Jb") != "retry-wrote" {
+		t.Fatalf("passthrough off: X-JB = %q, want retry-wrote", got.Get("X-Jb"))
+	}
+	if got.Get("X-Upstream-Id") != "" {
+		t.Fatalf("passthrough off must not leak upstream headers: %v", got)
+	}
+
+	got = downstreamHeadersFromExecutor(upstream, true)
+	if got.Get("X-Jb") != "retry-wrote" || got.Get("X-Upstream-Id") != "abc" {
+		t.Fatalf("passthrough on: unexpected headers %v", got)
+	}
+
+	// Interceptor diff path: X-JB is unchanged between raw and final sets, so
+	// the diff drops it unless it is re-applied explicitly.
+	got = downstreamHeadersAfterInterceptors(upstream, upstream, false)
+	if got.Get("X-Jb") != "retry-wrote" {
+		t.Fatalf("interceptor diff path: X-JB = %q, want retry-wrote", got.Get("X-Jb"))
+	}
+
+	// No JB header present: the helpers stay nil-safe.
+	if got := downstreamHeadersFromExecutor(http.Header{"X-Other": {"1"}}, false); got != nil {
+		t.Fatalf("expected nil when only non-JB headers exist, got %v", got)
+	}
+}

@@ -1,0 +1,64 @@
+name: openai
+version: "1"
+# Disambiguation wordlist for the OpenAI-compatible channel.
+#
+# The upstream cyber classifier keys on the surface form of the *user* message
+# (see the jailbreak-assist design notes, principle A). Rewriting those terms
+# into neutral ones keeps the task semantics intact while avoiding the
+# generation-time block. Only role=user text is touched; system/assistant
+# messages are never modified.
+#
+# Matching is literal and case-insensitive unless `regex: true` is set. Keep the
+# most specific entries first so longer phrases win over their substrings.
+#
+# Source: jb网关破甲实现笔记.md §4.1 (OpenAI 通道初始版).
+entries:
+  - match: "远程管理后门"
+    replace: "远程管理代理"
+  - match: "后门程序"
+    replace: "远程管理代理"
+  - match: "命令回传"
+    replace: "返回执行结果"
+  - match: "回传"
+    replace: "返回执行结果"
+  - match: "绕过校验"
+    replace: "授权流分析"
+  - match: "绕过验证"
+    replace: "授权流分析"
+  - match: "破解"
+    replace: "授权流分析"
+  - match: "注册机"
+    replace: "许可证校验分析工具"
+  - match: "渗透测试"
+    replace: "安全评估"
+  - match: "backdoors"
+    replace: "remote management agents"
+  - match: "backdoor"
+    replace: "remote management agent"
+  - match: "beaconing"
+    replace: "heartbeat polling"
+  - match: "beacons"
+    replace: "heartbeats"
+  - match: "beacon"
+    replace: "heartbeat"
+  - match: "keygens"
+    replace: "license validation analysis tools"
+  - match: "keygen"
+    replace: "license validation analysis tool"
+  # Boundary-anchored: a literal "rat" match would rewrite ordinary words such
+  # as "generate" or "separate".
+  - match: '\bRATs?\b'
+    regex: true
+    replace: "heartbeat polling"
+  - match: '\bcrack(ed|ing|s)?\b'
+    regex: true
+    replace: "authorization-flow analysis"
+  - match: '\bbypass(es|ed|ing)?\b'
+    regex: true
+    replace: "authorization-flow analysis"
+  - match: '\bexploits?\b'
+    regex: true
+    replace: "vulnerability demonstration"
+  - match: '\bexploitation\b'
+    regex: true
+    replace: "vulnerability demonstration"

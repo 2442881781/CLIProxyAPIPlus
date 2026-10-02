@@ -45,6 +45,7 @@ type Engine struct {
 	wordlists atomic.Value // map[string]*compiledWordlist
 	corpus    atomic.Value // string
 	spec      atomic.Value // string
+	omn       atomic.Value // string
 
 	mu sync.Mutex // guards Load and UpdateConfig
 }
@@ -84,6 +85,11 @@ func (e *Engine) UpdateConfig(cfg *config.SDKConfig) {
 // Load reads all configured JB assets. It is called at startup and again by
 // the watcher whenever config.yaml changes; the per-file re-reads make the
 // corpus/spec/wordlists effectively hot-reloadable without restarting.
+//
+// Individual asset failures are logged and skipped (the previous copy stays in
+// effect); the returned error reports which configured assets could not be
+// read so callers can surface a misconfigured path instead of silently
+// degrading to "no injection, no disambiguation".
 func (e *Engine) Load() error {
 	if e == nil || e.sdkCfg == nil {
 		return nil
@@ -91,6 +97,7 @@ func (e *Engine) Load() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	var failed []string
 	re, err := e.sdkCfg.JB.NarrativeMatcher()
 	if err != nil {
 		log.WithError(err).Warn("jb: invalid narrative-regex, using default")
@@ -101,6 +108,7 @@ func (e *Engine) Load() error {
 		wl, errLoad := e.loadWordlist(path)
 		if errLoad != nil {
 			log.WithError(errLoad).WithField("channel", channel).Warn("jb: wordlist load failed, keeping prior")
+			failed = append(failed, "wordlist:"+channel)
 			continue
 		}
 		m := e.currentWordlists()
@@ -110,11 +118,56 @@ func (e *Engine) Load() error {
 
 	if corpus := e.readAsset(e.sdkCfg.JB.CorpusFile); corpus != "" {
 		e.corpus.Store(corpus)
+	} else if strings.TrimSpace(e.sdkCfg.JB.CorpusFile) != "" {
+		failed = append(failed, "corpus:"+e.sdkCfg.JB.CorpusFile)
 	}
 	if spec := e.readAsset(e.sdkCfg.JB.SpecFile); spec != "" {
 		e.spec.Store(spec)
+	} else if strings.TrimSpace(e.sdkCfg.JB.SpecFile) != "" {
+		failed = append(failed, "spec:"+e.sdkCfg.JB.SpecFile)
+	}
+	if omn := e.readAsset(e.sdkCfg.JB.OMNFile); omn != "" {
+		e.omn.Store(omn)
+	} else if strings.TrimSpace(e.sdkCfg.JB.OMNFile) != "" {
+		failed = append(failed, "omn:"+e.sdkCfg.JB.OMNFile)
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("jb: %d configured asset(s) unavailable: %s", len(failed), strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// AssetSignature returns a change signature over the configured asset files so
+// callers can poll for edits without waiting for a config change. An empty
+// string means no assets are configured.
+func (e *Engine) AssetSignature() string {
+	if e == nil {
+		return ""
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sdkCfg == nil {
+		return ""
+	}
+	paths := make([]string, 0, len(e.sdkCfg.JB.Wordlists)+3)
+	paths = append(paths, e.sdkCfg.JB.CorpusFile, e.sdkCfg.JB.SpecFile, e.sdkCfg.JB.OMNFile)
+	for _, path := range e.sdkCfg.JB.Wordlists {
+		paths = append(paths, path)
+	}
+	var b strings.Builder
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		resolved := e.resolve(path)
+		if info, err := os.Stat(resolved); err == nil {
+			fmt.Fprintf(&b, "%s\x00%d\x00%d\x01", resolved, info.ModTime().UnixNano(), info.Size())
+		} else {
+			fmt.Fprintf(&b, "%s\x00missing\x01", resolved)
+		}
+	}
+	return b.String()
 }
 
 // IsNarrative reports whether the user-visible content of the request looks
@@ -187,27 +240,34 @@ func (e *Engine) ApplyWordlists(payload []byte, channel string) ([]byte, []strin
 	return out, hits
 }
 
-// InjectNarrative prepends the corpus + spec (if loaded) to the system
-// context. The caller must already have established that the request is
-// narrative-classified or declared (snapshot.Narrative) and that jb && nsfw
-// are both in effect. Model is substituted into the spec's {model} token.
+// InjectNarrative prepends the spec, corpus and OMN blocks (whichever are
+// loaded) to the system context, in the reference profile's order: the spec
+// identity/framework first, then the many-shot corpus, then the OMN
+// interpretive framework. The caller must already have established that the
+// request is narrative-classified or declared (snapshot.Narrative) and that jb
+// && nsfw are both in effect. Model is substituted into the spec's {model}
+// token.
 func (e *Engine) InjectNarrative(payload []byte, model string) []byte {
 	if e == nil {
 		return payload
 	}
 	corpus, _ := e.corpus.Load().(string)
 	spec, _ := e.spec.Load().(string)
-	if corpus == "" && spec == "" {
+	omn, _ := e.omn.Load().(string)
+	if corpus == "" && spec == "" && omn == "" {
 		return payload
 	}
+	parts := make([]string, 0, 3)
 	if spec != "" {
-		spec = strings.ReplaceAll(spec, "{model}", model)
+		parts = append(parts, strings.ReplaceAll(spec, "{model}", model))
 	}
-	block := corpus
-	if block != "" && spec != "" {
-		block += "\n\n"
+	if corpus != "" {
+		parts = append(parts, corpus)
 	}
-	block += spec
+	if omn != "" {
+		parts = append(parts, omn)
+	}
+	block := strings.Join(parts, "\n\n")
 	if block == "" {
 		return payload
 	}
@@ -237,8 +297,10 @@ func (e *Engine) BuildContinuationPayload(payload []byte, refusalText string) []
 	if !messages.Exists() || !messages.IsArray() {
 		return nil
 	}
-	if len(refusalText) > 400 {
-		refusalText = refusalText[:400]
+	// Truncate by runes, not bytes: a multi-byte refusal must not be cut
+	// mid-character when it is fed back as the assistant turn.
+	if runes := []rune(refusalText); len(runes) > 400 {
+		refusalText = string(runes[:400])
 	}
 	out := payload
 	// append assistant turn
@@ -315,8 +377,13 @@ func (e *Engine) loadWordlist(path string) (*compiledWordlist, error) {
 		if match == "" {
 			continue
 		}
-		re, errRe := regexp.Compile(`(?i)` + regexp.QuoteMeta(match))
+		pattern := regexp.QuoteMeta(match)
+		if entry.Regex {
+			pattern = match
+		}
+		re, errRe := regexp.Compile(`(?i)` + pattern)
 		if errRe != nil {
+			log.WithError(errRe).WithField("match", match).Warn("jb: wordlist entry skipped, invalid pattern")
 			continue
 		}
 		out.entries = append(out.entries, compiledEntry{
