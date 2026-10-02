@@ -28,6 +28,9 @@ var corsExposedResponseHeaders = []string{
 	"Retry-After",
 	"X-Request-Id",
 	"OpenAI-Request-Id",
+	// The jailbreak-assist state machine reports its per-request outcome in
+	// this header; browsers must be able to read it to audit rewrites.
+	"X-JB",
 }
 
 var corsExposedResponseHeadersJoined = strings.Join(corsExposedResponseHeaders, ", ")

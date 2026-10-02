@@ -316,11 +316,12 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
 			id, token := idGen.Next(idKind, key, base, proxyURL)
 			attrs := map[string]string{
-				"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
-				"base_url":     base,
-				"compat_name":  compat.Name,
-				"provider_key": internalProviderKey,
-				"config_index": strconv.Itoa(i),
+				"source":        fmt.Sprintf("config:%s[%s]", providerName, token),
+				"base_url":      base,
+				"compat_name":   compat.Name,
+				"compat_prefix": prefix,
+				"provider_key":  internalProviderKey,
+				"config_index":  strconv.Itoa(i),
 			}
 			metadata := map[string]any{}
 			if disableCooling != nil {
@@ -362,11 +363,12 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
 			id, token := idGen.Next(idKind, base)
 			attrs := map[string]string{
-				"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
-				"base_url":     base,
-				"compat_name":  compat.Name,
-				"provider_key": internalProviderKey,
-				"config_index": strconv.Itoa(i),
+				"source":        fmt.Sprintf("config:%s[%s]", providerName, token),
+				"base_url":      base,
+				"compat_name":   compat.Name,
+				"compat_prefix": prefix,
+				"provider_key":  internalProviderKey,
+				"config_index":  strconv.Itoa(i),
 			}
 			metadata := map[string]any{}
 			if disableCooling != nil {

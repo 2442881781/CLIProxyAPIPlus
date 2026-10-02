@@ -751,6 +751,7 @@ func TestConfigSynthesizer_OpenAICompat_UsesNamespacedProviderKey(t *testing.T) 
 			OpenAICompatibility: []config.OpenAICompatibility{
 				{
 					Name:    "kimi",
+					Prefix:  "kimi-route",
 					BaseURL: "https://kimi-compatible.example.com/v1",
 					APIKeyEntries: []config.OpenAICompatibilityAPIKey{
 						{APIKey: "test-key"},
@@ -778,6 +779,9 @@ func TestConfigSynthesizer_OpenAICompat_UsesNamespacedProviderKey(t *testing.T) 
 	}
 	if auth.Attributes["compat_name"] != "kimi" {
 		t.Fatalf("compat_name = %q, want kimi", auth.Attributes["compat_name"])
+	}
+	if auth.Attributes["compat_prefix"] != "kimi-route" {
+		t.Fatalf("compat_prefix = %q, want kimi-route", auth.Attributes["compat_prefix"])
 	}
 	if auth.Attributes["config_index"] != "0" {
 		t.Fatalf("config_index = %q, want 0", auth.Attributes["config_index"])

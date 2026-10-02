@@ -126,8 +126,10 @@ access:
 #   spec-file:   config/jb-spec.md
 #   omn-file:    config/jb-omn.md
 #
-#   # Per-channel wordlists keyed by provider key (or compat_name when the
-#   # request routes through openai-compatibility). "*" is the fallback.
+#   # Per-channel wordlists. A request resolves its channel by the route
+#   # prefix configured on its openai-compatibility entry first (so `prefix:
+#   # zhipu` picks the `zhipu:` table regardless of the entry's display name),
+#   # then by compat_name, then by provider key. "*" is the fallback.
 #   # Entries match literally and case-insensitively; add `regex: true` to a
 #   # wordlist entry when the term needs boundaries (e.g. '\bRATs?\b'), because
 #   # a literal "rat" would also match inside ordinary words.
