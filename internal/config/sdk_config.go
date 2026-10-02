@@ -62,6 +62,11 @@ type SDKConfig struct {
 	// APIKeys is a list of keys for authenticating clients to this proxy server.
 	APIKeys []string `yaml:"api-keys" json:"api-keys"`
 
+	// JB configures the optional jailbreak-assist pipeline. It is opt-in:
+	// all mechanisms are off unless jb.enabled is true. Per-key and per-group
+	// ceilings live on the store_access key/group records; this section only
+	// holds the global defaults and the shared wordlist/corpus locations.
+	JB JBConfig `yaml:"jb,omitempty" json:"jb,omitempty"`
 	// PassthroughHeaders controls whether upstream response headers are forwarded to downstream clients.
 	// Default is false (disabled).
 	PassthroughHeaders bool `yaml:"passthrough-headers" json:"passthrough-headers"`

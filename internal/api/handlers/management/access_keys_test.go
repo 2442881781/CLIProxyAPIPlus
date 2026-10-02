@@ -336,3 +336,73 @@ func TestAccessKeyUsageExposesTraffic(t *testing.T) {
 		t.Fatal("unknown by value must be rejected")
 	}
 }
+
+func TestAccessKeyJBRoundTrip(t *testing.T) {
+	r := setupAccessKeyRouter(t)
+
+	// Create with per-key JB overrides; only set fields must be echoed back so
+	// the UI can distinguish "inherit" from an explicit on/off.
+	rec, body := doReq(t, r, "POST", "/access-keys", `{"name":"jbkey","jb":{"jb":true,"nsfw":false,"refusal-retry":true}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	id, _ := body["id"].(string)
+	created, _ := body["jb"].(map[string]any)
+	if created["jb"] != true || created["nsfw"] != false || created["refusal-retry"] != true {
+		t.Fatalf("create jb not echoed: %v", body["jb"])
+	}
+	if _, present := created["disambig"]; present {
+		t.Fatal("unset jb fields must be omitted so the UI can show inherit")
+	}
+
+	// The override survives a reload from the backing store.
+	rec, body = doReq(t, r, "GET", "/access-keys", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: %d", rec.Code)
+	}
+	list, _ := body["access-keys"].([]any)
+	entry, _ := list[0].(map[string]any)
+	listed, _ := entry["jb"].(map[string]any)
+	if listed["jb"] != true || listed["nsfw"] != false {
+		t.Fatalf("list jb mismatch: %v", entry["jb"])
+	}
+
+	// Patching with an empty object clears every override back to inherit.
+	rec, _ = doReq(t, r, "PATCH", "/access-keys?id="+id, `{"jb":{}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body.String())
+	}
+	_, body = doReq(t, r, "GET", "/access-keys", "")
+	list, _ = body["access-keys"].([]any)
+	entry, _ = list[0].(map[string]any)
+	cleared, _ := entry["jb"].(map[string]any)
+	if len(cleared) != 0 {
+		t.Fatalf("expected cleared jb, got %v", entry["jb"])
+	}
+}
+
+func TestAccessJBGlobalEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	on, nsfw := true, true
+	cfg := &config.Config{}
+	cfg.JB.Enabled = &on
+	cfg.JB.Defaults = config.JBPrefs{JB: &on, NSFW: &nsfw}
+	h := &Handler{cfg: cfg}
+	r := gin.New()
+	r.GET("/access-jb", h.GetAccessJBGlobal)
+
+	rec, body := doReq(t, r, "GET", "/access-jb", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("global: %d %s", rec.Code, rec.Body.String())
+	}
+	if body["enabled"] != true {
+		t.Fatalf("enabled = %v, want true", body["enabled"])
+	}
+	defaults, _ := body["defaults"].(map[string]any)
+	if defaults["jb"] != true || defaults["nsfw"] != true {
+		t.Fatalf("defaults mismatch: %v", body["defaults"])
+	}
+	if _, present := defaults["refusal-retry"]; present {
+		t.Fatal("unset global defaults must be omitted")
+	}
+}

@@ -89,6 +89,68 @@ access:
     - "your-api-key-2"
     - "your-api-key-3"
 
+# Jailbreak-assist (JB) configuration. All mechanisms are opt-in and default
+# off; when enabled they only run against requests authenticated by a
+# store_access-managed `sk-cpa-*` key that also opts in. The chain is
+# global -> group -> key -> X-JB request header, where each layer may only
+# narrow the layer above (ceiling semantics).
+#
+# jb:
+#   # Master switch for the entire feature.
+#   enabled: true
+#
+#   # Global defaults. A field left unset at the global layer defaults off
+#   # (except `disambig`, which defaults on because it is a transport-level
+#   # cyber_policy retry, not content rewriting).
+#   defaults:
+#     jb:            on    # spec injection + soft-refusal continuation retry
+#     nsfw:          off   # narrative/adult admission; gates corpus + retry
+#     disambig:      on    # lazy 400 rewrite through the channel wordlist
+#     refusal-retry: off   # one-time continuation retry; ~2x upstream tokens
+#
+#   # Narrative classifier regex. Drives corpus injection, refusal-retry
+#   # suppression under nsfw=off (the leak rule), and the `narrative` header
+#   # validator. Edit once; do not duplicate per call site.
+#   narrative-regex: "情色|色情|床笫|亲密|性爱|小说|短篇|描写的?片段|角色?扮演|erotic|explicit|nsfw|roleplay|intimate"
+#
+#   # Asset paths resolve relative to this config file's directory:
+#   #   corpus-file = the many-shot demonstration corpus (behavioral evidence)
+#   #   spec-file   = the refusal-judgment framework; {model} is replaced
+#   #   omn-file    = optional interpretive framework appended after the corpus
+#   # The shipped config/ directory contains the per-channel wordlists; the
+#   # corpus/spec/omn documents are operator-supplied and are expected to live
+#   # in the deployment's config directory, not in the repository.
+#   # Editing any asset file is picked up within a few seconds without a config
+#   # change or a restart; a config change reloads everything immediately.
+#   corpus-file: config/jb-corpus.md
+#   spec-file:   config/jb-spec.md
+#   omn-file:    config/jb-omn.md
+#
+#   # Per-channel wordlists keyed by provider key (or compat_name when the
+#   # request routes through openai-compatibility). "*" is the fallback.
+#   # Entries match literally and case-insensitively; add `regex: true` to a
+#   # wordlist entry when the term needs boundaries (e.g. '\bRATs?\b'), because
+#   # a literal "rat" would also match inside ordinary words.
+#   wordlists:
+#     openai: config/jb-words-openai.yaml
+#     zhipu:  config/jb-words-zhipu.yaml
+#
+# The X-JB request header narrows per-request behavior (never widens):
+#   X-JB: narrative         declare session narrative; rejected when nsfw=off
+#   X-JB: no-spec           disable spec injection for this request
+#   X-JB: no-nsfw           disable nsfw admission for this request
+#   X-JB: no-retry          disable the refusal continuation retry
+#   X-JB: no-disambig       disable the cyber_policy lazy retry
+# Response carries X-JB: passthrough | disambig-retry | disambig-failed |
+# retry-wrote | refusal-stands | narrative-rejected.
+#
+# Streaming requests support the same mechanisms. Disambiguation runs before
+# any stream data (the upstream 400 arrives first). Refusal retry buffers the
+# upstream stream for classification, so a streaming request with
+# refusal-retry enabled gains latency equal to the full upstream response;
+# the replay preserves the SSE shape. When the retried stream is also a
+# refusal, the original refusal stream is what the client receives.
+
 # Optional credential concurrency and observation contracts.
 
 # credentials:

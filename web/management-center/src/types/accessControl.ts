@@ -22,9 +22,20 @@ export interface AccessGroup {
   maxConcurrency: number;
   rateLimitRpm: number;
   perKeyLimits: RateLimitSpec;
+  jb: JBPreferences;
   usage: AccessGroupUsageTotals;
   createdAt: string;
   updatedAt: string;
+}
+
+// JBPreferences mirrors the server-side jailbreak-assist toggle layer. Each
+// field is tri-state: absent = inherit from the layer below, true = on,
+// false = off.
+export interface JBPreferences {
+  jb?: boolean;
+  nsfw?: boolean;
+  disambig?: boolean;
+  'refusal-retry'?: boolean;
 }
 
 export interface AccessAuthItem {

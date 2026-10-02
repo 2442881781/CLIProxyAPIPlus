@@ -7,10 +7,15 @@ import type {
   AccessKeyUsageTopBy,
   AccessKeyUsageTopRow,
   AccessTrafficTotals,
+  JBPreferences,
   RateLimitSpec,
   UsageDimRow,
 } from '@/types';
 import { apiClient } from './client';
+
+// JB_TOGGLE_KEYS mirrors the server-side jailbreak-assist prefs. Each toggle is
+// tri-state: absent = inherit, true = on, false = off.
+export const JB_TOGGLE_KEYS = ['jb', 'nsfw', 'disambig', 'refusal-retry'] as const;
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -35,6 +40,15 @@ const normalizeRateLimit = (value: unknown): RateLimitSpec => {
     rpd: asNumber(raw.rpd),
     maxConcurrency: asNumber(raw.max_concurrency ?? raw.maxConcurrency),
   };
+};
+
+const normalizeJBPreferences = (value: unknown): JBPreferences => {
+  const raw = asRecord(value);
+  const out: JBPreferences = {};
+  for (const key of JB_TOGGLE_KEYS) {
+    if (typeof raw[key] === 'boolean') out[key] = raw[key];
+  }
+  return out;
 };
 
 const normalizeUsageTotals = (value: unknown): AccessGroup['usage'] => {
@@ -70,6 +84,7 @@ export const normalizeAccessGroup = (value: unknown): AccessGroup => {
     maxConcurrency: asNumber(raw.max_concurrency ?? raw.maxConcurrency),
     rateLimitRpm: asNumber(raw.rate_limit_rpm ?? raw.rateLimitRpm),
     perKeyLimits: normalizeRateLimit(raw.per_key_limits ?? raw.perKeyLimits),
+    jb: normalizeJBPreferences(raw.jb),
     usage: normalizeUsageTotals(raw.usage),
     createdAt: asString(raw.created_at ?? raw.createdAt),
     updatedAt: asString(raw.updated_at ?? raw.updatedAt),
@@ -83,6 +98,10 @@ export interface AccessGroupPayload {
   maxConcurrency: number;
   rateLimitRpm: number;
   perKeyLimits: RateLimitSpec;
+  // jb is sent as-is when present: an empty object explicitly clears the
+  // group's JB layer back to inherit, while omitting it leaves the stored
+  // value untouched.
+  jb?: JBPreferences;
 }
 
 const serializeRateLimit = (limits: RateLimitSpec): Record<string, number> | undefined => {
@@ -102,6 +121,7 @@ export const serializeAccessGroup = (payload: AccessGroupPayload): Record<string
   if (payload.rateLimitRpm > 0) body.rate_limit_rpm = payload.rateLimitRpm;
   const limits = serializeRateLimit(payload.perKeyLimits);
   if (limits) body.per_key_limits = limits;
+  if (payload.jb) body.jb = payload.jb;
   return body;
 };
 

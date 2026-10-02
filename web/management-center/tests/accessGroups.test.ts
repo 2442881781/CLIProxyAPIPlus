@@ -32,6 +32,7 @@ describe('access group api normalization', () => {
       maxConcurrency: 8,
       rateLimitRpm: 600,
       perKeyLimits: { rpm: 60, tpm: 100000, rpd: 500, maxConcurrency: 2 },
+      jb: {},
       usage: {
         tokens: 12345,
         requests: 40,
@@ -96,6 +97,33 @@ describe('access group api normalization', () => {
         perKeyLimits: { rpm: 0, tpm: 0, rpd: 0, maxConcurrency: 0 },
       })
     ).toEqual({ name: 'open' });
+  });
+
+  test('keeps only boolean jb toggles when normalizing a group', () => {
+    const group = normalizeAccessGroup({
+      name: 'infra',
+      jb: { jb: true, nsfw: false, disambig: 'yes', 'refusal-retry': true },
+    });
+    expect(group.jb).toEqual({ jb: true, nsfw: false, 'refusal-retry': true });
+  });
+
+  test('sends the jb layer, including an explicit empty object that clears it', () => {
+    const base = {
+      name: 'infra',
+      allowedAuths: [],
+      allowedModels: [],
+      maxConcurrency: 0,
+      rateLimitRpm: 0,
+      perKeyLimits: { rpm: 0, tpm: 0, rpd: 0, maxConcurrency: 0 },
+    };
+    expect(serializeAccessGroup({ ...base, jb: { jb: true, nsfw: false } }).jb).toEqual({
+      jb: true,
+      nsfw: false,
+    });
+    // An empty object is meaningful: the server reads it as "clear overrides".
+    expect(serializeAccessGroup({ ...base, jb: {} }).jb).toEqual({});
+    // Omitting the field leaves the stored layer untouched on the server.
+    expect('jb' in serializeAccessGroup(base)).toBe(false);
   });
 
   test('normalizes /access-groups/usage detail rows (models/daily/auths dims)', () => {

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
@@ -47,8 +48,11 @@ type AccessKey struct {
 	Quota         Quota     `json:"quota,omitempty"`
 	RateLimit     RateLimit `json:"rate_limit,omitempty"`
 	Usage         Usage     `json:"usage,omitempty"`
-	CreatedAt     string    `json:"created_at"`
-	UpdatedAt     string    `json:"updated_at"`
+	// JB holds this key's jailbreak-assist ceiling. Nil fields inherit from
+	// the key's group and then the global config; explicit values narrow.
+	JB        *config.JBPrefs `json:"jb,omitempty"`
+	CreatedAt string          `json:"created_at"`
+	UpdatedAt string          `json:"updated_at"`
 }
 
 // Group scopes a set of keys to a pool of upstream credentials and shared
@@ -66,8 +70,12 @@ type Group struct {
 	RateLimitRPM   int       `json:"rate_limit_rpm,omitempty"`
 	PerKeyLimits   RateLimit `json:"per_key_limits,omitempty"`
 	Usage          Usage     `json:"usage,omitempty"`
-	CreatedAt      string    `json:"created_at"`
-	UpdatedAt      string    `json:"updated_at"`
+	// JB holds the group's jailbreak-assist defaults, layered between the
+	// member key (narrowest) and the global config (widest). Nil fields
+	// inherit from the global layer; member keys may narrow further.
+	JB        *config.JBPrefs `json:"jb,omitempty"`
+	CreatedAt string          `json:"created_at"`
+	UpdatedAt string          `json:"updated_at"`
 }
 
 // storeFile is the on-disk schema. Legacy files contained a bare key array;
@@ -488,6 +496,7 @@ func (s *Store) Create(plaintext string, fields AccessKey) (*AccessKey, error) {
 			Period:     strings.ToLower(strings.TrimSpace(fields.Quota.Period)),
 		},
 		RateLimit: fields.RateLimit,
+		JB:        fields.JB,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -537,6 +546,9 @@ func (s *Store) Update(id string, patch AccessKeyPatch) (*AccessKey, error) {
 	}
 	if patch.RateLimit != nil {
 		entry.RateLimit = *patch.RateLimit
+	}
+	if patch.JB != nil {
+		entry.JB = *patch.JB
 	}
 	if patch.ResetUsage {
 		entry.Usage = Usage{}
@@ -612,7 +624,10 @@ type AccessKeyPatch struct {
 	AllowedModels *[]string  `json:"allowed_models"`
 	Quota         *Quota     `json:"quota"`
 	RateLimit     *RateLimit `json:"rate_limit"`
-	ResetUsage    bool       `json:"reset_usage"`
+	// JB replaces the key's JB ceiling wholesale. A nil pointer leaves the
+	// stored value unchanged; to clear a key's JB overrides send {"jb": {}}.
+	JB         **config.JBPrefs `json:"jb"`
+	ResetUsage bool             `json:"reset_usage"`
 }
 
 // displayPrefix keeps enough of the key to identify it without exposing it.
@@ -888,6 +903,12 @@ func (s *Store) UpsertGroup(grp Group) (*Group, error) {
 		existing.MaxConcurrency = grp.MaxConcurrency
 		existing.RateLimitRPM = grp.RateLimitRPM
 		existing.PerKeyLimits = grp.PerKeyLimits
+		// JB prefs follow patch semantics, not replace: callers that predate the
+		// field (or simply omit it) must not wipe stored settings. Send an empty
+		// object to clear the group's JB layer back to inherit.
+		if grp.JB != nil {
+			existing.JB = grp.JB
+		}
 		existing.UpdatedAt = now
 	} else {
 		existing = &Group{Name: grp.Name, CreatedAt: now}
@@ -896,6 +917,7 @@ func (s *Store) UpsertGroup(grp Group) (*Group, error) {
 		existing.MaxConcurrency = grp.MaxConcurrency
 		existing.RateLimitRPM = grp.RateLimitRPM
 		existing.PerKeyLimits = grp.PerKeyLimits
+		existing.JB = grp.JB
 		existing.UpdatedAt = now
 		s.groups[grp.Name] = existing
 	}

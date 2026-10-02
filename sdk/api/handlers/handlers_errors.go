@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/jb"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"golang.org/x/net/context"
 )
@@ -126,6 +127,13 @@ func (h *BaseAPIHandler) WriteErrorResponse(c *gin.Context, msg *interfaces.Erro
 	if msg != nil && msg.Error != nil {
 		for _, value := range coreauth.SafeResponseHeaders(msg.Error).Values("Retry-After") {
 			c.Writer.Header().Add("Retry-After", value)
+		}
+	}
+	// The X-JB state token is gateway-produced, so it reaches the client even
+	// when upstream header passthrough is disabled.
+	if msg != nil && msg.Addon != nil {
+		if state := msg.Addon.Get(jb.HeaderName); state != "" {
+			c.Writer.Header().Set(jb.HeaderName, state)
 		}
 	}
 	if msg != nil && msg.Addon != nil && PassthroughHeadersEnabled(h.Cfg) {

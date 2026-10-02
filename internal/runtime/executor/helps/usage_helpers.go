@@ -361,6 +361,25 @@ func (r *UsageReporter) PublishAdditionalModel(ctx context.Context, model string
 	r.publishRecord(ctx, record)
 }
 
+// PublishRetryAttempt records one additional upstream attempt that the gateway
+// made and then discarded in favor of a retried response (the jailbreak-assist
+// refusal continuation). Cost accounting therefore sees every upstream call the
+// request consumed, not just the delivered one. Reports whether a record was
+// published; attempts without token usage publish nothing.
+func (r *UsageReporter) PublishRetryAttempt(ctx context.Context, detail usage.Detail) bool {
+	if r == nil {
+		return false
+	}
+	detail = normalizeUsageDetailTotal(detail, r.provider, r.executorType)
+	if !hasNonZeroTokenUsage(detail) {
+		return false
+	}
+	record := r.buildRecord(detail, false)
+	record.RequestID = uuid.NewString()
+	r.publishRecord(ctx, record)
+	return true
+}
+
 func (r *UsageReporter) SetTranslatedReasoningEffort(payload []byte, format string) {
 	if r == nil {
 		return
@@ -993,6 +1012,16 @@ func (b *StreamUsageBuffer) Publish(ctx context.Context, reporter *UsageReporter
 	}
 	reporter.Publish(ctx, b.detail)
 	return true
+}
+
+// PublishRetry records this buffer's usage as an additional upstream attempt
+// that the request made and discarded (the JB refusal continuation). Returns
+// false when the buffer holds no usage or the reporter is nil.
+func (b *StreamUsageBuffer) PublishRetry(ctx context.Context, reporter *UsageReporter) bool {
+	if b == nil || !b.ok || reporter == nil {
+		return false
+	}
+	return reporter.PublishRetryAttempt(ctx, b.detail)
 }
 
 // PublishFailure emits the latest observed usage detail together with failure details.

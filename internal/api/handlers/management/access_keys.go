@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
 func (h *Handler) accessKeyStore(c *gin.Context) *storeaccess.Store {
@@ -47,6 +48,7 @@ func accessKeyResponse(entry *storeaccess.AccessKey) gin.H {
 		"quota":          entry.Quota,
 		"rate_limit":     entry.RateLimit,
 		"usage":          entry.Usage,
+		"jb":             entry.JB,
 		"created_at":     entry.CreatedAt,
 		"updated_at":     entry.UpdatedAt,
 	}
@@ -98,6 +100,7 @@ func (h *Handler) CreateAccessKey(c *gin.Context) {
 		ExpiresAt     string            `json:"expires_at"`
 		AllowedModels []string          `json:"allowed_models"`
 		Quota         storeaccess.Quota `json:"quota"`
+		JB            *config.JBPrefs   `json:"jb"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -128,6 +131,7 @@ func (h *Handler) CreateAccessKey(c *gin.Context) {
 		ExpiresAt:     body.ExpiresAt,
 		AllowedModels: body.AllowedModels,
 		Quota:         body.Quota,
+		JB:            body.JB,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -212,6 +216,20 @@ func (h *Handler) RotateAccessKey(c *gin.Context) {
 	resp := accessKeyResponse(entry)
 	resp["key"] = plaintext
 	c.JSON(http.StatusOK, resp)
+}
+
+// GetAccessJBGlobal reports the global jailbreak-assist master switch and the
+// global defaults layer. The access-key page uses it to explain what
+// "inherit" resolves to for keys and groups; it is read-only.
+func (h *Handler) GetAccessJBGlobal(c *gin.Context) {
+	if h == nil || h.cfg == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "configuration unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"enabled":  h.cfg.JB.IsEnabled(),
+		"defaults": h.cfg.JB.Defaults,
+	})
 }
 
 // ListAccessGroups returns all key groups with their usage counters.

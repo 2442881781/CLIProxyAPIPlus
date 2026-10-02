@@ -104,6 +104,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.DELETE("/access-groups", s.mgmt.DeleteAccessGroup)
 		mgmt.GET("/access-groups/usage", s.mgmt.GetAccessGroupUsage)
 		mgmt.GET("/access-auths", s.mgmt.ListAccessAuths)
+		mgmt.GET("/access-jb", s.mgmt.GetAccessJBGlobal)
 		mgmt.GET("/api-key-usage", s.mgmt.GetAPIKeyUsage)
 		mgmt.GET("/usage-queue", s.mgmt.GetUsageQueue)
 		mgmt.GET("/usage-monitor", s.mgmt.GetUsageMonitor)

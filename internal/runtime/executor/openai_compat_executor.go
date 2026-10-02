@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/jb"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -26,6 +28,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"sync/atomic"
 )
 
 const (
@@ -42,11 +45,18 @@ const (
 type OpenAICompatExecutor struct {
 	provider string
 	cfg      *config.Config
+	jbEngine atomic.Pointer[jb.Engine]
 }
 
 // NewOpenAICompatExecutor creates an executor bound to a provider key (e.g., "openrouter").
 func NewOpenAICompatExecutor(provider string, cfg *config.Config) *OpenAICompatExecutor {
 	return &OpenAICompatExecutor{provider: provider, cfg: cfg}
+}
+
+// SetJBEngine wires the shared JB engine into the executor. Safe for
+// concurrent use with in-flight requests.
+func (e *OpenAICompatExecutor) SetJBEngine(engine *jb.Engine) {
+	e.jbEngine.Store(engine)
 }
 
 // Identifier implements cliproxyauth.ProviderExecutor.
@@ -145,6 +155,17 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
+	jbSnap := storeaccess.SnapshotFromMetadata(opts.Metadata)
+	jbEngine := e.jbEngine.Load()
+	jbChannel := jbChannelForAuth(e.provider, auth)
+	if jbEngine != nil && jbSnap.JB {
+		if jbSnap.NSFW && (jbSnap.Narrative || jbEngine.IsNarrative(translated)) {
+			translated = jbEngine.InjectNarrative(translated, baseModel)
+		} else {
+			translated = jbEngine.InjectSpec(translated, baseModel)
+		}
+	}
+
 	url := strings.TrimSuffix(baseURL, "/") + endpoint
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
@@ -185,6 +206,10 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return resp, err
 	}
+	jbState := jb.StatePassthrough
+	if jbSnap.HeaderRejected {
+		jbState = jb.StateNarrativeRejected
+	}
 	defer func() {
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("openai compat executor: close response body error: %v", errClose)
@@ -194,14 +219,86 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
-		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
-		err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, b)
-		return resp, err
+		if jbSnap.Disambig && jbEngine != nil && jb.IsCyberPolicy400(httpResp.StatusCode, b) {
+			rewritten, hits := jbEngine.ApplyWordlists(translated, jbChannel)
+			if len(hits) > 0 && !bytes.Equal(rewritten, translated) {
+				log.WithFields(log.Fields{
+					"key_id": jbSnap.KeyID, "provider": jbChannel, "hits": hits,
+				}).Info("jb: disambig rewrite, retrying upstream")
+				if errClose := httpResp.Body.Close(); errClose != nil {
+					log.Errorf("openai compat executor: close response body error: %v", errClose)
+				}
+				httpReq2, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rewritten))
+				if errReq == nil {
+					httpReq2.Header = httpReq.Header.Clone()
+					httpResp, err = httpClient.Do(httpReq2)
+					if err != nil {
+						helps.RecordAPIResponseError(ctx, e.cfg, err)
+						return resp, err
+					}
+					helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+					if httpResp.StatusCode >= 200 && httpResp.StatusCode < 300 {
+						jbState = jb.StateDisambigRetry
+						translated = rewritten
+					} else {
+						b, _ = io.ReadAll(httpResp.Body)
+						jbState = jb.StateDisambigFailed
+					}
+				}
+			}
+			// No wordlist entry matched: nothing was rewritten or retried, so
+			// the state stays passthrough rather than claiming a failed retry.
+		}
+		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+			b, _ = io.ReadAll(httpResp.Body)
+			helps.AppendAPIResponseChunk(ctx, e.cfg, b)
+			helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
+			err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, b)
+			err = attachJBState(err, jbState)
+			return resp, err
+		}
 	}
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return resp, err
+	}
+	// Soft-refusal continuation retry. Costs a second upstream call; only
+	// fires when the key opted in AND the request is eligible. Under
+	// nsfw=off narrative-classified requests are excluded (the leak rule).
+	if jbSnap.RefusalRetry && jbEngine != nil {
+		completionText := jb.ExtractCompletionText(body)
+		isNarrative := jbSnap.Narrative || jbEngine.IsNarrative(translated)
+		if jb.IsSoftRefusal(completionText) && !(isNarrative && !jbSnap.NSFW) {
+			if cont := jbEngine.BuildContinuationPayload(translated, completionText); cont != nil {
+				log.WithFields(log.Fields{
+					"key_id": jbSnap.KeyID, "provider": jbChannel,
+				}).Info("jb: soft refusal detected, retrying with continuation")
+				httpReq2, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(cont))
+				if errReq == nil {
+					httpReq2.Header = httpReq.Header.Clone()
+					httpResp2, errDo := httpClient.Do(httpReq2)
+					if errDo == nil {
+						body2, errRead := io.ReadAll(httpResp2.Body)
+						_ = httpResp2.Body.Close()
+						if errRead == nil && httpResp2.StatusCode >= 200 && httpResp2.StatusCode < 300 &&
+							!jb.IsSoftRefusal(jb.ExtractCompletionText(body2)) {
+							jbState = jb.StateRetryWrote
+							// Cost accounting sees both upstream calls: the
+							// discarded refusal is billed as its own attempt.
+							reporter.PublishRetryAttempt(ctx, helps.ParseOpenAIUsage(body))
+							body = body2
+							httpResp.Header = httpResp2.Header.Clone()
+						} else {
+							jbState = jb.StateRefusalStands
+							// The delivered answer is the original refusal, so
+							// the discarded attempt is the continuation.
+							reporter.PublishRetryAttempt(ctx, helps.ParseOpenAIUsage(body2))
+						}
+					}
+				}
+			}
+		}
 	}
 	helps.AppendAPIResponseChunk(ctx, e.cfg, body)
 	reporter.ObserveResponseModel(body)
@@ -214,7 +311,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		out = helps.EnsureResponsesUsageDetails(out)
 	}
-	resp = cliproxyexecutor.Response{Payload: out, Headers: httpResp.Header.Clone()}
+	respHeaders := httpResp.Header.Clone()
+	respHeaders.Set(jb.HeaderName, string(jbState))
+	resp = cliproxyexecutor.Response{Payload: out, Headers: respHeaders}
 	return resp, nil
 }
 
@@ -361,6 +460,17 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
+	jbSnap := storeaccess.SnapshotFromMetadata(opts.Metadata)
+	jbEngine := e.jbEngine.Load()
+	jbChannel := jbChannelForAuth(e.provider, auth)
+	if jbEngine != nil && jbSnap.JB {
+		if jbSnap.NSFW && (jbSnap.Narrative || jbEngine.IsNarrative(translated)) {
+			translated = jbEngine.InjectNarrative(translated, baseModel)
+		} else {
+			translated = jbEngine.InjectSpec(translated, baseModel)
+		}
+	}
+
 	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
@@ -403,6 +513,10 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return nil, err
 	}
+	jbState := jb.StatePassthrough
+	if jbSnap.HeaderRejected {
+		jbState = jb.StateNarrativeRejected
+	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
@@ -411,28 +525,80 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("openai compat executor: close response body error: %v", errClose)
 		}
-		err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, b)
-		return nil, err
+		// SSE disambig retry: 400s arrive before any stream data so the
+		// retry can run inline without buffering partial output.
+		if jbSnap.Disambig && jbEngine != nil && jb.IsCyberPolicy400(httpResp.StatusCode, b) {
+			rewritten, hits := jbEngine.ApplyWordlists(translated, jbChannel)
+			if len(hits) > 0 && !bytes.Equal(rewritten, translated) {
+				log.WithFields(log.Fields{
+					"key_id": jbSnap.KeyID, "provider": jbChannel, "hits": hits,
+				}).Info("jb: stream disambig rewrite, retrying upstream")
+				httpReq2, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rewritten))
+				if errReq == nil {
+					httpReq2.Header = httpReq.Header.Clone()
+					httpResp, err = httpClient.Do(httpReq2)
+					if err == nil && httpResp.StatusCode >= 200 && httpResp.StatusCode < 300 {
+						jbState = jb.StateDisambigRetry
+						translated = rewritten
+					} else {
+						jbState = jb.StateDisambigFailed
+					}
+				}
+			}
+			// No wordlist entry matched: nothing was rewritten or retried, so
+			// the state stays passthrough rather than claiming a failed retry.
+		}
+		if httpResp == nil || httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+			var statusCode int
+			var headers http.Header
+			var body []byte
+			if httpResp != nil {
+				statusCode = httpResp.StatusCode
+				headers = httpResp.Header
+				body, _ = io.ReadAll(httpResp.Body)
+				if errClose := httpResp.Body.Close(); errClose != nil {
+					log.Errorf("openai compat executor: close response body error: %v", errClose)
+				}
+			}
+			err = newOpenAICompatStatusError(statusCode, headers, body)
+			err = attachJBState(err, jbState)
+			return nil, err
+		}
 	}
 	out := make(chan cliproxyexecutor.StreamChunk)
-	go func() {
-		defer close(out)
-		defer func() {
-			if errClose := httpResp.Body.Close(); errClose != nil {
-				log.Errorf("openai compat executor: close response body error: %v", errClose)
-			}
-		}()
-		scanner := bufio.NewScanner(httpResp.Body)
+
+	// refusalRetryBuffered: refusal retry on a streaming request requires the
+	// completed assistant text before classification, so the first upstream
+	// stream is drained synchronously into a chunk buffer. A non-refusal
+	// stream is then replayed verbatim; a refusal triggers one continuation
+	// request, also drained, and whichever stream survives classification is
+	// replayed to the client. SSE shape is preserved; TTFB becomes total
+	// upstream latency, matching the non-streaming refusal retry tradeoff.
+	refusalRetryBuffered := jbSnap.RefusalRetry && jbEngine != nil
+
+	emitDirect := func(c cliproxyexecutor.StreamChunk) bool {
+		select {
+		case out <- c:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	var streamUsage helps.StreamUsageBuffer
+
+	// pumpStream drains one upstream SSE body: each data frame is translated
+	// through the response-format translator and handed to emit (as either a
+	// payload or an error chunk). Returns the assembled assistant delta text
+	// for refusal classification plus terminal flags.
+	pumpStream := func(body io.Reader, emit func(cliproxyexecutor.StreamChunk) bool, usageBuf *helps.StreamUsageBuffer) (assembled string, failed, sawDone, aborted bool) {
+		var textBuf strings.Builder
+		scanner := bufio.NewScanner(body)
 		scanner.Buffer(nil, 52_428_800) // 50MB
 		claudeInputTokens := helps.NewClaudeInputTokenState(from, to, responseFormat, originalPayload)
 		var param any
-		var streamUsage helps.StreamUsageBuffer
-		var seenDone bool
-		var streamFailed bool
-		var streamAborted bool
 		var upstreamEvent string
 		var frameData [][]byte
-		defer streamUsage.Publish(ctx, reporter)
 
 		publishStreamError := func(streamErr statusErr, containsPayload bool) {
 			loggedErr := streamErr
@@ -441,11 +607,8 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			}
 			helps.RecordAPIResponseError(ctx, e.cfg, loggedErr)
 			reporter.PublishFailure(ctx, loggedErr)
-			select {
-			case out <- cliproxyexecutor.StreamChunk{Err: streamErr}:
-			case <-ctx.Done():
-			}
-			streamFailed = true
+			emit(cliproxyexecutor.StreamChunk{Err: streamErr})
+			failed = true
 		}
 
 		processFrame := func() bool {
@@ -460,7 +623,6 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				}
 				return false
 			}
-
 			if len(dataLines) > 1 {
 				for _, dataLine := range dataLines {
 					if bytes.Equal(bytes.TrimSpace(dataLine), []byte("[DONE]")) {
@@ -484,20 +646,21 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 					publishStreamError(streamErr, true)
 					return true
 				}
+				if refusalRetryBuffered {
+					textBuf.WriteString(jb.ExtractCompletionText(dataPayload))
+				}
 			}
 
 			streamLine := append([]byte("data: "), dataPayload...)
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, streamLine, &param, claudeInputTokens)
 			for i := range chunks {
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
-				case <-ctx.Done():
-					streamAborted = true
+				if !emit(cliproxyexecutor.StreamChunk{Payload: chunks[i]}) {
+					aborted = true
 					return true
 				}
 			}
 			if isDone {
-				seenDone = true
+				sawDone = true
 				return true
 			}
 			return false
@@ -508,7 +671,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			reporter.ObserveResponseModel(line)
-			streamUsage.ObserveOpenAIStream(line)
+			usageBuf.ObserveOpenAIStream(line)
 			trimmedLine := bytes.TrimSpace(line)
 			if len(trimmedLine) == 0 {
 				if processFrame() {
@@ -533,48 +696,144 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			}
 		}
 		errScan := scanner.Err()
-		if errScan == nil && !seenDone && !streamFailed && !streamAborted && len(frameData) > 0 {
+		if errScan == nil && !sawDone && !failed && !aborted && len(frameData) > 0 {
 			_ = processFrame()
 		}
-		if streamFailed || streamAborted {
-			return
+		if failed || aborted {
+			return textBuf.String(), failed, sawDone, aborted
 		}
 		if errScan != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
 			reporter.PublishFailure(ctx, errScan)
-			select {
-			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
-			case <-ctx.Done():
-			}
-		} else if !seenDone {
+			emit(cliproxyexecutor.StreamChunk{Err: errScan})
+			failed = true
+		} else if !sawDone {
 			// Responses clients require an explicit terminal event. Treat a clean
 			// upstream EOF without [DONE] as a failed stream instead of completing it.
 			if responseFormat == sdktranslator.FormatOpenAIResponse {
 				streamErr := statusErr{code: http.StatusBadGateway, msg: "upstream stream closed before [DONE]"}
 				helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
 				reporter.PublishFailure(ctx, streamErr)
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Err: streamErr}:
-				case <-ctx.Done():
-				}
-				return
+				emit(cliproxyexecutor.StreamChunk{Err: streamErr})
+				failed = true
+				return textBuf.String(), failed, sawDone, aborted
 			}
 
 			// Other protocols retain compatibility with providers that omit [DONE].
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, []byte("data: [DONE]"), &param, claudeInputTokens)
 			for i := range chunks {
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
-				case <-ctx.Done():
-					return
+				if !emit(cliproxyexecutor.StreamChunk{Payload: chunks[i]}) {
+					aborted = true
+					break
 				}
 			}
 		}
-		// Ensure we record the request if no usage chunk was ever seen.
-		streamUsage.Publish(ctx, reporter)
-		reporter.EnsurePublished(ctx)
-	}()
-	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+		return textBuf.String(), failed, sawDone, aborted
+	}
+
+	closeBody := func(resp *http.Response) {
+		if resp == nil || resp.Body == nil {
+			return
+		}
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("openai compat executor: close response body error: %v", errClose)
+		}
+	}
+
+	if refusalRetryBuffered {
+		var buffered []cliproxyexecutor.StreamChunk
+		collect := func(c cliproxyexecutor.StreamChunk) bool {
+			select {
+			case <-ctx.Done():
+				return false
+			default:
+			}
+			buffered = append(buffered, c)
+			return true
+		}
+
+		// The first pass accumulates its own usage so a discarded refusal (or a
+		// discarded continuation) can still be billed as its own attempt.
+		var firstUsage helps.StreamUsageBuffer
+		assembled, failed1, _, aborted1 := pumpStream(httpResp.Body, collect, &firstUsage)
+		closeBody(httpResp)
+		// Default: the client receives the first stream, so its usage is the
+		// primary record unless the retried stream replaces it.
+		streamUsage = firstUsage
+		if !failed1 && !aborted1 && jb.IsSoftRefusal(assembled) {
+			isNarrative := jbSnap.Narrative || jbEngine.IsNarrative(translated)
+			if !(isNarrative && !jbSnap.NSFW) {
+				retried := false
+				if cont := jbEngine.BuildContinuationPayload(translated, assembled); cont != nil {
+					log.WithFields(log.Fields{
+						"key_id": jbSnap.KeyID, "provider": jbChannel,
+					}).Info("jb: stream soft refusal detected, retrying with continuation")
+					httpReq2, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(cont))
+					if errReq == nil {
+						httpReq2.Header = httpReq.Header.Clone()
+						httpResp2, errDo := httpClient.Do(httpReq2)
+						if errDo == nil && httpResp2 != nil && httpResp2.StatusCode >= 200 && httpResp2.StatusCode < 300 {
+							var buffered2 []cliproxyexecutor.StreamChunk
+							var secondUsage helps.StreamUsageBuffer
+							collect2 := func(c cliproxyexecutor.StreamChunk) bool {
+								select {
+								case <-ctx.Done():
+									return false
+								default:
+								}
+								buffered2 = append(buffered2, c)
+								return true
+							}
+							assembled2, failed2, _, aborted2 := pumpStream(httpResp2.Body, collect2, &secondUsage)
+							closeBody(httpResp2)
+							if !failed2 && !aborted2 && !jb.IsSoftRefusal(assembled2) {
+								// The continuation delivered: the retried stream
+								// replaces the refusal buffer and becomes the
+								// primary record; the refusal is billed as its
+								// own discarded attempt.
+								buffered = buffered2
+								jbState = jb.StateRetryWrote
+								retried = true
+								firstUsage.PublishRetry(ctx, reporter)
+								streamUsage = secondUsage
+							} else {
+								// The client keeps the original refusal stream,
+								// so the discarded continuation is the extra
+								// upstream call to bill.
+								secondUsage.PublishRetry(ctx, reporter)
+							}
+						}
+					}
+				}
+				if !retried {
+					// Per the design contract the client sees the ORIGINAL
+					// refusal stream, never the retried failure output.
+					jbState = jb.StateRefusalStands
+				}
+			}
+		}
+		go func() {
+			defer close(out)
+			for _, c := range buffered {
+				if !emitDirect(c) {
+					return
+				}
+			}
+			streamUsage.Publish(ctx, reporter)
+			reporter.EnsurePublished(ctx)
+		}()
+	} else {
+		go func() {
+			defer close(out)
+			defer closeBody(httpResp)
+			_, _, _, _ = pumpStream(httpResp.Body, emitDirect, &streamUsage)
+			streamUsage.Publish(ctx, reporter)
+			reporter.EnsurePublished(ctx)
+		}()
+	}
+	streamHeaders := httpResp.Header.Clone()
+	streamHeaders.Set(jb.HeaderName, string(jbState))
+	return &cliproxyexecutor.StreamResult{Headers: streamHeaders, Chunks: out}, nil
 }
 
 func (e *OpenAICompatExecutor) executeImagesStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, endpointPath string) (_ *cliproxyexecutor.StreamResult, err error) {
@@ -1056,6 +1315,7 @@ type statusErr struct {
 	msg              string
 	retryAfter       *time.Duration
 	credentialScoped bool
+	jbState          jb.StateToken
 }
 
 func (e statusErr) Error() string {
@@ -1067,6 +1327,42 @@ func (e statusErr) Error() string {
 func (e statusErr) StatusCode() int            { return e.code }
 func (e statusErr) RetryAfter() *time.Duration { return e.retryAfter }
 func (e statusErr) IsCredentialScoped() bool   { return e.credentialScoped }
+
+// Headers exposes the upstream response headers plus the JB state token so
+// the handler can surface X-JB on the downstream response.
+func (e statusErr) Headers() http.Header {
+	if e.jbState == "" {
+		return nil
+	}
+	h := make(http.Header)
+	h.Set(jb.HeaderName, string(e.jbState))
+	return h
+}
+
+// attachJBState stamps the JB decision onto an error so it survives the
+// conductor's failover path unchanged.
+func attachJBState(err error, state jb.StateToken) error {
+	if err == nil || state == "" {
+		return err
+	}
+	if se, ok := err.(statusErr); ok {
+		se.jbState = state
+		return se
+	}
+	return err
+}
+
+// jbChannelForAuth picks the wordlist channel. Provider key wins; when the
+// request routed through openai-compatibility we use the configured
+// compat_name so a zhipu-flavored endpoint picks up the zhipu wordlist.
+func jbChannelForAuth(provider string, auth *cliproxyauth.Auth) string {
+	if auth != nil && auth.Attributes != nil {
+		if compat := strings.ToLower(strings.TrimSpace(auth.Attributes["compat_name"])); compat != "" {
+			return compat
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(provider))
+}
 
 const openAICompatTPMFallbackRetryAfter = time.Minute
 

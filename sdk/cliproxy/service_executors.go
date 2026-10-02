@@ -341,6 +341,7 @@ func (s *Service) registerOpenAICompatProviderExecutor(providerKey string, auth 
 		providerKey = "openai-compatibility"
 	}
 	compatExecutor := executor.NewOpenAICompatExecutor(providerKey, cfg)
+	compatExecutor.SetJBEngine(s.jbEngine)
 	nextExecutor := s.wrapOpenAICompatIfPluginAuth(compatExecutor, auth, cfg)
 	if !forceReplace {
 		if existingExecutor, hasExecutor := s.coreManager.Executor(providerKey); hasExecutor {

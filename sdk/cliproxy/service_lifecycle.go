@@ -98,6 +98,7 @@ func (s *Service) Run(ctx context.Context) error {
 		s.coreManager.StartAutoRefresh(ctx, interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
 		s.startProviderQuotaRefresh(ctx)
+		s.startJBAssetWatcher(ctx)
 	}
 
 	if !homeEnabled {
