@@ -8,7 +8,7 @@ import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { useApiKeysForModels } from '@/hooks/useApiKeysForModels';
 import { accessControlApi } from '@/services/api';
 import { useAuthStore, useModelsStore } from '@/stores';
-import type { AccessAuthItem, AccessGroup } from '@/types';
+import type { AccessAuthItem, AccessGroup, JBPreferences } from '@/types';
 import { formatCompactNumber, formatDateTimeValue } from '@/utils/format';
 import { GroupEditSheet } from './GroupEditSheet';
 import styles from './AccessGroupsPage.module.scss';
@@ -187,13 +187,27 @@ export function AccessGroupsPage() {
                   <th>{t('access_groups.col_models')}</th>
                   <th>{t('access_groups.col_pool')}</th>
                   <th>{t('access_groups.col_limits')}</th>
+                  <th>{t('access_groups.col_jb')}</th>
                   <th>{t('access_groups.col_usage')}</th>
                   <th>{t('access_groups.col_updated')}</th>
                   <th>{t('access_groups.col_actions')}</th>
                 </tr>
               </thead>
               <tbody>
-                {groups.map((group) => (
+                {groups.map((group) => {
+                  const jb = group.jb ?? {};
+                  const jbLabels: Array<[keyof JBPreferences, string]> = [
+                    ['jb', t('access_groups.jb_jb')],
+                    ['nsfw', t('access_groups.jb_nsfw')],
+                    ['disambig', t('access_groups.jb_disambig')],
+                    ['refusal-retry', t('access_groups.jb_refusal_retry')],
+                  ];
+                  const jbParts = jbLabels
+                    .filter(([key]) => jb[key] !== undefined)
+                    .map(([key, label]) =>
+                      `${label}${jb[key] ? t('access_groups.jb_on') : t('access_groups.jb_off')}`,
+                    );
+                  return (
                   <tr key={group.name}>
                     <td>
                       <code>{group.name}</code>
@@ -209,6 +223,9 @@ export function AccessGroupsPage() {
                         : t('access_groups.all_auths')}
                     </td>
                     <td>{summarizeLimits(group)}</td>
+                    <td className={styles.jbCell}>
+                      {jbParts.length ? jbParts.join(' · ') : t('access_groups.jb_inherit')}
+                    </td>
                     <td className={styles.totalCell}>
                       {formatTokens(group.usage.tokens)}
                       <small className={styles.usageSub}>
@@ -239,7 +256,8 @@ export function AccessGroupsPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
