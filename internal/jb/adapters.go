@@ -128,7 +128,7 @@ func mirrorResponsesUserTexts(payload []byte) []userTurn {
 			turns = append(turns, userTurn{text: content.String(), setPath: contentPath("input", i)})
 		case content.IsArray():
 			for j, part := range content.Array() {
-				if part.Get("type").String() == "text" {
+				if responsesTextPart(part) {
 					turns = append(turns, userTurn{
 						text:    part.Get("text").String(),
 						setPath: contentPath("input", i) + "." + itoa(j) + ".text",
@@ -138,6 +138,18 @@ func mirrorResponsesUserTexts(payload []byte) []userTurn {
 		}
 	}
 	return turns
+}
+
+// responsesTextPart reports whether a Responses content part carries
+// user-visible text. Responses payloads use input_text for user content and
+// output_text for assistant output; bare text appears in replay-style bodies.
+func responsesTextPart(part gjson.Result) bool {
+	switch part.Get("type").String() {
+	case "text", "input_text", "output_text":
+		return true
+	default:
+		return false
+	}
 }
 
 func mirrorClaudeUserTexts(payload []byte) []userTurn {

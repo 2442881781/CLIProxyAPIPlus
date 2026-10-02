@@ -181,6 +181,10 @@ func (s *Service) registerAvailableExecutors(ctx context.Context, opts executorR
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Registration can run before the first config apply (boot, plugin
+	// commits, auth events); make sure the JB engine exists so decorated
+	// executors never capture a nil engine.
+	s.ensureJBEngine()
 	s.executorRegistrationMu.Lock()
 	defer s.executorRegistrationMu.Unlock()
 	if ctx.Err() != nil {

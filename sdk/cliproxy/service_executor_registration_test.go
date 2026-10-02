@@ -3,6 +3,7 @@ package cliproxy
 import (
 	"context"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
@@ -195,5 +196,37 @@ func openAICompatKimiAuth() *coreauth.Auth {
 			"compat_name":  "kimi",
 			"provider_key": "kimi",
 		},
+	}
+}
+
+// TestRegisterAvailableExecutorsBootstrapsJBEngine covers a fresh process
+// where executor registration runs before any config apply: the JB engine must
+// exist first, otherwise decorated executors capture a nil engine permanently.
+func TestRegisterAvailableExecutorsBootstrapsJBEngine(t *testing.T) {
+	dir := t.TempDir()
+	specPath := dir + "/spec.md"
+	if err := os.WriteFile(specPath, []byte("spec for {model}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.JB.Enabled = new(true)
+	cfg.JB.SpecFile = specPath
+
+	service := &Service{
+		cfg:         cfg,
+		coreManager: coreauth.NewManager(nil, nil, nil),
+	}
+	service.ensureWebsocketGateway()
+	service.registerAvailableExecutors(nil, executorRegistrationOptions{includeBaseline: true})
+
+	if service.jbEngine == nil {
+		t.Fatal("registration must bootstrap the JB engine before decorating executors")
+	}
+	exec, ok := service.coreManager.Executor("codex")
+	if !ok || exec == nil {
+		t.Fatal("expected a codex executor after registration")
+	}
+	if !runtimeexecutor.IsJBWiringExecutor(exec) {
+		t.Fatalf("codex executor type = %T, want the JB wiring decorator", exec)
 	}
 }

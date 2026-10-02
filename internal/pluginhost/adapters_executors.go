@@ -380,6 +380,16 @@ func (h *Host) OwnsExecutor(executor coreauth.ProviderExecutor) bool {
 }
 
 func (h *Host) ownsExecutor(executor coreauth.ProviderExecutor) bool {
+	// Executors registered through a decorating manager (for example the JB
+	// wiring) still belong to this host; look through one wrapper layer before
+	// the adapter identity check.
+	if unwrapper, ok := executor.(interface {
+		UnwrapExecutor() coreauth.ProviderExecutor
+	}); ok && unwrapper != nil {
+		if inner := unwrapper.UnwrapExecutor(); inner != nil && inner != executor {
+			executor = inner
+		}
+	}
 	adapter, okAdapter := executor.(*executorAdapter)
 	return okAdapter && adapter != nil && adapter.host == h
 }
