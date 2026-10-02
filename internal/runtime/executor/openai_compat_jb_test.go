@@ -588,3 +588,26 @@ func TestJB_RefusalRetryBillsBothUpstreamCalls(t *testing.T) {
 		t.Fatalf("expected both upstream calls billed, got totals %v", totals)
 	}
 }
+
+func TestJBChannelForAuthPrefersRoutePrefix(t *testing.T) {
+	// A compat entry named in one language but routed under a stable prefix
+	// must key its wordlist by the prefix, which is what operators configure.
+	auth := &cliproxyauth.Auth{
+		Prefix:     "zhipu",
+		Provider:   "openai-compatible-团队版",
+		Attributes: map[string]string{"compat_name": "团队版", "compat_prefix": "zhipu"},
+	}
+	if got := jbChannelForAuth("openai-compatible-团队版", auth); got != "zhipu" {
+		t.Fatalf("jbChannelForAuth = %q, want zhipu", got)
+	}
+	// Older stored auth rows lack the prefix attribute; the display name still
+	// resolves so the behaviour degrades to what it was before.
+	legacy := &cliproxyauth.Auth{Attributes: map[string]string{"compat_name": "OpenCode Zen Free"}}
+	if got := jbChannelForAuth("openai-compatible-opencode", legacy); got != "OpenCode Zen Free" {
+		t.Fatalf("jbChannelForAuth = %q, want display-name fallback", got)
+	}
+	// Non-compat executors keep the provider key.
+	if got := jbChannelForAuth("OpenAI", nil); got != "openai" {
+		t.Fatalf("jbChannelForAuth = %q, want openai", got)
+	}
+}

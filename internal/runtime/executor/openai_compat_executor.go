@@ -1352,13 +1352,21 @@ func attachJBState(err error, state jb.StateToken) error {
 	return err
 }
 
-// jbChannelForAuth picks the wordlist channel. Provider key wins; when the
-// request routed through openai-compatibility we use the configured
-// compat_name so a zhipu-flavored endpoint picks up the zhipu wordlist.
+// jbChannelForAuth picks the wordlist channel. The route prefix configured
+// for the compat entry (also stamped into the auth attributes) is the stable
+// channel identity operators key wordlists by, so it wins; the provider key
+// covers non-compat executors, and compat_name (the display label) is only a
+// last resort.
 func jbChannelForAuth(provider string, auth *cliproxyauth.Auth) string {
-	if auth != nil && auth.Attributes != nil {
-		if compat := strings.ToLower(strings.TrimSpace(auth.Attributes["compat_name"])); compat != "" {
-			return compat
+	if auth != nil {
+		if auth.Prefix != "" {
+			return auth.Prefix
+		}
+		if p := auth.Attributes["compat_prefix"]; p != "" {
+			return p
+		}
+		if name := auth.Attributes["compat_name"]; name != "" {
+			return name
 		}
 	}
 	return strings.ToLower(strings.TrimSpace(provider))
