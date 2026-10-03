@@ -127,21 +127,25 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 	}
 	var pendingToolCalls []pendingToolCall
 	ambiguousToolCallIDs := map[string]struct{}{}
-	// if messages.IsArray() {
-	// 	arr := messages.Array()
-	// 	for i := 0; i < len(arr); i++ {
-	// 		m := arr[i]
-	// 		if m.Get("role").String() == "system" {
-	// 			c := m.Get("content")
-	// 			if c.Type == gjson.String {
-	// 				out, _ = sjson.SetBytes(out, "instructions", c.String())
-	// 			} else if c.IsObject() && c.Get("type").String() == "text" {
-	// 				out, _ = sjson.SetBytes(out, "instructions", c.Get("text").String())
-	// 			}
-	// 			break
-	// 		}
-	// 	}
-	// }
+	// Fold leading system messages into top-level instructions so injected
+	// policy keeps Responses-level weight instead of degrading to a developer
+	// item. Non-leading system messages still map to developer below.
+	systemConsumed := map[int]struct{}{}
+	if messages.IsArray() {
+		var parts []string
+		for i, m := range messages.Array() {
+			if m.Get("role").String() != "system" {
+				break
+			}
+			if text := systemMessageText(m.Get("content")); text != "" {
+				parts = append(parts, text)
+			}
+			systemConsumed[i] = struct{}{}
+		}
+		if len(parts) > 0 {
+			out, _ = sjson.SetBytes(out, "instructions", strings.Join(parts, "\n\n"))
+		}
+	}
 
 	// Build input from messages, handling all message types including tool calls
 	out, _ = sjson.SetRawBytes(out, "input", []byte(`[]`))
@@ -190,6 +194,10 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 				inputItems = append(inputItems, toolOutput)
 
 			default:
+				if _, consumed := systemConsumed[i]; consumed {
+					// Already folded into top-level instructions.
+					continue
+				}
 				// A new conversational message starts a new tool-call batch.
 				pendingToolCalls = nil
 				ambiguousToolCallIDs = map[string]struct{}{}
@@ -535,6 +543,27 @@ func setToolCallOutputContent(funcOutput []byte, content gjson.Result) []byte {
 		funcOutput, _ = sjson.SetBytes(funcOutput, "output", fallbackOutput)
 	}
 	return funcOutput
+}
+
+// systemMessageText extracts the plain text of a Chat Completions content
+// field: a bare string, a list of text parts, or a single text object.
+func systemMessageText(content gjson.Result) string {
+	switch {
+	case content.Type == gjson.String:
+		return content.String()
+	case content.IsArray():
+		parts := make([]string, 0, len(content.Array()))
+		for _, it := range content.Array() {
+			if it.Get("type").String() == "text" && it.Get("text").String() != "" {
+				parts = append(parts, it.Get("text").String())
+			}
+		}
+		return strings.Join(parts, "\n\n")
+	case content.IsObject() && content.Get("type").String() == "text":
+		return content.Get("text").String()
+	default:
+		return ""
+	}
 }
 
 func toolOutputContentPart(item gjson.Result) []byte {
