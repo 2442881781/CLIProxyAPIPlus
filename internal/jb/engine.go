@@ -24,10 +24,18 @@ import (
 
 // RefusalRegex detects soft-refusal phrasing in a completed response body.
 // Exported for callers that need to log the matched surface.
+//
+// The genre-shift branches catch a model that keeps the requested topic but
+// declares it will not render the explicit parts ("但不写露骨性描写"): the
+// self-report is the refusal signal, because the prose that follows is a
+// deliberate fade-out. Negation/avoidance verbs gate "露骨" so that narrative
+// uses ("他露骨地暗示了…") stay benign content.
 var RefusalRegex = regexp.MustCompile(`(?i)` +
 	`(?:不能|无法|不便|抱歉).{0,12}(?:实现|完成|做到|支持|给出|提供|写|生成|协助|帮助|包含)` +
 	`|(?:超出|不在).{0,8}(?:范围|职责|支持)` +
 	`|我不能|我不便|可以改成|可以改写|降级|含蓄版|不露骨` +
+	`|(?:不|未|没有)(?:写|含|做|作|涉及|出现)露骨|(?:避免|回避)露骨` +
+	`|(?:will|do(?:es)?|did) not (?:include|contain|write) explicit|avoid(?:s|ed|ing)? explicit|no explicit (?:sex|scene|content)` +
 	`|I (?:ca[n']?t|cannot|am unable|won'?t)` +
 	`|I'?m (?:unable|not able)` +
 	`|flagged for possible cybersecurity`)

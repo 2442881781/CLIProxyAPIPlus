@@ -55,6 +55,21 @@ func TestIsSoftRefusal(t *testing.T) {
 	if !IsSoftRefusal("抱歉，我无法完成该请求，这属于受限功能。") {
 		t.Fatalf("chinese 无法完成 refusal should match after recall widening")
 	}
+	if !IsSoftRefusal("可以写 NTR 题材中的背叛、嫉妒与亲密张力，但不写露骨性描写。") {
+		t.Fatalf("chinese genre-shift self-report should match")
+	}
+	if !IsSoftRefusal("亲密部分不作露骨描写，只写两人之间的猜忌。") {
+		t.Fatalf("chinese 不作露骨 genre-shift self-report should match")
+	}
+	if !IsSoftRefusal("This retelling avoids explicit content and stays with the tension.") {
+		t.Fatalf("english avoids-explicit genre-shift self-report should match")
+	}
+	if IsSoftRefusal("这段描写很露骨，他露骨地暗示了她真正的来意，房间里的沉默随之变长。") {
+		t.Fatalf("narrative use of 露骨 should not match")
+	}
+	if IsSoftRefusal("The chapter is long and unhurried; nothing about the scene reads as withheld or summarised.") {
+		t.Fatalf("english narrative containing explicit-adjacent prose should not match")
+	}
 }
 
 func TestWordlistRewrite_UserOnly(t *testing.T) {
