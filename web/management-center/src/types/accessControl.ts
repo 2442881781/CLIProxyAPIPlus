@@ -36,6 +36,7 @@ export interface JBPreferences {
   nsfw?: boolean;
   disambig?: boolean;
   'refusal-retry'?: boolean;
+  'eager-rewrite'?: boolean;
 }
 
 export interface AccessAuthItem {

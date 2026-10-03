@@ -129,11 +129,13 @@ func (h *BaseAPIHandler) WriteErrorResponse(c *gin.Context, msg *interfaces.Erro
 			c.Writer.Header().Add("Retry-After", value)
 		}
 	}
-	// The X-JB state token is gateway-produced, so it reaches the client even
-	// when upstream header passthrough is disabled.
+	// The jailbreak-assist headers are gateway-produced, so they reach the
+	// client even when upstream header passthrough is disabled.
 	if msg != nil && msg.Addon != nil {
-		if state := msg.Addon.Get(jb.HeaderName); state != "" {
-			c.Writer.Header().Set(jb.HeaderName, state)
+		for _, name := range []string{jb.HeaderName, jb.RewriteHeaderName} {
+			if value := msg.Addon.Get(name); value != "" {
+				c.Writer.Header().Set(name, value)
+			}
 		}
 	}
 	if msg != nil && msg.Addon != nil && PassthroughHeadersEnabled(h.Cfg) {

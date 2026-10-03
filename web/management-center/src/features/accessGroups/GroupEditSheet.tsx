@@ -35,6 +35,7 @@ interface FormState {
   nsfw: string;
   disambig: string;
   refusalRetry: string;
+  eagerRewrite: string;
 }
 
 const emptyForm: FormState = {
@@ -51,6 +52,7 @@ const emptyForm: FormState = {
   nsfw: '',
   disambig: '',
   refusalRetry: '',
+  eagerRewrite: '',
 };
 
 // Tri-state mapping between the tri-state selects ('' | 'on' | 'off') and the
@@ -62,6 +64,7 @@ const jbPreferences = (form: FormState): JBPreferences => {
     ['nsfw', form.nsfw],
     ['disambig', form.disambig],
     ['refusal-retry', form.refusalRetry],
+    ['eager-rewrite', form.eagerRewrite],
   ];
   for (const [key, state] of pairs) {
     if (state === 'on') out[key] = true;
@@ -89,6 +92,7 @@ const formFromGroup = (group: AccessGroup | null): FormState => {
     nsfw: jb.nsfw === true ? 'on' : jb.nsfw === false ? 'off' : '',
     disambig: jb.disambig === true ? 'on' : jb.disambig === false ? 'off' : '',
     refusalRetry: jb['refusal-retry'] === true ? 'on' : jb['refusal-retry'] === false ? 'off' : '',
+    eagerRewrite: jb['eager-rewrite'] === true ? 'on' : jb['eager-rewrite'] === false ? 'off' : '',
   };
 };
 
@@ -240,6 +244,7 @@ export function GroupEditSheet({
                 ['nsfw', t('access_groups.jb_nsfw')],
                 ['disambig', t('access_groups.jb_disambig')],
                 ['refusalRetry', t('access_groups.jb_refusal_retry')],
+                ['eagerRewrite', t('access_groups.jb_eager_rewrite')],
               ] as Array<[keyof FormState, string]>
             ).map(([key, label]) => (
               <div className={styles.field} key={key}>

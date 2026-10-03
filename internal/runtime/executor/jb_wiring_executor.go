@@ -155,11 +155,57 @@ func (e *jbWiringExecutor) jbSnapshotFor(opts cliproxyexecutor.Options) storeacc
 	return storeaccess.SnapshotFromMetadata(opts.Metadata)
 }
 
-// injectRequest applies spec/corpus injection to the request payload in the
-// source format. Returns the (possibly) modified request.
-func (e *jbWiringExecutor) injectRequest(req cliproxyexecutor.Request, opts cliproxyexecutor.Options, snap storeaccess.JBSnapshot, model string) cliproxyexecutor.Request {
+// jbEagerRewriteGate reports whether the eager pre-request wordlist rewrite
+// applies to this request. It needs the preference on AND the wordlist switch
+// on, because the eager path is only a different moment for the same lazy
+// Disambig table.
+func jbEagerRewriteGate(engine *jb.Engine, snap storeaccess.JBSnapshot) bool {
+	return engine != nil && snap.EagerRewrite && snap.Disambig
+}
+
+// jbEagerRewrite applies the channel wordlist to user-role text before the
+// first upstream attempt, replacing the lazy wait for a cyber_policy block.
+// It returns the (possibly) rewritten payload plus the entries that fired so
+// the caller can report them on the response.
+func jbEagerRewrite(engine *jb.Engine, snap storeaccess.JBSnapshot, payload []byte, channel, format string) ([]byte, []string) {
+	if !jbEagerRewriteGate(engine, snap) || len(payload) == 0 {
+		return payload, nil
+	}
+	rewritten, hits := engine.RewriteUserTextsFor(payload, channel, format)
+	return jbEagerChecked(snap, channel, payload, rewritten, hits)
+}
+
+// jbEagerApplyWordlists is the eager entry point for executors whose payload
+// is already translated into the upstream shape. It runs the same channel
+// table the cyber_policy retry would use, before the first attempt.
+func jbEagerApplyWordlists(engine *jb.Engine, snap storeaccess.JBSnapshot, payload []byte, channel string) ([]byte, []string) {
+	if !jbEagerRewriteGate(engine, snap) || len(payload) == 0 {
+		return payload, nil
+	}
+	rewritten, hits := engine.ApplyWordlists(payload, channel)
+	return jbEagerChecked(snap, channel, payload, rewritten, hits)
+}
+
+// jbEagerChecked keeps the payload untouched unless the rewrite actually
+// changed something, then logs the audit line once per request.
+func jbEagerChecked(snap storeaccess.JBSnapshot, channel string, payload, rewritten []byte, hits []string) ([]byte, []string) {
+	if len(hits) == 0 || bytes.Equal(rewritten, payload) {
+		return payload, nil
+	}
+	log.WithFields(log.Fields{
+		"key_id": snap.KeyID, "provider": channel, "hits": hits,
+	}).Info("jb: eager rewrite applied before upstream request")
+	return rewritten, hits
+}
+
+// injectRequest applies the eager wordlist rewrite and then spec/corpus
+// injection to the request payload in the source format. Returns the
+// (possibly) modified request and the wordlist entries that fired.
+func (e *jbWiringExecutor) injectRequest(req cliproxyexecutor.Request, opts cliproxyexecutor.Options, snap storeaccess.JBSnapshot, model, channel string) (cliproxyexecutor.Request, []string) {
+	var hits []string
+	req.Payload, hits = jbEagerRewrite(e.engine, snap, req.Payload, channel, jbSourceFormat(opts))
 	if e.engine == nil || !snap.JB || len(req.Payload) == 0 {
-		return req
+		return req, hits
 	}
 	format := jbSourceFormat(opts)
 	if snap.NSFW && (snap.Narrative || e.engine.IsNarrativeFor(req.Payload, format)) {
@@ -167,7 +213,7 @@ func (e *jbWiringExecutor) injectRequest(req cliproxyexecutor.Request, opts clip
 	} else {
 		req.Payload = e.engine.InjectSystemFor(req.Payload, model, format, false)
 	}
-	return req
+	return req, hits
 }
 
 // responseTokenInit picks the initial response header token.
@@ -186,6 +232,19 @@ func jbSetState(headers http.Header, state jb.StateToken) http.Header {
 	return headers
 }
 
+// jbStampRewrite records the eager-rewrite wordlist entries on the response
+// headers so clients can see which surface forms were replaced upstream.
+func jbStampRewrite(headers http.Header, hits []string) http.Header {
+	if len(hits) == 0 {
+		return headers
+	}
+	if headers == nil {
+		headers = make(http.Header, 1)
+	}
+	headers.Set(jb.RewriteHeaderName, strings.Join(hits, ","))
+	return headers
+}
+
 // attachJBWiringState stamps the X-JB token onto statusErr-shaped errors so it
 // survives the conductor's failover path unchanged.
 func attachJBWiringState(err error, state jb.StateToken) error {
@@ -194,18 +253,24 @@ func attachJBWiringState(err error, state jb.StateToken) error {
 
 // Execute runs the inner executor with JB injection, the cyber-400 lazy
 // rewrite retry, and the soft-refusal continuation retry (non-stream only).
-func (e *jbWiringExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (e *jbWiringExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	snap := e.jbSnapshotFor(opts)
 	format := jbSourceFormat(opts)
 	model := jbWiringBaseModel(req.Model)
 	state := jbWiringInitialToken(snap)
 
-	req = e.injectRequest(req, opts, snap, model)
+	var rwHits []string
+	req, rwHits = e.injectRequest(req, opts, snap, model, e.channelFor(auth))
+	// The audit header reports the eager rewrite on whichever response or
+	// error shape ends up reaching the client.
+	defer func() {
+		resp.Headers = jbStampRewrite(resp.Headers, rwHits)
+	}()
 
-	resp, err := e.inner.Execute(ctx, auth, req, opts)
+	resp, err = e.inner.Execute(ctx, auth, req, opts)
 	if err != nil {
 		if !snap.Disambig || e.engine == nil {
-			return resp, attachJBWiringState(err, state)
+			return resp, attachJBRewriteHits(attachJBWiringState(err, state), rwHits)
 		}
 		// Error path: a cyber_policy 400 is retried once with the rewritten
 		// user text; the rewritten request is delivered to the inner executor
@@ -213,11 +278,11 @@ func (e *jbWiringExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req
 		code := jbWiringErrorStatus(err)
 		body := jbWiringErrorBody(err)
 		if !jb.IsCyberPolicy400(code, body) {
-			return resp, attachJBWiringState(err, state)
+			return resp, attachJBRewriteHits(attachJBWiringState(err, state), rwHits)
 		}
 		rewritten, hits := e.engine.RewriteUserTextsFor(req.Payload, e.channelFor(auth), format)
 		if len(hits) == 0 || bytes.Equal(rewritten, req.Payload) {
-			return resp, attachJBWiringState(err, state)
+			return resp, attachJBRewriteHits(attachJBWiringState(err, state), rwHits)
 		}
 		log.WithFields(log.Fields{
 			"key_id": snap.KeyID, "provider": e.channelFor(auth), "hits": hits,
@@ -226,7 +291,7 @@ func (e *jbWiringExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req
 		retryReq.Payload = rewritten
 		resp2, err2 := e.inner.Execute(ctx, auth, retryReq, opts)
 		if err2 != nil {
-			return resp2, attachJBWiringState(err2, jb.StateDisambigFailed)
+			return resp2, attachJBRewriteHits(attachJBWiringState(err2, jb.StateDisambigFailed), rwHits)
 		}
 		resp2.Headers = jbSetState(resp2.Headers, jb.StateDisambigRetry)
 		return resp2, nil
@@ -283,7 +348,8 @@ func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Aut
 	state := jbWiringInitialToken(snap)
 	model := jbWiringBaseModel(req.Model)
 
-	req = e.injectRequest(req, opts, snap, model)
+	var rwHits []string
+	req, rwHits = e.injectRequest(req, opts, snap, model, e.channelFor(auth))
 
 	result, err := e.inner.ExecuteStream(ctx, auth, req, opts)
 	if err != nil {
@@ -309,10 +375,15 @@ func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Aut
 		if err2 != nil {
 			return nil, attachJBWiringState(err2, jb.StateDisambigFailed)
 		}
+		result2.Headers = jbStampRewrite(result2.Headers, rwHits)
 		result2.Headers = jbSetState(result2.Headers, jb.StateDisambigRetry)
 		return result2, nil
 	}
 
+	// The stream is about to be released to the client in one of the shapes
+	// below; all of them carry these headers, so the eager-rewrite audit
+	// entry is stamped once here.
+	result.Headers = jbStampRewrite(result.Headers, rwHits)
 	// Refusal-retry keys run the shared prefix window: a normal answer is
 	// released to the client as soon as the window commits, and only a refusal
 	// opening keeps buffering for the continuation retry. Committing therefore
@@ -331,7 +402,7 @@ func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Aut
 		return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringChain(ctx, head, result.Chunks)}, nil
 	}
 	if decision == jb.StreamCyberBlocked {
-		return e.jbStreamDisambig(ctx, auth, req, opts, result, head, snap, format, responseFormat)
+		return e.jbStreamDisambig(ctx, auth, req, opts, result, head, snap, format, responseFormat, rwHits)
 	}
 
 	refusalOpening := !failed && jb.IsSoftRefusal(headText)
@@ -400,7 +471,9 @@ func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Aut
 // by an error event) with the same wordlist rewrite + single retry as the
 // transport-level 400 path. The blocked stream keeps draining in the
 // background when a retry runs; without a wordlist hit the block is delivered
-// untouched so operators can audit the original failure.
+// untouched so operators can audit the original failure. rwHits carries the
+// entries the eager rewrite already applied so the retried response keeps the
+// same audit trail as every other outcome.
 func (e *jbWiringExecutor) jbStreamDisambig(
 	ctx context.Context,
 	auth *coreauth.Auth,
@@ -410,6 +483,7 @@ func (e *jbWiringExecutor) jbStreamDisambig(
 	head []cliproxyexecutor.StreamChunk,
 	snap storeaccess.JBSnapshot,
 	format, responseFormat string,
+	rwHits []string,
 ) (*cliproxyexecutor.StreamResult, error) {
 	state := jbWiringInitialToken(snap)
 	if !snap.Disambig || e.engine == nil {
@@ -433,6 +507,7 @@ func (e *jbWiringExecutor) jbStreamDisambig(
 	if errRetry != nil {
 		return nil, attachJBWiringState(errRetry, jb.StateDisambigFailed)
 	}
+	retryResult.Headers = jbStampRewrite(retryResult.Headers, rwHits)
 	retryResult.Headers = jbSetState(retryResult.Headers, jb.StateDisambigRetry)
 	return retryResult, nil
 }

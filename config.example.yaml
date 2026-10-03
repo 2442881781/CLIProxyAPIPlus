@@ -106,6 +106,7 @@ access:
 #     jb:            on    # spec injection + soft-refusal continuation retry
 #     nsfw:          off   # narrative/adult admission; gates corpus + retry
 #     disambig:      on    # lazy 400 rewrite through the channel wordlist
+#     eager-rewrite: off   # same wordlist, applied before the first attempt
 #     refusal-retry: off   # one-time continuation retry; ~2x upstream tokens
 #
 #   # Narrative classifier regex. Drives corpus injection, refusal-retry
@@ -141,6 +142,13 @@ access:
 #   # Entries match literally and case-insensitively; add `regex: true` to a
 #   # wordlist entry when the term needs boundaries (e.g. '\bRATs?\b'), because
 #   # a literal "rat" would also match inside ordinary words.
+#   # `eager-rewrite: on` runs this same table over the user turns of every
+#   # eligible request before the first upstream attempt (so the prompt bytes
+#   # the upstream sees change), instead of waiting for a cyber_policy 400. It
+#   # requires `disambig: on` too: same table, same opt-in. Only user turns are
+#   # rewritten; system, assistant and tool turns stay verbatim. The gateway
+#   # reports the replaced terms on the response header
+#   # X-JB-Rewrite: <match>[,<match>...].
 #   wordlists:
 #     openai: config/jb-words-openai.yaml
 #     zhipu:  config/jb-words-zhipu.yaml
@@ -155,8 +163,10 @@ access:
 #   X-JB: no-nsfw           disable nsfw admission for this request
 #   X-JB: no-retry          disable the refusal continuation retry
 #   X-JB: no-disambig       disable the cyber_policy lazy retry
+#   X-JB: no-eager          disable the pre-request wordlist rewrite
 # Response carries X-JB: passthrough | committed | disambig-retry |
 # disambig-failed | retry-wrote | refusal-stands | narrative-rejected.
+# X-JB-Rewrite is present only when an eager rewrite replaced something.
 # committed: the streaming prefix window confirmed the answer was not a refusal
 # and released it incrementally; no refusal retry ran (a late refusal cannot be
 # retracted).

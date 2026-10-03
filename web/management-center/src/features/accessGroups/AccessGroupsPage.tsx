@@ -201,6 +201,7 @@ export function AccessGroupsPage() {
                     ['nsfw', t('access_groups.jb_nsfw')],
                     ['disambig', t('access_groups.jb_disambig')],
                     ['refusal-retry', t('access_groups.jb_refusal_retry')],
+                    ['eager-rewrite', t('access_groups.jb_eager_rewrite')],
                   ];
                   const jbParts = jbLabels
                     .filter(([key]) => jb[key] !== undefined)

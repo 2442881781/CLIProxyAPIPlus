@@ -31,6 +31,7 @@ var corsExposedResponseHeaders = []string{
 	// The jailbreak-assist state machine reports its per-request outcome in
 	// this header; browsers must be able to read it to audit rewrites.
 	"X-JB",
+	"X-JB-Rewrite",
 }
 
 var corsExposedResponseHeadersJoined = strings.Join(corsExposedResponseHeaders, ", ")
