@@ -330,6 +330,9 @@ func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Aut
 		headers := jbSetState(result.Headers, jb.StateCommitted)
 		return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringChain(ctx, head, result.Chunks)}, nil
 	}
+	if decision == jb.StreamCyberBlocked {
+		return e.jbStreamDisambig(ctx, auth, req, opts, result, head, snap, format, responseFormat)
+	}
 
 	refusalOpening := !failed && jb.IsSoftRefusal(headText)
 	if decision == jb.StreamHold && !refusalOpening {
@@ -393,6 +396,47 @@ func (e *jbWiringExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Aut
 	return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringReplay(firstBuffered)}, nil
 }
 
+// jbStreamDisambig answers an in-stream cyber-policy block (HTTP 200 followed
+// by an error event) with the same wordlist rewrite + single retry as the
+// transport-level 400 path. The blocked stream keeps draining in the
+// background when a retry runs; without a wordlist hit the block is delivered
+// untouched so operators can audit the original failure.
+func (e *jbWiringExecutor) jbStreamDisambig(
+	ctx context.Context,
+	auth *coreauth.Auth,
+	req cliproxyexecutor.Request,
+	opts cliproxyexecutor.Options,
+	result *cliproxyexecutor.StreamResult,
+	head []cliproxyexecutor.StreamChunk,
+	snap storeaccess.JBSnapshot,
+	format, responseFormat string,
+) (*cliproxyexecutor.StreamResult, error) {
+	state := jbWiringInitialToken(snap)
+	if !snap.Disambig || e.engine == nil {
+		headers := jbSetState(result.Headers, state)
+		return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringChain(ctx, head, result.Chunks)}, nil
+	}
+	rewritten, hits := e.engine.RewriteUserTextsFor(req.Payload, e.channelFor(auth), format)
+	if len(hits) == 0 || bytes.Equal(rewritten, req.Payload) {
+		headers := jbSetState(result.Headers, state)
+		return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: jbWiringChain(ctx, head, result.Chunks)}, nil
+	}
+	log.WithFields(log.Fields{
+		"key_id": snap.KeyID, "provider": e.channelFor(auth), "hits": hits,
+	}).Info("jb: stream disambig rewrite, retrying upstream")
+	retryReq := req
+	retryReq.Payload = rewritten
+	retryResult, errRetry := e.inner.ExecuteStream(ctx, auth, retryReq, opts)
+	// The blocked stream is never delivered; drain it so its connection is not
+	// left half-read.
+	_ = jbWiringDrainAsync(result.Chunks, responseFormat)
+	if errRetry != nil {
+		return nil, attachJBWiringState(errRetry, jb.StateDisambigFailed)
+	}
+	retryResult.Headers = jbSetState(retryResult.Headers, jb.StateDisambigRetry)
+	return retryResult, nil
+}
+
 // jbWiringReadHead consumes the stream while the prefix window holds. It
 // returns on the first commit/reject verdict, or with StreamHold once the
 // stream closes inside the window.
@@ -412,6 +456,9 @@ func jbWiringReadHead(chunks <-chan cliproxyexecutor.StreamChunk, responseFormat
 		buffered = append(buffered, chunk)
 		if failed {
 			continue
+		}
+		if jb.IsCyberPolicyStreamFrame(chunk.Payload) {
+			return buffered, assembled, false, jb.StreamCyberBlocked
 		}
 		verdict, delta := window.Feed(chunk.Payload)
 		assembled += delta

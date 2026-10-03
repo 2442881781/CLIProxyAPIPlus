@@ -49,17 +49,42 @@ func IsCyberPolicy400(status int, body []byte) bool {
 	if status != http.StatusBadRequest {
 		return false
 	}
-	code := strings.ToLower(gjson.GetBytes(body, "error.code").String())
-	if code == "" {
-		code = strings.ToLower(gjson.GetBytes(body, "code").String())
+	return cyberPolicyError(gjson.ParseBytes(body))
+}
+
+// IsCyberPolicyStreamFrame reports whether one SSE frame is a cyber-policy
+// block delivered inside an otherwise successful stream: some upstreams answer
+// 200 and then emit an error event. The same matchers as the transport-level
+// 400 case apply to the frame's error object.
+func IsCyberPolicyStreamFrame(frame []byte) bool {
+	frame = frameJSONPayload(frame)
+	if len(frame) == 0 || !gjson.ValidBytes(frame) {
+		return false
 	}
-	if code == "cyber_policy" || code == "cyber-policy" {
-		return true
+	return cyberPolicyError(gjson.ParseBytes(frame))
+}
+
+// cyberPolicyError matches cyber-policy markers inside a payload's error
+// object ("error" or "response.error" wrapper) or at the top level.
+func cyberPolicyError(root gjson.Result) bool {
+	for _, path := range []string{"error", "response.error", ""} {
+		node := root
+		if path != "" {
+			node = root.Get(path)
+		}
+		if !node.Exists() || node.Raw == "null" {
+			continue
+		}
+		code := strings.ToLower(node.Get("code").String() + " " + node.Get("type").String())
+		if strings.Contains(code, "cyber_policy") || strings.Contains(code, "cyber-policy") {
+			return true
+		}
+		msg := strings.ToLower(node.Get("message").String())
+		if strings.Contains(msg, "flagged for possible cybersecurity") {
+			return true
+		}
 	}
-	msg := strings.ToLower(
-		gjson.GetBytes(body, "error.message").String() + " " +
-			gjson.GetBytes(body, "message").String())
-	return strings.Contains(msg, "flagged for possible cybersecurity")
+	return false
 }
 
 // ExtractCompletionText pulls the assistant-visible text out of an OpenAI

@@ -30,6 +30,11 @@ const (
 	StreamCommit
 	// StreamReject reports a refusal opening: run the continuation retry.
 	StreamReject
+	// StreamCyberBlocked reports a cyber-policy block delivered inside an
+	// otherwise successful stream (HTTP 200 followed by an error event). The
+	// executor answers it with the same wordlist rewrite + single retry as the
+	// transport-level 400 case.
+	StreamCyberBlocked
 )
 
 // StreamWindow decides when a buffered stream prefix can be released to the
