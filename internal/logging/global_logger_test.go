@@ -117,6 +117,32 @@ func TestLogFormatterPrintsPluginFields(t *testing.T) {
 	}
 }
 
+func TestLogFormatterPrintsJBRewriteFields(t *testing.T) {
+	entry := log.NewEntry(log.New())
+	entry.Time = time.Date(2026, 10, 3, 5, 58, 54, 0, time.Local)
+	entry.Level = log.InfoLevel
+	entry.Message = "jb: eager rewrite applied before upstream request"
+	entry.Data["key_id"] = "sk-test-key"
+	entry.Data["provider"] = "codex"
+	entry.Data["hits"] = "注册机,回传,beacons"
+
+	formatted, errFormat := (&LogFormatter{}).Format(entry)
+	if errFormat != nil {
+		t.Fatalf("Format() error = %v", errFormat)
+	}
+
+	line := string(formatted)
+	for _, want := range []string{
+		"provider=codex",
+		"key_id=sk-test-key",
+		"hits=注册机,回传,beacons",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("formatted line %q missing %s", line, want)
+		}
+	}
+}
+
 func TestLogFormatterOmitsGenericPathField(t *testing.T) {
 	entry := log.NewEntry(log.New())
 	entry.Time = time.Date(2026, 6, 25, 20, 20, 0, 0, time.Local)

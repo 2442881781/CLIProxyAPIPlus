@@ -193,7 +193,8 @@ func jbEagerChecked(snap storeaccess.JBSnapshot, channel string, payload, rewrit
 		return payload, nil
 	}
 	log.WithFields(log.Fields{
-		"key_id": snap.KeyID, "provider": channel, "hits": hits,
+		"key_id": snap.KeyID, "provider": channel,
+		"hits": strings.Join(hits, ","),
 	}).Info("jb: eager rewrite applied before upstream request")
 	return rewritten, hits
 }
