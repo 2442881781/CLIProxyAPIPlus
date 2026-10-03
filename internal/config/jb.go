@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// JBPrefs holds the four orthogonal JB toggles. Each field is a pointer so a
+// JBPrefs holds the orthogonal JB toggles. Each field is a pointer so a
 // nil value means "inherit from the lower layer" rather than an explicit off;
 // this lets key -> group -> global defaults stack with ceiling semantics.
 type JBPrefs struct {
@@ -28,6 +28,13 @@ type JBPrefs struct {
 	// RefusalRetry enables the single continuation retry when a 200 response
 	// is detected as a soft refusal. Costs roughly 2x upstream tokens.
 	RefusalRetry *bool `yaml:"refusal-retry,omitempty" json:"refusal-retry,omitempty"`
+
+	// EagerRewrite applies the routed channel's wordlist to user-role text
+	// before the first upstream attempt instead of waiting for a
+	// cyber_policy block. It reuses the Disambig table, so a channel needs a
+	// configured wordlist for it to have any effect. Off by default: it
+	// changes the prompt bytes sent upstream for every request.
+	EagerRewrite *bool `yaml:"eager-rewrite,omitempty" json:"eager-rewrite,omitempty"`
 }
 
 // Resolve layers the receiver over `lower`, returning a prefs where every set
@@ -52,6 +59,9 @@ func (p *JBPrefs) Resolve(lower *JBPrefs) JBPrefs {
 	if p.RefusalRetry != nil {
 		out.RefusalRetry = p.RefusalRetry
 	}
+	if p.EagerRewrite != nil {
+		out.EagerRewrite = p.EagerRewrite
+	}
 	return out
 }
 
@@ -67,6 +77,7 @@ func (p *JBPrefs) Effective(defs JBPrefs) JBEffective {
 		NSFW:         jbBool(base.NSFW, false),
 		Disambig:     jbBool(base.Disambig, true),
 		RefusalRetry: jbBool(base.RefusalRetry, false),
+		EagerRewrite: jbBool(base.EagerRewrite, false),
 	}
 }
 
@@ -77,6 +88,9 @@ type JBEffective struct {
 	NSFW         bool `json:"nsfw"`
 	Disambig     bool `json:"disambig"`
 	RefusalRetry bool `json:"refusal_retry"`
+	// EagerRewrite reports that the channel wordlist ran on user text before
+	// the first upstream attempt.
+	EagerRewrite bool `json:"eager_rewrite"`
 	// Narrative is true when the client declared the session narrative via
 	// the X-JB: narrative request header AND nsfw admission is on. Signals
 	// to the injector that narrative material must be present regardless of

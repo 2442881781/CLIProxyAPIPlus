@@ -289,19 +289,21 @@ func finalInterceptorHeaders(current, intercepted http.Header) http.Header {
 	return cloneHeader(intercepted)
 }
 
-// withJBState copies the gateway-produced X-JB state token onto the downstream
-// header set. The token describes what the jailbreak-assist layer did with the
-// request (it is not an upstream header), so it must survive regardless of
+// withJBState copies the gateway-produced jailbreak-assist headers onto the
+// downstream header set: the per-request state token and the eager-rewrite
+// audit entry. Neither comes from upstream, so both must survive regardless of
 // whether upstream header passthrough is enabled.
 func withJBState(out, source http.Header) http.Header {
-	state := source.Get(jb.HeaderName)
-	if state == "" {
-		return out
+	for _, name := range []string{jb.HeaderName, jb.RewriteHeaderName} {
+		value := source.Get(name)
+		if value == "" {
+			continue
+		}
+		if out == nil {
+			out = make(http.Header, 2)
+		}
+		out.Set(name, value)
 	}
-	if out == nil {
-		out = make(http.Header, 1)
-	}
-	out.Set(jb.HeaderName, state)
 	return out
 }
 

@@ -41,6 +41,11 @@ const (
 // HeaderName is the downstream-facing header carrying the state token.
 const HeaderName = "X-JB"
 
+// RewriteHeaderName carries the comma-separated wordlist entries that the
+// eager pre-request rewrite applied to user-role text. Absent when nothing
+// was rewritten, so clients can tell a rewritten prompt from an untouched one.
+const RewriteHeaderName = "X-JB-Rewrite"
+
 // IsCyberPolicy400 reports whether an upstream response is a hard cyber-policy
 // block eligible for the disambiguation lazy retry. We look at both the
 // structured code and the free-text message so channels that flatten the

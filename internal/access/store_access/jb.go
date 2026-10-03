@@ -47,6 +47,7 @@ const jbMetadataKey = "storeaccess.jb"
 //	no-nsfw      disable nsfw admission for this request
 //	no-retry     disable the refusal-retry continuation for this request
 //	no-disambig  disable the cyber_policy lazy retry for this request
+//	no-eager     disable the pre-request wordlist rewrite for this request
 //	narrative    declare the session narrative; requires nsfw admission or the
 //	             directive is rejected (logged + HeaderRejected)
 //	auto         defer narrative classification to the regex (default behavior)
@@ -100,6 +101,8 @@ func ResolveJB(cfg *config.SDKConfig, meta map[string]string, header http.Header
 			snap.JB = false
 		case "no-disambig":
 			snap.Disambig = false
+		case "no-eager":
+			snap.EagerRewrite = false
 		}
 	}
 	return snap

@@ -158,6 +158,8 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	jbSnap := storeaccess.SnapshotFromMetadata(opts.Metadata)
 	jbEngine := e.jbEngine.Load()
 	jbChannel := jbChannelForAuth(e.provider, auth)
+	var jbRewriteHits []string
+	translated, jbRewriteHits = jbEagerApplyWordlists(jbEngine, jbSnap, translated, jbChannel)
 	if jbEngine != nil && jbSnap.JB {
 		if jbSnap.NSFW && (jbSnap.Narrative || jbEngine.IsNarrative(translated)) {
 			translated = jbEngine.InjectNarrative(translated, baseModel)
@@ -254,7 +256,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 			helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 			helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
 			err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, b)
-			err = attachJBState(err, jbState)
+			err = attachJBRewriteHits(attachJBState(err, jbState), jbRewriteHits)
 			return resp, err
 		}
 	}
@@ -313,6 +315,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	}
 	respHeaders := httpResp.Header.Clone()
 	respHeaders.Set(jb.HeaderName, string(jbState))
+	respHeaders = jbStampRewrite(respHeaders, jbRewriteHits)
 	resp = cliproxyexecutor.Response{Payload: out, Headers: respHeaders}
 	return resp, nil
 }
@@ -463,6 +466,8 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	jbSnap := storeaccess.SnapshotFromMetadata(opts.Metadata)
 	jbEngine := e.jbEngine.Load()
 	jbChannel := jbChannelForAuth(e.provider, auth)
+	var jbRewriteHits []string
+	translated, jbRewriteHits = jbEagerApplyWordlists(jbEngine, jbSnap, translated, jbChannel)
 	if jbEngine != nil && jbSnap.JB {
 		if jbSnap.NSFW && (jbSnap.Narrative || jbEngine.IsNarrative(translated)) {
 			translated = jbEngine.InjectNarrative(translated, baseModel)
@@ -561,7 +566,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				}
 			}
 			err = newOpenAICompatStatusError(statusCode, headers, body)
-			err = attachJBState(err, jbState)
+			err = attachJBRewriteHits(attachJBState(err, jbState), jbRewriteHits)
 			return nil, err
 		}
 	}
@@ -875,6 +880,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	}
 	streamHeaders := httpResp.Header.Clone()
 	streamHeaders.Set(jb.HeaderName, string(jbState))
+	streamHeaders = jbStampRewrite(streamHeaders, jbRewriteHits)
 	return &cliproxyexecutor.StreamResult{Headers: streamHeaders, Chunks: out}, nil
 }
 
@@ -1358,6 +1364,7 @@ type statusErr struct {
 	retryAfter       *time.Duration
 	credentialScoped bool
 	jbState          jb.StateToken
+	jbRewrite        []string
 }
 
 func (e statusErr) Error() string {
@@ -1370,14 +1377,20 @@ func (e statusErr) StatusCode() int            { return e.code }
 func (e statusErr) RetryAfter() *time.Duration { return e.retryAfter }
 func (e statusErr) IsCredentialScoped() bool   { return e.credentialScoped }
 
-// Headers exposes the upstream response headers plus the JB state token so
-// the handler can surface X-JB on the downstream response.
+// Headers exposes the upstream response headers plus the JB state token (and
+// the eager-rewrite audit entry) so the handler can surface them on the
+// downstream response.
 func (e statusErr) Headers() http.Header {
-	if e.jbState == "" {
+	if e.jbState == "" && len(e.jbRewrite) == 0 {
 		return nil
 	}
 	h := make(http.Header)
-	h.Set(jb.HeaderName, string(e.jbState))
+	if e.jbState != "" {
+		h.Set(jb.HeaderName, string(e.jbState))
+	}
+	if len(e.jbRewrite) > 0 {
+		h.Set(jb.RewriteHeaderName, strings.Join(e.jbRewrite, ","))
+	}
 	return h
 }
 
@@ -1389,6 +1402,19 @@ func attachJBState(err error, state jb.StateToken) error {
 	}
 	if se, ok := err.(statusErr); ok {
 		se.jbState = state
+		return se
+	}
+	return err
+}
+
+// attachJBRewriteHits stamps the eager-rewrite audit entry onto an error so
+// the client can see which surface forms were replaced upstream.
+func attachJBRewriteHits(err error, hits []string) error {
+	if err == nil || len(hits) == 0 {
+		return err
+	}
+	if se, ok := err.(statusErr); ok {
+		se.jbRewrite = hits
 		return se
 	}
 	return err
