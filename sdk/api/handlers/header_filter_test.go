@@ -61,9 +61,11 @@ func TestFilterUpstreamHeaders_ReturnsNilWhenAllHeadersBlocked(t *testing.T) {
 func TestDownstreamHeadersCarryGatewayJBState(t *testing.T) {
 	// The X-JB token reports what the jailbreak-assist layer did, so it must
 	// reach the client even when upstream header passthrough is disabled and
-	// even when the interceptor diff would otherwise drop it.
+	// even when the interceptor diff would otherwise drop it. The X-JB-Rewrite
+	// audit header is gateway-produced for the same reason.
 	upstream := http.Header{
 		"X-Jb":          {"retry-wrote"},
+		"X-Jb-Rewrite":  {"注册机,后门"},
 		"X-Upstream-Id": {"abc"},
 	}
 
@@ -71,20 +73,23 @@ func TestDownstreamHeadersCarryGatewayJBState(t *testing.T) {
 	if got.Get("X-Jb") != "retry-wrote" {
 		t.Fatalf("passthrough off: X-JB = %q, want retry-wrote", got.Get("X-Jb"))
 	}
+	if got.Get("X-Jb-Rewrite") != "注册机,后门" {
+		t.Fatalf("passthrough off: X-JB-Rewrite = %q, want the audit entry", got.Get("X-Jb-Rewrite"))
+	}
 	if got.Get("X-Upstream-Id") != "" {
 		t.Fatalf("passthrough off must not leak upstream headers: %v", got)
 	}
 
 	got = downstreamHeadersFromExecutor(upstream, true)
-	if got.Get("X-Jb") != "retry-wrote" || got.Get("X-Upstream-Id") != "abc" {
+	if got.Get("X-Jb") != "retry-wrote" || got.Get("X-Jb-Rewrite") != "注册机,后门" || got.Get("X-Upstream-Id") != "abc" {
 		t.Fatalf("passthrough on: unexpected headers %v", got)
 	}
 
-	// Interceptor diff path: X-JB is unchanged between raw and final sets, so
-	// the diff drops it unless it is re-applied explicitly.
+	// Interceptor diff path: both headers are unchanged between raw and final
+	// sets, so the diff drops them unless they are re-applied explicitly.
 	got = downstreamHeadersAfterInterceptors(upstream, upstream, false)
-	if got.Get("X-Jb") != "retry-wrote" {
-		t.Fatalf("interceptor diff path: X-JB = %q, want retry-wrote", got.Get("X-Jb"))
+	if got.Get("X-Jb") != "retry-wrote" || got.Get("X-Jb-Rewrite") != "注册机,后门" {
+		t.Fatalf("interceptor diff path: unexpected headers %v", got)
 	}
 
 	// No JB header present: the helpers stay nil-safe.
