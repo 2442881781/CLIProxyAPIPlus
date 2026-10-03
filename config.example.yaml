@@ -136,6 +136,10 @@ access:
 #   wordlists:
 #     openai: config/jb-words-openai.yaml
 #     zhipu:  config/jb-words-zhipu.yaml
+#     # Non-compat channels resolve by provider key: `codex:` covers the GPT
+#     # codex executors, and a `*` entry is the fallback for every channel
+#     # without an explicit table.
+#     codex:  config/jb-words-openai.yaml
 #
 # The X-JB request header narrows per-request behavior (never widens):
 #   X-JB: narrative         declare session narrative; rejected when nsfw=off
@@ -148,13 +152,17 @@ access:
 # committed: the streaming prefix window confirmed the answer was not a refusal
 # and released it incrementally; no refusal retry ran (a late refusal cannot be
 # retracted).
+# On streams, disambig-retry means the cyber_policy rewrite ran and the retried
+# stream was delivered as-is; a retried stream that is blocked again cannot be
+# reclassified without buffering it to the end.
 #
 # Streaming requests support the same mechanisms. Disambiguation runs before
-# any stream data (the upstream 400 arrives first). Refusal retry buffers the
-# upstream stream for classification, so a streaming request with
-# refusal-retry enabled gains latency equal to the full upstream response;
-# the replay preserves the SSE shape. When the retried stream is also a
-# refusal, the original refusal stream is what the client receives.
+# any stream data for a transport-level 400, and inside the prefix window for
+# cyber_policy error events that arrive in an HTTP 200 stream. Refusal retry
+# holds only the stream prefix (first sentence or 160 runes) before committing
+# to incremental delivery, so a normal answer streams while a refusal opening
+# is still caught; the replay preserves the SSE shape. When the retried stream
+# is also a refusal, the original refusal stream is what the client receives.
 
 # Optional credential concurrency and observation contracts.
 
