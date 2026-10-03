@@ -113,6 +113,14 @@ access:
 #   # validator. Edit once; do not duplicate per call site.
 #   narrative-regex: "情色|色情|床笫|亲密|性爱|小说|短篇|描写的?片段|角色?扮演|erotic|explicit|nsfw|roleplay|intimate"
 #
+#   # The refusal detector itself is built in (jb.RefusalRegex, not configurable)
+#   # and catches apologetic incapability, out-of-scope claims, hedged rewrites
+#   # (含蓄版/不露骨), genre-shift self-reports that declare the explicit parts
+#   # will not be rendered (「但不写露骨性描写」, "avoids explicit content"), and
+#   # in-stream cyber_policy blocks. Genre-shift matching is gated on
+#   # negation/avoidance verbs, so narrative uses such as「他露骨地暗示了…」stay
+#   # ordinary content. Only the first refusal attempt is retried.
+#
 #   # Asset paths resolve relative to this config file's directory:
 #   #   corpus-file = the many-shot demonstration corpus (behavioral evidence)
 #   #   spec-file   = the refusal-judgment framework; {model} is replaced
