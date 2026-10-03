@@ -611,3 +611,84 @@ func TestJBChannelForAuthPrefersRoutePrefix(t *testing.T) {
 		t.Fatalf("jbChannelForAuth = %q, want openai", got)
 	}
 }
+
+func TestJB_StreamWindowCommitsBeforeUpstreamFinishes(t *testing.T) {
+	// A normal answer must be released as soon as the shared prefix window
+	// commits, without waiting for the upstream stream to finish.
+	var upstreamCalls atomic.Int32
+	var releaseOnce sync.Once
+	releaseCh := make(chan struct{})
+	release := func() { releaseOnce.Do(func() { close(releaseCh) }) }
+	defer release()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte(sseChunk(strings.Repeat("正", jb.StreamWindowRuneLimit+12))))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		select {
+		case <-releaseCh:
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = w.Write([]byte(sseChunk("tail")))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{}
+	cfg.SDKConfig.JB.Enabled = new(true)
+	exec := NewOpenAICompatExecutor("openai", cfg)
+	eng := jb.NewEngine(&cfg.SDKConfig, t.TempDir())
+	_ = eng.Load()
+	exec.SetJBEngine(eng)
+
+	auth := &cliproxyauth.Auth{
+		Provider:   "openai",
+		Attributes: map[string]string{"base_url": server.URL, "api_key": "sk"},
+	}
+	snap := storeaccess.JBSnapshot{
+		JBEffective: config.JBEffective{RefusalRetry: true},
+	}
+	opts := cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FormatOpenAI,
+		Stream:       true,
+		Metadata:     snap.InjectMetadata(nil),
+	}
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5",
+		Payload: []byte(`{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`),
+	}
+	res, err := exec.ExecuteStream(context.Background(), auth, req, opts)
+	if err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+	if got := res.Headers.Get(jb.HeaderName); got != string(jb.StateCommitted) {
+		t.Fatalf("X-JB = %q, want %q", got, jb.StateCommitted)
+	}
+	select {
+	case chunk, ok := <-res.Chunks:
+		if !ok {
+			t.Fatal("stream closed before the buffered head was released")
+		}
+		if !strings.Contains(string(chunk.Payload), "正") {
+			t.Fatalf("first chunk = %.80s", chunk.Payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first chunk was withheld until the upstream stream finished")
+	}
+	release()
+	body := runJBStream(t, res)
+	if !strings.Contains(body, "tail") {
+		t.Fatalf("tail must be streamed after release, got %s", body)
+	}
+	if upstreamCalls.Load() != 1 {
+		t.Fatalf("committed streams must not retry, got %d upstream calls", upstreamCalls.Load())
+	}
+}

@@ -32,6 +32,10 @@ const (
 	// StateNarrativeRejected means the client declared X-JB: narrative but the
 	// key's nsfw ceiling is off. The request ran under the ceiling.
 	StateNarrativeRejected StateToken = "narrative-rejected"
+	// StateCommitted means the answer was released to the client as soon as
+	// the stream prefix window confirmed it was not a refusal; the refusal
+	// retry was not attempted (a late refusal cannot be retracted).
+	StateCommitted StateToken = "committed"
 )
 
 // HeaderName is the downstream-facing header carrying the state token.
@@ -59,8 +63,9 @@ func IsCyberPolicy400(status int, body []byte) bool {
 }
 
 // ExtractCompletionText pulls the assistant-visible text out of an OpenAI
-// chat-completion or Responses-API payload so the refusal detector sees the
-// content a reader would, not the surrounding envelope.
+// chat-completion payload, a Responses-API body, or a single Responses
+// streaming event so the refusal detector sees the content a reader would, not
+// the surrounding envelope.
 func ExtractCompletionText(body []byte) string {
 	if len(body) == 0 {
 		return ""
@@ -78,8 +83,37 @@ func ExtractCompletionText(body []byte) string {
 			parts = append(parts, t.String())
 		}
 	}
+	// Responses streaming events: output/refusal deltas and done events carry
+	// their text as top-level fields, not inside an output[] envelope.
+	switch gjson.GetBytes(body, "type").String() {
+	case "response.output_text.delta", "response.refusal.delta":
+		if d := gjson.GetBytes(body, "delta"); d.Type == gjson.String {
+			parts = append(parts, d.String())
+		}
+	case "response.output_text.done", "response.refusal.done":
+		for _, key := range []string{"text", "refusal"} {
+			if t := gjson.GetBytes(body, key); t.Type == gjson.String && t.String() != "" {
+				parts = append(parts, t.String())
+				break
+			}
+		}
+	}
 	// responses API: output[] -> content[] -> output_text/text
 	for _, item := range gjson.GetBytes(body, "output").Array() {
+		for _, content := range item.Get("content").Array() {
+			if t := content.Get("text"); t.Exists() {
+				parts = append(parts, t.String())
+			}
+		}
+	}
+	// Nested Responses payloads: output_item.done carries item.content[].text,
+	// response.completed carries response.output[].content[].text.
+	for _, content := range gjson.GetBytes(body, "item.content").Array() {
+		if t := content.Get("text"); t.Exists() {
+			parts = append(parts, t.String())
+		}
+	}
+	for _, item := range gjson.GetBytes(body, "response.output").Array() {
 		for _, content := range item.Get("content").Array() {
 			if t := content.Get("text"); t.Exists() {
 				parts = append(parts, t.String())

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -132,6 +133,220 @@ func TestJBWiring_StreamRefusalStandsReplaysOriginal(t *testing.T) {
 	if got := res.Headers.Get(jb.HeaderName); got != string(jb.StateRefusalStands) {
 		t.Fatalf("X-JB = %q, want %q", got, jb.StateRefusalStands)
 	}
+}
+
+func TestJBWiring_StreamResponsesEventRefusalRetry(t *testing.T) {
+	engine := newJBWiringTestEngine(t)
+	// Responses-format streams deliver text as top-level delta events; the
+	// refusal detector must read them (it previously only knew choices[]).
+	refusal := []byte(`data: {"type":"response.output_text.delta","delta":"抱歉，我不能提供这个内容，因为它违反使用政策。这段需要超过 20 个字符才触发检测。"}`)
+	inner := &streamFakeJBInner{
+		fakeJBInner: fakeJBInner{provider: "fake"},
+		scripts: [][]cliproxyexecutor.StreamChunk{
+			{{Payload: refusal}},
+			{{Payload: []byte(`data: {"type":"response.output_text.delta","delta":"MOCK_FIXED_CONTENT"}`)}},
+		},
+	}
+	wrapped := NewJBWiringExecutor(inner, engine)
+
+	snap := storeaccess.JBSnapshot{JBEffective: config.JBEffective{RefusalRetry: true}}
+	opts := jbWiringOpts(snap, sdktranslator.FormatOpenAIResponse)
+	opts.Stream = true
+	req := cliproxyexecutor.Request{Model: "m", Payload: []byte(`{"model":"m","input":"hi","stream":true}`)}
+
+	res, err := wrapped.ExecuteStream(context.Background(), nil, req, opts)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	var collected []byte
+	for chunk := range res.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("chunk err: %v", chunk.Err)
+		}
+		collected = append(collected, chunk.Payload...)
+	}
+	if !strings.Contains(string(collected), "MOCK_FIXED_CONTENT") {
+		t.Fatalf("delivered payload must be the retry, got %s", collected)
+	}
+	if strings.Contains(string(collected), "不能提供") {
+		t.Fatalf("original refusal must not leak to the client: %s", collected)
+	}
+	if inner.calls != 2 {
+		t.Fatalf("responses-format refusal must trigger one retry, got %d calls", inner.calls)
+	}
+	if got := res.Headers.Get(jb.HeaderName); got != string(jb.StateRetryWrote) {
+		t.Fatalf("X-JB = %q, want %q", got, jb.StateRetryWrote)
+	}
+}
+
+// gatedStreamJBInner keeps the first stream's tail open until the test closes
+// release, so prefix-window behavior can be observed while the stream is still
+// running.
+type gatedStreamJBInner struct {
+	fakeJBInner
+	firstHead []cliproxyexecutor.StreamChunk
+	firstTail []cliproxyexecutor.StreamChunk
+	second    []cliproxyexecutor.StreamChunk
+	release   chan struct{}
+}
+
+func (g *gatedStreamJBInner) ExecuteStream(ctx context.Context, auth *coreauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	g.gotReq = append(g.gotReq, req)
+	i := g.calls
+	g.calls++
+	out := make(chan cliproxyexecutor.StreamChunk)
+	go func() {
+		defer close(out)
+		if i == 0 {
+			for _, c := range g.firstHead {
+				out <- c
+			}
+			select {
+			case <-g.release:
+			case <-ctx.Done():
+				return
+			}
+			for _, c := range g.firstTail {
+				out <- c
+			}
+			return
+		}
+		for _, c := range g.second {
+			out <- c
+		}
+	}()
+	return &cliproxyexecutor.StreamResult{Headers: make(http.Header), Chunks: out}, nil
+}
+
+func TestJBWiring_StreamWindowCommitsEarly(t *testing.T) {
+	engine := newJBWiringTestEngine(t)
+	inner := &gatedStreamJBInner{
+		fakeJBInner: fakeJBInner{provider: "fake"},
+		firstHead:   []cliproxyexecutor.StreamChunk{{Payload: []byte(`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"todo","arguments":""}}]}}]}`)}},
+		firstTail:   []cliproxyexecutor.StreamChunk{{Payload: []byte(`data: {"choices":[{"delta":{"content":"tail"}}]}`)}},
+		release:     make(chan struct{}),
+	}
+	wrapped := NewJBWiringExecutor(inner, engine)
+
+	snap := storeaccess.JBSnapshot{JBEffective: config.JBEffective{RefusalRetry: true}}
+	opts := jbWiringOpts(snap, sdktranslator.FormatOpenAI)
+	opts.Stream = true
+	req := cliproxyexecutor.Request{Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`)}
+
+	res, err := wrapped.ExecuteStream(context.Background(), nil, req, opts)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	// The head chunk must arrive while the first stream is still open; the old
+	// full-buffering implementation blocked here until the gate opened.
+	select {
+	case chunk, ok := <-res.Chunks:
+		if !ok || len(chunk.Payload) == 0 {
+			t.Fatalf("expected the buffered head before stream end, got ok=%v", ok)
+		}
+		if !strings.Contains(string(chunk.Payload), "tool_calls") {
+			t.Fatalf("first chunk = %s", chunk.Payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("head chunk was withheld until stream end")
+	}
+	if got := res.Headers.Get(jb.HeaderName); got != string(jb.StateCommitted) {
+		t.Fatalf("X-JB = %q, want %q", got, jb.StateCommitted)
+	}
+	close(inner.release)
+	var rest []byte
+	for chunk := range res.Chunks {
+		rest = append(rest, chunk.Payload...)
+	}
+	if !strings.Contains(string(rest), "tail") {
+		t.Fatalf("tail must be relayed after release, got %s", rest)
+	}
+	if inner.calls != 1 {
+		t.Fatalf("committed streams must not retry, got %d calls", inner.calls)
+	}
+}
+
+func TestJBWiring_StreamLateRefusalNotRetried(t *testing.T) {
+	engine := newJBWiringTestEngine(t)
+	normal := strings.Repeat("正", 60)
+	inner := &streamFakeJBInner{
+		fakeJBInner: fakeJBInner{provider: "fake"},
+		scripts: [][]cliproxyexecutor.StreamChunk{
+			{
+				{Payload: []byte(`data: {"choices":[{"delta":{"content":"` + normal + `"}}]}`)},
+				{Payload: []byte(`data: {"choices":[{"delta":{"content":"抱歉，我不能提供这个内容，因为它违反使用政策。"}}]}`)},
+			},
+		},
+	}
+	wrapped := NewJBWiringExecutor(inner, engine)
+
+	snap := storeaccess.JBSnapshot{JBEffective: config.JBEffective{RefusalRetry: true}}
+	opts := jbWiringOpts(snap, sdktranslator.FormatOpenAI)
+	opts.Stream = true
+	req := cliproxyexecutor.Request{Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`)}
+
+	res, err := wrapped.ExecuteStream(context.Background(), nil, req, opts)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	var collected []byte
+	for chunk := range res.Chunks {
+		collected = append(collected, chunk.Payload...)
+	}
+	if !strings.Contains(string(collected), normal) || !strings.Contains(string(collected), "不能提供") {
+		t.Fatalf("committed stream must keep flowing verbatim, got %s", collected)
+	}
+	if inner.calls != 1 {
+		t.Fatalf("late refusals cannot be retried after a commit, got %d calls", inner.calls)
+	}
+	if got := res.Headers.Get(jb.HeaderName); got != string(jb.StateCommitted) {
+		t.Fatalf("X-JB = %q, want %q", got, jb.StateCommitted)
+	}
+}
+
+func TestJBWiring_StreamRejectStartsRetryBeforeStreamEnds(t *testing.T) {
+	engine := newJBWiringTestEngine(t)
+	inner := &gatedStreamJBInner{
+		fakeJBInner: fakeJBInner{provider: "fake"},
+		firstHead:   []cliproxyexecutor.StreamChunk{{Payload: []byte(`data: {"choices":[{"delta":{"content":"抱歉，我不能提供这个内容，因为它违反使用政策。"}}]}`)}},
+		firstTail:   []cliproxyexecutor.StreamChunk{{Payload: []byte(`data: {"choices":[{"delta":{"content":"late"}}]}`)}},
+		second:      []cliproxyexecutor.StreamChunk{{Payload: []byte(`data: {"choices":[{"delta":{"content":"MOCK_FIXED"}}]}`)}},
+		release:     make(chan struct{}),
+	}
+	wrapped := NewJBWiringExecutor(inner, engine)
+
+	snap := storeaccess.JBSnapshot{JBEffective: config.JBEffective{RefusalRetry: true}}
+	opts := jbWiringOpts(snap, sdktranslator.FormatOpenAI)
+	opts.Stream = true
+	req := cliproxyexecutor.Request{Model: "m", Payload: []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}`)}
+
+	done := make(chan *cliproxyexecutor.StreamResult, 1)
+	go func() {
+		res, _ := wrapped.ExecuteStream(context.Background(), nil, req, opts)
+		done <- res
+	}()
+	select {
+	case res := <-done:
+		if res == nil {
+			t.Fatal("expected a stream result")
+		}
+		if inner.calls != 2 {
+			t.Fatalf("the retry must start before the original stream closes, calls=%d", inner.calls)
+		}
+		if got := res.Headers.Get(jb.HeaderName); got != string(jb.StateRetryWrote) {
+			t.Fatalf("X-JB = %q, want %q", got, jb.StateRetryWrote)
+		}
+		var collected []byte
+		for chunk := range res.Chunks {
+			collected = append(collected, chunk.Payload...)
+		}
+		if !strings.Contains(string(collected), "MOCK_FIXED") {
+			t.Fatalf("retry output must be delivered, got %s", collected)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ExecuteStream blocked on the original stream instead of retrying early")
+	}
+	close(inner.release)
 }
 
 func TestJBWiring_StreamCleanPassesThroughUnchanged(t *testing.T) {

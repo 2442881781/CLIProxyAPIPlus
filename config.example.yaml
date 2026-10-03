@@ -143,8 +143,11 @@ access:
 #   X-JB: no-nsfw           disable nsfw admission for this request
 #   X-JB: no-retry          disable the refusal continuation retry
 #   X-JB: no-disambig       disable the cyber_policy lazy retry
-# Response carries X-JB: passthrough | disambig-retry | disambig-failed |
-# retry-wrote | refusal-stands | narrative-rejected.
+# Response carries X-JB: passthrough | committed | disambig-retry |
+# disambig-failed | retry-wrote | refusal-stands | narrative-rejected.
+# committed: the streaming prefix window confirmed the answer was not a refusal
+# and released it incrementally; no refusal retry ran (a late refusal cannot be
+# retracted).
 #
 # Streaming requests support the same mechanisms. Disambiguation runs before
 # any stream data (the upstream 400 arrives first). Refusal retry buffers the

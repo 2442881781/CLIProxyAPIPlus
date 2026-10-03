@@ -21,22 +21,24 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
-// TestJBStreamRefusalRetryDeliversStreamFrames is the regression test for the
-// stream refusal retry: the client must receive the retried answer as ordinary
-// SSE delta frames. A previous implementation retried through the non-streaming
-// executor and delivered one completion body with choices[].message, which
-// strict clients (choices[].delta parsers) read as an empty response.
-func TestJBStreamRefusalRetryDeliversStreamFrames(t *testing.T) {
-	const model = "gpt-6-astra"
-	var mu sync.Mutex
-	var upstreamBodies []string
+// jbStreamUpstream is a fake codex upstream that answers the first call with a
+// soft refusal and every later call with real content, recording request
+// bodies.
+type jbStreamUpstream struct {
+	mu     sync.Mutex
+	bodies []string
+	server *httptest.Server
+}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func newJBStreamUpstream(t *testing.T) *jbStreamUpstream {
+	t.Helper()
+	u := &jbStreamUpstream{}
+	u.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		upstreamBodies = append(upstreamBodies, string(body))
-		call := len(upstreamBodies)
-		mu.Unlock()
+		u.mu.Lock()
+		u.bodies = append(u.bodies, string(body))
+		call := len(u.bodies)
+		u.mu.Unlock()
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -52,8 +54,29 @@ func TestJBStreamRefusalRetryDeliversStreamFrames(t *testing.T) {
 			flusher.Flush()
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(u.server.Close)
+	return u
+}
 
+func (u *jbStreamUpstream) calls() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return len(u.bodies)
+}
+
+func (u *jbStreamUpstream) lastBody() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if len(u.bodies) == 0 {
+		return ""
+	}
+	return u.bodies[len(u.bodies)-1]
+}
+
+// newJBStreamManager wires a JB-decorated codex executor against the fake
+// upstream under an omp-like JB policy (jb + nsfw + refusal-retry defaults).
+func newJBStreamManager(t *testing.T, upstreamURL, authID, model string) (*cliproxyauth.Manager, *config.Config) {
+	t.Helper()
 	cfg := &config.Config{}
 	cfg.JB.Enabled = new(true)
 	cfg.JB.Defaults = config.JBPrefs{
@@ -70,17 +93,28 @@ func TestJBStreamRefusalRetryDeliversStreamFrames(t *testing.T) {
 	manager.SetRetryConfig(0, 0, 0)
 	manager.RegisterExecutor(runtimeexecutor.NewJBWiringExecutor(runtimeexecutor.NewCodexExecutor(cfg), engine))
 
-	const authID = "jb-stream-retry-delivery"
 	registry.GetGlobalRegistry().RegisterClient(authID, "codex", []*registry.ModelInfo{{ID: model}})
 	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(authID) })
 
 	if _, errRegister := manager.Register(context.Background(), &cliproxyauth.Auth{
 		ID: authID, Provider: "codex", Status: cliproxyauth.StatusActive,
-		Attributes: map[string]string{"base_url": server.URL, "api_key": "dummy"},
+		Attributes: map[string]string{"base_url": upstreamURL, "api_key": "dummy"},
 		Metadata:   map[string]any{"disable_cooling": true},
 	}); errRegister != nil {
 		t.Fatal(errRegister)
 	}
+	return manager, cfg
+}
+
+// TestJBStreamRefusalRetryDeliversStreamFrames is the regression test for the
+// stream refusal retry: the client must receive the retried answer as ordinary
+// SSE delta frames. A previous implementation retried through the non-streaming
+// executor and delivered one completion body with choices[].message, which
+// strict clients (choices[].delta parsers) read as an empty response.
+func TestJBStreamRefusalRetryDeliversStreamFrames(t *testing.T) {
+	const model = "gpt-6-astra"
+	upstream := newJBStreamUpstream(t)
+	manager, cfg := newJBStreamManager(t, upstream.server.URL, "jb-stream-retry-chat", model)
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -110,18 +144,53 @@ func TestJBStreamRefusalRetryDeliversStreamFrames(t *testing.T) {
 	if strings.Contains(body, "不能提供") {
 		t.Fatalf("original refusal must not leak to the client: %s", body)
 	}
+	if upstream.calls() != 2 {
+		t.Fatalf("upstream calls = %d, want 2", upstream.calls())
+	}
+	if !strings.Contains(upstream.lastBody(), "续答规则") {
+		t.Fatalf("continuation instruction missing from the retried upstream request: %s", upstream.lastBody())
+	}
+}
 
-	mu.Lock()
-	calls := len(upstreamBodies)
-	second := ""
-	if calls > 1 {
-		second = upstreamBodies[calls-1]
+// TestJBStreamRefusalRetryDeliversResponsesFrames covers the Responses client
+// path: refusal detection reads response.output_text.delta events, so the
+// Codex CLI / responses-format channels retry instead of passing the refusal
+// through with X-JB: passthrough.
+func TestJBStreamRefusalRetryDeliversResponsesFrames(t *testing.T) {
+	const model = "gpt-6-astra"
+	upstream := newJBStreamUpstream(t)
+	manager, cfg := newJBStreamManager(t, upstream.server.URL, "jb-stream-retry-responses", model)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses",
+		strings.NewReader(fmt.Sprintf(`{"model":%q,"input":"hello","stream":true}`, model)))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	base := handlers.NewBaseAPIHandlers(&cfg.SDKConfig, manager)
+	openaihandlers.NewOpenAIResponsesAPIHandler(base).Responses(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	mu.Unlock()
-	if calls != 2 {
-		t.Fatalf("upstream calls = %d, want 2", calls)
+	if got := recorder.Header().Get(jb.HeaderName); got != string(jb.StateRetryWrote) {
+		t.Fatalf("X-JB = %q, want %q", got, jb.StateRetryWrote)
 	}
-	if !strings.Contains(second, "续答规则") {
-		t.Fatalf("continuation instruction missing from the retried upstream request: %s", second)
+	body := recorder.Body.String()
+	if !strings.Contains(body, "MOCK_FIXED_CONTENT") {
+		t.Fatalf("retried content missing from responses stream: %s", body)
+	}
+	if !strings.Contains(body, "response.output_text.delta") {
+		t.Fatalf("responses stream must keep event frames: %s", body)
+	}
+	if strings.Contains(body, "不能提供") {
+		t.Fatalf("original refusal must not leak to the client: %s", body)
+	}
+	if upstream.calls() != 2 {
+		t.Fatalf("upstream calls = %d, want 2", upstream.calls())
+	}
+	if !strings.Contains(upstream.lastBody(), "续答规则") {
+		t.Fatalf("continuation instruction missing from the retried upstream request: %s", upstream.lastBody())
 	}
 }
