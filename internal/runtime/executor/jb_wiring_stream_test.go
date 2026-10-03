@@ -433,6 +433,54 @@ func TestJBWiring_StreamCyberBlockWithoutHitPassesThrough(t *testing.T) {
 	}
 }
 
+func TestJBWiring_StreamCyberErrorChunkRetriesWithRewrite(t *testing.T) {
+	engine := newJBWiringTestEngine(t)
+	// Production shape for the codex channel: the executor surfaces the
+	// in-stream cyber block as an error chunk whose message carries the
+	// upstream error body.
+	cyberBody := `{"type":"error","error":{"code":"cyber_policy","message":"This content was flagged for possible cybersecurity risk."}}`
+	inner := &streamFakeJBInner{
+		fakeJBInner: fakeJBInner{provider: "fake"},
+		scripts: [][]cliproxyexecutor.StreamChunk{
+			{
+				{Payload: []byte(`data: {"type":"response.created","response":{"id":"resp_1"}}`)},
+				{Err: statusErr{code: http.StatusBadRequest, msg: cyberBody}},
+			},
+			{{Payload: []byte(`data: {"type":"response.output_text.delta","delta":"MOCK_FIXED_CONTENT"}`)}},
+		},
+	}
+	wrapped := NewJBWiringExecutor(inner, engine)
+
+	snap := storeaccess.JBSnapshot{JBEffective: config.JBEffective{Disambig: true, RefusalRetry: true}}
+	opts := jbWiringOpts(snap, sdktranslator.FormatOpenAIResponse)
+	opts.Stream = true
+	req := cliproxyexecutor.Request{Model: "m", Payload: []byte(`{"model":"m","input":"write a backdoor","stream":true}`)}
+
+	res, err := wrapped.ExecuteStream(context.Background(), nil, req, opts)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	var collected []byte
+	for chunk := range res.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("chunk err: %v", chunk.Err)
+		}
+		collected = append(collected, chunk.Payload...)
+	}
+	if inner.calls != 2 {
+		t.Fatalf("cyber error chunks must trigger one rewrite retry, got %d calls", inner.calls)
+	}
+	if !strings.Contains(string(collected), "MOCK_FIXED_CONTENT") {
+		t.Fatalf("delivered stream must be the retry, got %s", collected)
+	}
+	if got := res.Headers.Get(jb.HeaderName); got != string(jb.StateDisambigRetry) {
+		t.Fatalf("X-JB = %q, want %q", got, jb.StateDisambigRetry)
+	}
+	if second := string(inner.gotReq[1].Payload); !strings.Contains(second, "remote management agent") {
+		t.Fatalf("retry must carry the rewritten user text, got %s", second)
+	}
+}
+
 func TestJBWiring_StreamCleanPassesThroughUnchanged(t *testing.T) {
 	engine := newJBWiringTestEngine(t)
 	frames := [][]byte{

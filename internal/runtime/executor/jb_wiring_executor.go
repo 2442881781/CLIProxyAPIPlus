@@ -446,6 +446,12 @@ func jbWiringReadHead(chunks <-chan cliproxyexecutor.StreamChunk, responseFormat
 	}
 	for chunk := range chunks {
 		if chunk.Err != nil {
+			// Some executors surface an in-stream cyber block as an error
+			// chunk whose message carries the upstream error body.
+			if !failed && jb.IsCyberPolicyStreamFrame(jbWiringErrorBody(chunk.Err)) {
+				buffered = append(buffered, chunk)
+				return buffered, assembled, false, jb.StreamCyberBlocked
+			}
 			failed = true
 			buffered = append(buffered, chunk)
 			continue
