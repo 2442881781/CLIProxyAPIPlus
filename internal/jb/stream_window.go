@@ -7,11 +7,17 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// StreamWindowRuneLimit bounds how much assistant text the streaming prefix
-// window buffers before it commits the stream to incremental delivery. Small
-// enough that normal answers start streaming within a second or two, large
-// enough that classic refusal openers ("抱歉，我不能提供…") are already visible.
-const StreamWindowRuneLimit = 48
+// StreamWindowRuneLimit is the hard cap on how much assistant text the
+// streaming prefix window buffers before it commits the stream to incremental
+// delivery. The window normally commits earlier, at the first sentence
+// terminator: refusals almost always complete inside the first sentence, while
+// normal answers should not be held longer than that sentence.
+const StreamWindowRuneLimit = 160
+
+// streamWindowMinCommitRunes keeps a very short fragment (for example an
+// immediate newline or "。" after a few characters) from committing the window
+// before a refusal opener had a chance to appear.
+const streamWindowMinCommitRunes = 24
 
 // StreamDecision is the prefix-window verdict for a streaming response.
 type StreamDecision int
@@ -46,9 +52,9 @@ func NewStreamWindow(format string) *StreamWindow {
 //
 // The order matters: a tool-call signal commits immediately (a tool round
 // cannot be a soft refusal), then refusal detection runs on the accumulated
-// text, and only then does the rune limit commit. Reasoning-only frames hold:
-// they carry no assistant text, and committing on them would leak reasoning
-// deltas that a retry would later repeat.
+// text, and only then can the text commit the window. Reasoning-only frames
+// hold: they carry no assistant text, and committing on them would leak
+// reasoning deltas that a retry would later repeat.
 func (w *StreamWindow) Feed(frame []byte) (StreamDecision, string) {
 	if w == nil {
 		return StreamCommit, ""
@@ -64,10 +70,26 @@ func (w *StreamWindow) Feed(frame []byte) (StreamDecision, string) {
 	if IsSoftRefusal(w.text.String()) {
 		return StreamReject, delta
 	}
-	if utf8.RuneCountInString(w.text.String()) >= w.limit {
+	if w.commitReady(delta) {
 		return StreamCommit, delta
 	}
 	return StreamHold, delta
+}
+
+// commitReady reports whether the held text may be released: either it reached
+// the hard cap, or the current delta completed a sentence after enough text
+// was held for a refusal opener to have appeared. The terminator set keeps CJK
+// sentence marks and newlines but not ASCII ".", which appears mid-token in
+// domains and abbreviations (Outlook.com) and would commit too early.
+func (w *StreamWindow) commitReady(delta string) bool {
+	held := utf8.RuneCountInString(w.text.String())
+	if held >= w.limit {
+		return true
+	}
+	if held < streamWindowMinCommitRunes {
+		return false
+	}
+	return strings.ContainsAny(delta, "。！？!?\n")
 }
 
 // Text returns the assistant text accumulated while holding.

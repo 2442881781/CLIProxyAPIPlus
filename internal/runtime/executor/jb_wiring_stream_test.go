@@ -268,7 +268,9 @@ func TestJBWiring_StreamWindowCommitsEarly(t *testing.T) {
 
 func TestJBWiring_StreamLateRefusalNotRetried(t *testing.T) {
 	engine := newJBWiringTestEngine(t)
-	normal := strings.Repeat("正", 60)
+	// The first sentence completes normally, so the window commits; the
+	// refusal that follows can no longer be retried.
+	normal := strings.Repeat("正", 60) + "。"
 	inner := &streamFakeJBInner{
 		fakeJBInner: fakeJBInner{provider: "fake"},
 		scripts: [][]cliproxyexecutor.StreamChunk{

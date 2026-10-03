@@ -9,11 +9,39 @@ func TestStreamWindowCommitsOnTextThreshold(t *testing.T) {
 	w := NewStreamWindow("openai")
 	verdict, delta := w.Feed([]byte(`data: {"choices":[{"delta":{"content":"` + strings.Repeat("甲", StreamWindowRuneLimit-1) + `"}}]}`))
 	if verdict != StreamHold || delta == "" {
-		t.Fatalf("below the limit must hold, got verdict=%v delta=%q", verdict, delta)
+		t.Fatalf("below the cap must hold, got verdict=%v delta=%q", verdict, delta)
 	}
 	verdict, _ = w.Feed([]byte(`data: {"choices":[{"delta":{"content":"乙"}}]}`))
 	if verdict != StreamCommit {
-		t.Fatalf("reaching the rune limit must commit, got %v", verdict)
+		t.Fatalf("reaching the rune cap must commit, got %v", verdict)
+	}
+}
+
+func TestStreamWindowCommitsAtFirstSentence(t *testing.T) {
+	// A refusal opener must get the whole first sentence; the window only
+	// commits once that sentence is complete (not at a fixed small prefix).
+	w := NewStreamWindow("openai")
+	verdict, _ := w.Feed([]byte(`data: {"choices":[{"delta":{"content":"` + strings.Repeat("甲", 30) + `。还有后续"}}]}`))
+	if verdict != StreamCommit {
+		t.Fatalf("a completed sentence after enough text must commit, got %v", verdict)
+	}
+
+	short := NewStreamWindow("openai")
+	verdict, _ = short.Feed([]byte(`data: {"choices":[{"delta":{"content":"短句。"}}]}`))
+	if verdict != StreamHold {
+		t.Fatalf("a terminator before the minimum hold must not commit, got %v", verdict)
+	}
+
+	// The production shape that motivated the sentence rule: a hedging first
+	// clause without a terminator holds until the refusal opener appears.
+	refusal := NewStreamWindow("openai")
+	verdict, _ = refusal.Feed([]byte(`data: {"choices":[{"delta":{"content":"SMTP/IMAP 无法注册 Outlook.com 账号；纯 HTTP 理论上可以复现注册网页的请求，但我目前没有经过验证的微软现行注册协议，"}}]}`))
+	if verdict != StreamHold {
+		t.Fatalf("a comma clause without a terminator must hold, got %v", verdict)
+	}
+	verdict, _ = refusal.Feed([]byte(`data: {"choices":[{"delta":{"content":"不能提供一份声称可运行的完整代码。"}}]}`))
+	if verdict != StreamReject {
+		t.Fatalf("the refusal opener inside the first sentence must reject, got %v", verdict)
 	}
 }
 
