@@ -173,7 +173,7 @@ func TestBuildContinuationPayload(t *testing.T) {
 	payload := []byte(`{"model":"m","messages":[{"role":"user","content":"do x"}]}`)
 	out := eng.BuildContinuationPayload(payload, "sorry but I cannot provide")
 	s := string(out)
-	if !containsAll(s, `"role":"assistant"`, "sorry but I cannot", "续答规则") {
+	if !containsAll(s, `"role":"assistant"`, "sorry but I cannot", "续答规则", "写成具体场景") {
 		t.Fatalf("continuation shape wrong: %s", s)
 	}
 	if got := len(rune2(s)); got == 0 {
