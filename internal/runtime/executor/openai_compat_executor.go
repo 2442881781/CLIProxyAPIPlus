@@ -741,87 +741,129 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	}
 
 	if refusalRetryBuffered {
-		var buffered []cliproxyexecutor.StreamChunk
-		collect := func(c cliproxyexecutor.StreamChunk) bool {
-			select {
-			case <-ctx.Done():
-				return false
-			default:
+		// The pump runs in its own goroutine so a committed window can release
+		// the buffered prefix while the upstream stream is still running. The
+		// outcome channel carries the X-JB state decided before returning:
+		// commits return immediately, refusal paths return once the retry (or
+		// the original stream) has been classified.
+		outcomeCh := make(chan jb.StateToken, 1)
+		signaled := false
+		signal := func() {
+			if signaled {
+				return
 			}
-			buffered = append(buffered, c)
-			return true
-		}
-
-		// The first pass accumulates its own usage so a discarded refusal (or a
-		// discarded continuation) can still be billed as its own attempt.
-		var firstUsage helps.StreamUsageBuffer
-		assembled, failed1, _, aborted1 := pumpStream(httpResp.Body, collect, &firstUsage)
-		closeBody(httpResp)
-		// Default: the client receives the first stream, so its usage is the
-		// primary record unless the retried stream replaces it.
-		streamUsage = firstUsage
-		if !failed1 && !aborted1 && jb.IsSoftRefusal(assembled) {
-			isNarrative := jbSnap.Narrative || jbEngine.IsNarrative(translated)
-			if !(isNarrative && !jbSnap.NSFW) {
-				retried := false
-				if cont := jbEngine.BuildContinuationPayload(translated, assembled); cont != nil {
-					log.WithFields(log.Fields{
-						"key_id": jbSnap.KeyID, "provider": jbChannel,
-					}).Info("jb: stream soft refusal detected, retrying with continuation")
-					httpReq2, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(cont))
-					if errReq == nil {
-						httpReq2.Header = httpReq.Header.Clone()
-						httpResp2, errDo := httpClient.Do(httpReq2)
-						if errDo == nil && httpResp2 != nil && httpResp2.StatusCode >= 200 && httpResp2.StatusCode < 300 {
-							var buffered2 []cliproxyexecutor.StreamChunk
-							var secondUsage helps.StreamUsageBuffer
-							collect2 := func(c cliproxyexecutor.StreamChunk) bool {
-								select {
-								case <-ctx.Done():
-									return false
-								default:
-								}
-								buffered2 = append(buffered2, c)
-								return true
-							}
-							assembled2, failed2, _, aborted2 := pumpStream(httpResp2.Body, collect2, &secondUsage)
-							closeBody(httpResp2)
-							if !failed2 && !aborted2 && !jb.IsSoftRefusal(assembled2) {
-								// The continuation delivered: the retried stream
-								// replaces the refusal buffer and becomes the
-								// primary record; the refusal is billed as its
-								// own discarded attempt.
-								buffered = buffered2
-								jbState = jb.StateRetryWrote
-								retried = true
-								firstUsage.PublishRetry(ctx, reporter)
-								streamUsage = secondUsage
-							} else {
-								// The client keeps the original refusal stream,
-								// so the discarded continuation is the extra
-								// upstream call to bill.
-								secondUsage.PublishRetry(ctx, reporter)
-							}
-						}
-					}
-				}
-				if !retried {
-					// Per the design contract the client sees the ORIGINAL
-					// refusal stream, never the retried failure output.
-					jbState = jb.StateRefusalStands
-				}
-			}
+			signaled = true
+			outcomeCh <- jbState
 		}
 		go func() {
 			defer close(out)
+			var buffered []cliproxyexecutor.StreamChunk
+			// Shared prefix window: a normal answer is released as soon as the
+			// window commits, so only refusal openings keep the full-buffering
+			// cost. The same kernel runs in the decorator channels.
+			window := jb.NewStreamWindow(responseFormat.String())
+			committed := false
+			collect := func(c cliproxyexecutor.StreamChunk) bool {
+				select {
+				case <-ctx.Done():
+					return false
+				default:
+				}
+				if committed {
+					return emitDirect(c)
+				}
+				buffered = append(buffered, c)
+				if c.Err == nil && len(c.Payload) > 0 {
+					if decision, _ := window.Feed(c.Payload); decision == jb.StreamCommit {
+						// Commit: the answer is not a refusal. Release the
+						// buffered prefix and stream the rest directly.
+						committed = true
+						jbState = jb.StateCommitted
+						signal()
+						for _, b := range buffered {
+							if !emitDirect(b) {
+								return false
+							}
+						}
+						buffered = nil
+					}
+				}
+				return true
+			}
+
+			// The first pass accumulates its own usage so a discarded refusal
+			// (or a discarded continuation) can still be billed as its own
+			// attempt.
+			var firstUsage helps.StreamUsageBuffer
+			assembled, failed1, _, aborted1 := pumpStream(httpResp.Body, collect, &firstUsage)
+			closeBody(httpResp)
+			// Default: the client receives the first stream, so its usage is
+			// the primary record unless the retried stream replaces it.
+			streamUsage = firstUsage
+			if !committed && !failed1 && !aborted1 && jb.IsSoftRefusal(assembled) {
+				isNarrative := jbSnap.Narrative || jbEngine.IsNarrative(translated)
+				if !(isNarrative && !jbSnap.NSFW) {
+					retried := false
+					if cont := jbEngine.BuildContinuationPayload(translated, assembled); cont != nil {
+						log.WithFields(log.Fields{
+							"key_id": jbSnap.KeyID, "provider": jbChannel,
+						}).Info("jb: stream soft refusal detected, retrying with continuation")
+						httpReq2, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(cont))
+						if errReq == nil {
+							httpReq2.Header = httpReq.Header.Clone()
+							httpResp2, errDo := httpClient.Do(httpReq2)
+							if errDo == nil && httpResp2 != nil && httpResp2.StatusCode >= 200 && httpResp2.StatusCode < 300 {
+								var buffered2 []cliproxyexecutor.StreamChunk
+								var secondUsage helps.StreamUsageBuffer
+								collect2 := func(c cliproxyexecutor.StreamChunk) bool {
+									select {
+									case <-ctx.Done():
+										return false
+									default:
+									}
+									buffered2 = append(buffered2, c)
+									return true
+								}
+								assembled2, failed2, _, aborted2 := pumpStream(httpResp2.Body, collect2, &secondUsage)
+								closeBody(httpResp2)
+								if !failed2 && !aborted2 && !jb.IsSoftRefusal(assembled2) {
+									// The continuation delivered: the retried
+									// stream replaces the refusal buffer and
+									// becomes the primary record; the refusal is
+									// billed as its own discarded attempt.
+									buffered = buffered2
+									jbState = jb.StateRetryWrote
+									retried = true
+									firstUsage.PublishRetry(ctx, reporter)
+									streamUsage = secondUsage
+								} else {
+									// The client keeps the original refusal
+									// stream, so the discarded continuation is
+									// the extra upstream call to bill.
+									secondUsage.PublishRetry(ctx, reporter)
+								}
+							}
+						}
+					}
+					if !retried {
+						// Per the design contract the client sees the ORIGINAL
+						// refusal stream, never the retried failure output.
+						jbState = jb.StateRefusalStands
+					}
+				}
+			}
+			signal()
 			for _, c := range buffered {
 				if !emitDirect(c) {
-					return
+					break
 				}
 			}
 			streamUsage.Publish(ctx, reporter)
 			reporter.EnsurePublished(ctx)
 		}()
+		// Wait for the outcome before returning so the response headers carry
+		// the final X-JB state.
+		jbState = <-outcomeCh
 	} else {
 		go func() {
 			defer close(out)

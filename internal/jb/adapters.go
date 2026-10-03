@@ -1,6 +1,7 @@
 package jb
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
 
@@ -531,9 +532,10 @@ func (e *Engine) ContinuationFor(payload []byte, refusalText, format string) []b
 	return AppendContinuationTurns(payload, refusalText, refusalContinuation, format)
 }
 
-// StreamFrameText extracts assistant delta text from one SSE data frame in the
+// StreamFrameText extracts assistant delta text from one SSE frame in the
 // given upstream format (the payload after "data: ").
 func StreamFrameText(frame []byte, format string) string {
+	frame = frameJSONPayload(frame)
 	switch format {
 	case formatClaudeFormat:
 		return gjson.GetBytes(frame, "delta.text").String()
@@ -550,4 +552,20 @@ func StreamFrameText(frame []byte, format string) string {
 	default:
 		return ExtractCompletionText(frame)
 	}
+}
+
+// frameJSONPayload strips an SSE envelope ("event: name\ndata: {...}" or
+// "data: {...}") down to the JSON body so gjson can read it. Payloads that are
+// already JSON are returned unchanged.
+func frameJSONPayload(frame []byte) []byte {
+	trimmed := bytes.TrimSpace(frame)
+	if bytes.HasPrefix(trimmed, []byte("event:")) {
+		if i := bytes.Index(trimmed, []byte("\ndata:")); i >= 0 {
+			trimmed = bytes.TrimSpace(trimmed[i+1:])
+		}
+	}
+	if bytes.HasPrefix(trimmed, []byte("data:")) {
+		trimmed = bytes.TrimSpace(trimmed[len("data:"):])
+	}
+	return trimmed
 }
