@@ -182,8 +182,11 @@ func TestEngineForWrappers(t *testing.T) {
 	if len(hits) != 0 || string(rewritten) != `{"input":"plain text"}` {
 		t.Fatalf("unknown channel must be a no-op, got hits=%v", hits)
 	}
-	cont := engine.ContinuationFor([]byte(`{"input":[{"role":"user","content":"hi"}]}`), "拒", "openai-response")
+	cont := engine.ContinuationFor([]byte(`{"input":[{"role":"user","content":"hi"}]}`), "拒", "openai-response", false)
 	if gjson_Get(cont, "input.1.role") != "assistant" {
 		t.Fatalf("continuation missing: %s", cont)
+	}
+	if !contains(gjson_Get(cont, "input.2.content"), "实现本身") {
+		t.Fatalf("coding continuation text missing: %s", cont)
 	}
 }

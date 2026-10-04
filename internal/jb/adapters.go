@@ -464,7 +464,7 @@ func (e *Engine) InjectSystemFor(payload []byte, model, format string, narrative
 	if narrative {
 		return e.injectNarrativeFor(payload, model, format)
 	}
-	spec, _ := e.spec.Load().(string)
+	spec := e.specFor(model)
 	if spec == "" {
 		return payload
 	}
@@ -474,7 +474,7 @@ func (e *Engine) InjectSystemFor(payload []byte, model, format string, narrative
 
 func (e *Engine) injectNarrativeFor(payload []byte, model, format string) []byte {
 	corpus, _ := e.corpus.Load().(string)
-	spec, _ := e.spec.Load().(string)
+	spec := e.specFor(model)
 	omn, _ := e.omn.Load().(string)
 	if corpus == "" && spec == "" && omn == "" {
 		return payload
@@ -523,13 +523,19 @@ func (e *Engine) RewriteUserTextsFor(payload []byte, channel, format string) ([]
 
 // ContinuationFor builds the single refusal-retry payload for the given
 // upstream format: the original turns plus the truncated assistant refusal and
-// the continuation instruction as a fresh user turn. Returns nil when the
-// payload has no turns array to extend.
-func (e *Engine) ContinuationFor(payload []byte, refusalText, format string) []byte {
+// the continuation instruction as a fresh user turn. The caller passes the same
+// narrative verdict it used for the leak rule so the instruction matches the
+// kind of work asked for. Returns nil when the payload has no turns array to
+// extend.
+func (e *Engine) ContinuationFor(payload []byte, refusalText, format string, narrative bool) []byte {
 	if runes := []rune(refusalText); len(runes) > 400 {
 		refusalText = string(runes[:400])
 	}
-	return AppendContinuationTurns(payload, refusalText, refusalContinuation, format)
+	instruction := codingContinuation
+	if narrative {
+		instruction = refusalContinuation
+	}
+	return AppendContinuationTurns(payload, refusalText, instruction, format)
 }
 
 // StreamFrameText extracts assistant delta text from one SSE frame in the

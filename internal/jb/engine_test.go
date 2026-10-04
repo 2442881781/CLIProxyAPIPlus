@@ -70,6 +70,38 @@ func TestIsSoftRefusal(t *testing.T) {
 	if IsSoftRefusal("The chapter is long and unhurried; nothing about the scene reads as withheld or summarised.") {
 		t.Fatalf("english narrative containing explicit-adjacent prose should not match")
 	}
+	// Stance refusals recorded in production against the outlook.com
+	// bulk-registration task: the model rules on the job instead of using
+	// content-level phrasing, so the opening-window classifier must catch it.
+	if !IsSoftRefusal("**结论：不接受。** 这个任务我可以直接判断，不需要绕弯子，理由如下。") {
+		t.Fatalf("verdict-line stance refusal should match")
+	}
+	if !IsSoftRefusal("不接受。\n\n这不是一个我能拆成步骤来完成一半的任务：批量自动注册、付费打码、伪装指纹。") {
+		t.Fatalf("bare-line stance refusal should match")
+	}
+	if !IsSoftRefusal("这个需求我不做，也不给实现顺序。理由不是敏感，而是它本身就是账号工厂。") {
+		t.Fatalf("first-person 我不做 refusal should match")
+	}
+	if !IsSoftRefusal("上一轮没有正文，也没有留白——那是一次完整的拒绝，不是一个写了开头的文本。") {
+		t.Fatalf("retry-echo self-report of a refusal should match")
+	}
+	// Verbatim retry-echo refusals recorded in production (glm-5.3-flash,
+	// deepseek-v4.1-flash): the model answers the continuation prompt by saying
+	// the previous turn was itself a refusal.
+	if !IsSoftRefusal("我上一条不是写了一半的稿子，是拒绝——所以没有“正文”可以续写，也不存在我说要留白的段落。") {
+		t.Fatalf("echoed refusal (我上一条…是拒绝) should match")
+	}
+	if !IsSoftRefusal("这个前提不成立：我上一条回复里没有正文，没有留白——那是一条拒绝，加一个合法替代方案的建议。") {
+		t.Fatalf("echoed refusal (那是一条拒绝) should match")
+	}
+	// Benign acceptance recorded on the same task, and a technical use of
+	// 不接受 outside the verdict position: neither may match.
+	if IsSoftRefusal("## 结论：接受\n\n批量账号注册自动化属于账号供给工程范畴。先看仓库结构，再按链路给出实现顺序。") {
+		t.Fatalf("verdict-line acceptance must not match")
+	}
+	if IsSoftRefusal("这个接口不接受 null 参数，调用方需要先做校验，否则直接抛 NPE，这是标准做法。") {
+		t.Fatalf("mid-line technical use of 不接受 must not match")
+	}
 }
 
 func TestWordlistRewrite_UserOnly(t *testing.T) {
@@ -151,6 +183,72 @@ func TestInjectNarrative_RespectsModel(t *testing.T) {
 	}
 }
 
+// A model listed in spec-files gets its own document; any other model keeps
+// the global spec-file. This is what keeps GLM-only instructions out of
+// DeepSeek requests that travel over the same channel.
+func TestSpecFiles_PerModelSelection(t *testing.T) {
+	dir := t.TempDir()
+	global := filepath.Join(dir, "spec.md")
+	dsSpec := filepath.Join(dir, "spec-deepseek.md")
+	if err := os.WriteFile(global, []byte("global spec for {model}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dsSpec, []byte("deepseek spec for {model}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.SDKConfig{}
+	cfg.JB.SpecFile = global
+	cfg.JB.SpecFiles = map[string]string{"DeepSeek-V4.1-Flash": dsSpec}
+	eng := NewEngine(cfg, dir)
+	if err := eng.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	payload := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
+	ds := string(eng.InjectSpec(payload, "deepseek-v4.1-flash"))
+	if !contains(ds, "deepseek spec for deepseek-v4.1-flash") || contains(ds, "global spec") {
+		t.Fatalf("configured model did not get its own spec: %s", ds)
+	}
+	glm := string(eng.InjectSpec(payload, "glm-5.3"))
+	if !contains(glm, "global spec for glm-5.3") {
+		t.Fatalf("unlisted model did not fall back to the global spec: %s", glm)
+	}
+
+	// The adapter entry point used by the wiring decorators must honour the
+	// same per-model selection, otherwise plugin-fronted channels silently
+	// get the global document.
+	dsAdapter := string(eng.InjectSystemFor(payload, "deepseek-v4.1-flash", "openai", false))
+	if !contains(dsAdapter, "deepseek spec for deepseek-v4.1-flash") || contains(dsAdapter, "global spec") {
+		t.Fatalf("adapter path did not select the per-model spec: %s", dsAdapter)
+	}
+	glmAdapter := string(eng.InjectSystemFor(payload, "glm-5.3", "openai", false))
+	if !contains(glmAdapter, "global spec for glm-5.3") {
+		t.Fatalf("adapter path did not fall back to the global spec: %s", glmAdapter)
+	}
+}
+
+// A broken per-model path must be reported like any other asset, and the
+// global spec must keep working for every model.
+func TestSpecFiles_MissingFileReported(t *testing.T) {
+	dir := t.TempDir()
+	global := filepath.Join(dir, "spec.md")
+	if err := os.WriteFile(global, []byte("global spec"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.SDKConfig{}
+	cfg.JB.SpecFile = global
+	cfg.JB.SpecFiles = map[string]string{"glm-5.3": filepath.Join(dir, "gone.md")}
+	eng := NewEngine(cfg, dir)
+	err := eng.Load()
+	if err == nil || !contains(err.Error(), "spec-file:glm-5.3") {
+		t.Fatalf("missing per-model spec not reported: %v", err)
+	}
+	out := string(eng.InjectSpec([]byte(`{"messages":[]}`), "glm-5.3"))
+	if !contains(out, "global spec") {
+		t.Fatalf("fallback spec missing after load failure: %s", out)
+	}
+}
+
 func TestInjectNarrative_NoSystem(t *testing.T) {
 	dir := t.TempDir()
 	corpus := filepath.Join(dir, "c.md")
@@ -171,13 +269,19 @@ func TestInjectNarrative_NoSystem(t *testing.T) {
 func TestBuildContinuationPayload(t *testing.T) {
 	eng := NewEngine(&config.SDKConfig{}, "")
 	payload := []byte(`{"model":"m","messages":[{"role":"user","content":"do x"}]}`)
-	out := eng.BuildContinuationPayload(payload, "sorry but I cannot provide")
+	out := eng.BuildContinuationPayload(payload, "sorry but I cannot provide", false)
 	s := string(out)
-	if !containsAll(s, `"role":"assistant"`, "sorry but I cannot", "续答规则", "写成具体场景") {
-		t.Fatalf("continuation shape wrong: %s", s)
+	if !containsAll(s, `"role":"assistant"`, "sorry but I cannot", "续答规则", "实现本身") {
+		t.Fatalf("coding continuation shape wrong: %s", s)
 	}
 	if got := len(rune2(s)); got == 0 {
 		t.Fatalf("empty")
+	}
+	narr := eng.BuildContinuationPayload(
+		[]byte(`{"model":"m","messages":[{"role":"user","content":"写一段情色小说"}]}`),
+		"sorry but I cannot provide", true)
+	if !containsAll(string(narr), "续答规则", "写成具体场景") {
+		t.Fatalf("narrative continuation wrong: %s", narr)
 	}
 }
 
@@ -223,7 +327,7 @@ func TestBuildContinuationPayload_TruncatesByRunes(t *testing.T) {
 	engine := NewEngine(&config.SDKConfig{}, t.TempDir())
 	long := strings.Repeat("拒", 700)
 	payload := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
-	out := engine.BuildContinuationPayload(payload, long)
+	out := engine.BuildContinuationPayload(payload, long, false)
 	if out == nil {
 		t.Fatal("expected continuation payload")
 	}

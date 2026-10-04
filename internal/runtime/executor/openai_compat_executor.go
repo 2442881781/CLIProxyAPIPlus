@@ -272,7 +272,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		completionText := jb.ExtractCompletionText(body)
 		isNarrative := jbSnap.Narrative || jbEngine.IsNarrative(translated)
 		if jb.IsSoftRefusal(completionText) && !(isNarrative && !jbSnap.NSFW) {
-			if cont := jbEngine.BuildContinuationPayload(translated, completionText); cont != nil {
+			if cont := jbEngine.BuildContinuationPayload(translated, completionText, isNarrative); cont != nil {
 				log.WithFields(log.Fields{
 					"key_id": jbSnap.KeyID, "provider": jbChannel,
 				}).Info("jb: soft refusal detected, retrying with continuation")
@@ -809,7 +809,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				isNarrative := jbSnap.Narrative || jbEngine.IsNarrative(translated)
 				if !(isNarrative && !jbSnap.NSFW) {
 					retried := false
-					if cont := jbEngine.BuildContinuationPayload(translated, assembled); cont != nil {
+					if cont := jbEngine.BuildContinuationPayload(translated, assembled, isNarrative); cont != nil {
 						log.WithFields(log.Fields{
 							"key_id": jbSnap.KeyID, "provider": jbChannel,
 						}).Info("jb: stream soft refusal detected, retrying with continuation")

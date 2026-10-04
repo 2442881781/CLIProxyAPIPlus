@@ -135,6 +135,15 @@ access:
 #   spec-file:   config/jb-spec.md
 #   omn-file:    config/jb-omn.md
 #
+#   # Optional per-model spec documents. Keys are upstream model names (matched
+#   # case-insensitively after suffix parsing, e.g. `glm-5.3`, not the channel);
+#   # a model absent from this map gets `spec-file`. Select by model, not by
+#   # channel: one openai-compatibility entry can front several vendors' models,
+#   # so a channel-scoped document cannot keep one vendor's instructions away
+#   # from another vendor's model.
+#   # spec-files:
+#   #   deepseek-v4-pro: config/jb-spec-deepseek.md
+#
 #   # Per-channel wordlists. A request resolves its channel by the route
 #   # prefix configured on its openai-compatibility entry first (so `prefix:
 #   # zhipu` picks the `zhipu:` table regardless of the entry's display name),

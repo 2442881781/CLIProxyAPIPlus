@@ -325,17 +325,17 @@ func (e *jbWiringExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req
 }
 
 // jbContinuation mirrors the leak rule: narrative + nsfw=off suppresses the
-// retry; otherwise build the continuation payload in the request's format.
+// retry; otherwise build the continuation payload in the request's format,
+// forking the instruction on the same narrative verdict.
 func (e *jbWiringExecutor) jbContinuation(snap storeaccess.JBSnapshot, payload []byte, completionText, format string) []byte {
 	if e.engine == nil || !jb.IsSoftRefusal(completionText) {
 		return nil
 	}
-	if snap.Narrative || e.engine.IsNarrativeFor(payload, format) {
-		if !snap.NSFW {
-			return nil
-		}
+	narrative := snap.Narrative || e.engine.IsNarrativeFor(payload, format)
+	if narrative && !snap.NSFW {
+		return nil
 	}
-	return e.engine.ContinuationFor(payload, completionText, format)
+	return e.engine.ContinuationFor(payload, completionText, format, narrative)
 }
 
 // ExecuteStream runs the inner stream executor with injection, the cyber-400

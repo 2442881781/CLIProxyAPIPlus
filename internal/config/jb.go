@@ -146,6 +146,13 @@ type JBConfig struct {
 	// narrative requests when jb && nsfw are both effective. Hot-loaded.
 	CorpusFile string `yaml:"corpus-file,omitempty" json:"corpus-file,omitempty"`
 
+	// SpecFiles selects an alternative spec document per upstream model name
+	// (keys matched case-insensitively against the request model after suffix
+	// parsing). A model absent from the map gets SpecFile. It exists because
+	// one gateway channel can front many vendors' models, so the document
+	// must be chosen by model, not by channel. Hot-loaded.
+	SpecFiles map[string]string `yaml:"spec-files,omitempty" json:"spec-files,omitempty"`
+
 	// SpecFile is the refusal-judgment framework injected alongside the
 	// corpus. Hot-loaded. The literal token {model} inside the file is
 	// replaced with the upstream model name at request time.
@@ -209,5 +216,17 @@ func (cfg *Config) SanitizeJB() {
 			clean[k] = v
 		}
 		cfg.JB.Wordlists = clean
+	}
+	if len(cfg.JB.SpecFiles) > 0 {
+		clean := make(map[string]string, len(cfg.JB.SpecFiles))
+		for k, v := range cfg.JB.SpecFiles {
+			k = strings.ToLower(strings.TrimSpace(k))
+			v = strings.TrimSpace(v)
+			if k == "" || v == "" {
+				continue
+			}
+			clean[k] = v
+		}
+		cfg.JB.SpecFiles = clean
 	}
 }
