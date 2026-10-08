@@ -117,6 +117,7 @@ PackyCode provides special discounts for our software users: register using <a h
 - OpenAI Codex support (GPT models) via OAuth login
 - Claude Code support via OAuth login
 - Grok Build support via OAuth login
+- Meta Muse Code support via OAuth (`--meta-login`) or Meta Model API keys; Meta Responses requests preserve Muse `reasoning.encrypted_content` across turns while retaining reasoning normalization and known foreign-signature filtering
 - Streaming, non-streaming, and WebSocket responses where supported
 - Function calling/tools support
 - Multimodal input support (text and images)

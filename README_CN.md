@@ -113,6 +113,7 @@ PackyCode 为本软件用户提供了特别优惠：使用<a href="https://www.p
 - 新增 OpenAI Codex（GPT 系列）支持（OAuth 登录）
 - 新增 Claude Code 支持（OAuth 登录）
 - 新增 Grok Build 支持（OAuth 登录）
+- 支持通过 OAuth（`--meta-login`）或 Meta Model API Key 接入 Meta Muse Code；Meta Responses 请求跨轮保留 Muse `reasoning.encrypted_content`，同时保留推理内容规范化及已知异源签名过滤
 - 支持流式、非流式响应，以及受支持场景下的 WebSocket 响应
 - 函数调用/工具支持
 - 多模态输入（文本、图片）
