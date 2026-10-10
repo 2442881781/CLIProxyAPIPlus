@@ -86,6 +86,12 @@ func IsRequestFault(status int, err error) bool {
 	if status == http.StatusPaymentRequired || status == http.StatusTooManyRequests {
 		return false
 	}
+	// Some gateways report a depleted account as 400 with a generic
+	// invalid_request_error body. Credits belong to the credential, not the
+	// request, so those messages must rotate and cool down like 402.
+	if hasDepletedCreditsBody(err) {
+		return false
+	}
 	// DeepSeek reports an invalid API key as 401 with the authentication_error
 	// type alongside the same generic code. Preserve that credential failure
 	// classification without weakening generic request-fault handling.
@@ -160,6 +166,18 @@ func hasAuthenticationErrorBody(err error) bool {
 		}
 	}
 	return false
+}
+
+// hasDepletedCreditsBody matches upstream bodies that report an exhausted
+// credit balance regardless of the HTTP status they are wrapped in. The match
+// is message-based because gateways send these as 400/402/403 with a generic
+// invalid_request_error code.
+func hasDepletedCreditsBody(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "insufficient credits") || strings.Contains(lower, "insufficient balance")
 }
 
 func hasRequestFaultBody(err error) bool {

@@ -1788,6 +1788,82 @@ func TestManager_DeepSeekCredentialFailuresRotateCredential(t *testing.T) {
 	}
 }
 
+// TestManager_CommandCodeInsufficientCredits400Rotates pins the gateway
+// behavior where a depleted credit balance arrives as 400 with a generic
+// invalid_request_error body (CommandCode). Credits belong to the credential,
+// so the request must rotate to the next provider and the failed pair must
+// enter a model-scoped cooldown instead of failing the request.
+func TestManager_CommandCodeInsufficientCredits400Rotates(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	m.SetRetryConfig(2, 30*time.Second, 0)
+
+	const ccProvider = "commandcode"
+	const ogProvider = "opencode-go"
+	const model = "deepseek-v4.1-flash"
+
+	ccExec := &authFallbackExecutor{
+		id: ccProvider,
+		executeErrors: map[string]error{
+			"cc-key": &Error{
+				HTTPStatus: http.StatusBadRequest,
+				Message:    `{"error":{"message":"You have insufficient credits to make this request. Please purchase more credits to continue using the service.","type":"invalid_request_error"}}`,
+			},
+		},
+	}
+	ogExec := &authFallbackExecutor{id: ogProvider}
+	m.RegisterExecutor(ccExec)
+	m.RegisterExecutor(ogExec)
+
+	ccAuth := &Auth{ID: "cc-key", Provider: ccProvider}
+	ogAuth := &Auth{ID: "og-key", Provider: ogProvider}
+
+	reg := registry.GetGlobalRegistry()
+	models := []*registry.ModelInfo{{ID: model}}
+	reg.RegisterClient(ccAuth.ID, ccProvider, models)
+	reg.RegisterClient(ogAuth.ID, ogProvider, models)
+	t.Cleanup(func() {
+		reg.UnregisterClient(ccAuth.ID)
+		reg.UnregisterClient(ogAuth.ID)
+	})
+
+	if _, errRegister := m.Register(context.Background(), ccAuth); errRegister != nil {
+		t.Fatalf("register cc auth: %v", errRegister)
+	}
+	if _, errRegister := m.Register(context.Background(), ogAuth); errRegister != nil {
+		t.Fatalf("register og auth: %v", errRegister)
+	}
+
+	beforeExecute := time.Now()
+	resp, errExecute := m.Execute(
+		context.Background(),
+		[]string{ccProvider, ogProvider},
+		cliproxyexecutor.Request{Model: model},
+		cliproxyexecutor.Options{},
+	)
+	if errExecute != nil {
+		t.Fatalf("expected rotation to opencode-go, got: %v", errExecute)
+	}
+	if got := string(resp.Payload); got != ogAuth.ID {
+		t.Fatalf("served by %q, want %q", got, ogAuth.ID)
+	}
+	wantCalls := []string{ccAuth.ID, ogAuth.ID}
+	if calls := ogExec.ExecuteCalls(); !slices.Equal(wantCalls, append([]string{ccAuth.ID}, calls...)) && !slices.Contains(calls, ogAuth.ID) {
+		t.Fatalf("unexpected call sequence: og calls=%v", calls)
+	}
+
+	updatedCC, ok := m.GetByID(ccAuth.ID)
+	if !ok || updatedCC == nil {
+		t.Fatal("expected cc auth to remain registered")
+	}
+	state := updatedCC.ModelStates[model]
+	if state == nil || !state.Unavailable || state.NextRetryAfter.IsZero() {
+		t.Fatalf("cc model state = %#v, want active cooldown", state)
+	}
+	if !state.NextRetryAfter.After(beforeExecute) {
+		t.Fatalf("cooldown expires at %v, want after %v", state.NextRetryAfter, beforeExecute)
+	}
+}
+
 // TestManager_UnknownUpstreamErrorRotatesAndPenalizesModelOnly pins the upstream
 // 500 "status":"UNKNOWN" contract. It is an upstream internal failure, not a
 // request fault, so the request must fall through to the next credential. The
