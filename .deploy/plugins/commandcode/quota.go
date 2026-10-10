@@ -13,6 +13,17 @@ import (
 
 const commandCodeQuotaURL = "https://api.commandcode.ai/alpha/billing/credits"
 
+// planMonthlyCreditsUSD approximates the cheapest plan's included monthly
+// credits (GOAT $70). The upstream reports an absolute balance without the
+// plan allowance, so this normalization maps any plan's balance onto a
+// conservative fraction; the exhausted case (balance <= 0) is exact either way.
+const planMonthlyCreditsUSD = 70.0
+
+// depletedCreditsUSDFloor treats balances below one minimal model request as
+// exhausted: the upstream rejects such requests with 400 insufficient credits
+// even though the balance is technically positive.
+const depletedCreditsUSDFloor = 1.0
+
 type quotaProvider struct{}
 
 var _ pluginapi.QuotaProvider = quotaProvider{}
@@ -104,7 +115,18 @@ func normalizeCommandCodeQuota(payload map[string]any) (pluginapi.QuotaFetchResp
 		credits = data
 	}
 	if balance, ok := numberValue(firstValue(credits, "monthlyCredits", "monthly_credits", "remainingCredits", "remaining_credits")); ok {
-		buckets = append(buckets, pluginapi.QuotaBucket{Window: "monthly-credits", RemainingFraction: 1, Description: fmt.Sprintf("Monthly credits remaining: %.2f USD", balance)})
+		// The upstream exposes only the absolute remaining balance, not the plan
+		// allowance. Clamp at 1.0 and floor at 0 so a depleted account reports
+		// RemainingFraction=0 and quota-aware routing stops preferring it. A
+		// dust balance below one minimal request still 400s upstream, so it
+		// counts as exhausted.
+		fraction := math.Max(0, math.Min(1, balance/planMonthlyCreditsUSD))
+		description := fmt.Sprintf("Monthly credits remaining: %.2f USD", balance)
+		if balance < depletedCreditsUSDFloor {
+			fraction = 0
+			description = "Monthly credits exhausted"
+		}
+		buckets = append(buckets, pluginapi.QuotaBucket{Window: "monthly-credits", RemainingFraction: fraction, Description: description})
 	}
 	if len(buckets) == 0 {
 		return pluginapi.QuotaFetchResponse{}, fmt.Errorf("commandcode quota response has no quota data")

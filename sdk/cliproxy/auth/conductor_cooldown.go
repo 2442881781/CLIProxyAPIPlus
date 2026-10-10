@@ -851,6 +851,17 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						} else {
 							state.NextRetryAfter = now.Add(30 * time.Minute)
 						}
+					} else if isDepletedCreditsResultError(result.Error) {
+						// Gateways that report a depleted balance as 400 carry no
+						// Retry-After. Align with the 402 semantic: the balance will
+						// not recover before the monthly reset, so a transient-length
+						// cooldown would re-hit the upstream every minute.
+						if disableCooling {
+							state.NextRetryAfter = time.Time{}
+						} else {
+							next := now.Add(30 * time.Minute)
+							state.NextRetryAfter = next
+						}
 					} else {
 						switch statusCode {
 						case 401, 402, 403:
@@ -1834,6 +1845,27 @@ func isInvalidGrantResultError(err *Error) bool {
 		return true
 	}
 	return false
+}
+
+// hasDepletedCreditsMessage matches upstream text reporting an exhausted
+// credit balance. Shared by request-fault classification and cooldown so both
+// paths treat depleted balance as a credential fault.
+func hasDepletedCreditsMessage(message string) bool {
+	if message == "" {
+		return false
+	}
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "insufficient credits") || strings.Contains(lower, "insufficient balance")
+}
+
+// isDepletedCreditsResultError reports result errors whose body says the
+// credential's credit balance is exhausted, regardless of the HTTP status the
+// gateway wrapped it in.
+func isDepletedCreditsResultError(err *Error) bool {
+	if err == nil {
+		return false
+	}
+	return hasDepletedCreditsMessage(err.Code) || hasDepletedCreditsMessage(err.Message)
 }
 
 func isModelSupportResultError(err *Error) bool {
