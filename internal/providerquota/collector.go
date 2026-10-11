@@ -29,6 +29,15 @@ const (
 	commandCodeQuotaURL = "https://api.commandcode.ai/alpha/billing/credits"
 	openCodeDefaultURL  = "https://opencode.ai/zen/go/v1"
 	maxQuotaResponse    = 2 << 20
+
+	// planMonthlyCreditsUSD approximates the entry plan's included monthly
+	// credits (GOAT $70); the upstream reports an absolute balance without the
+	// plan allowance.
+	planMonthlyCreditsUSD = 70.0
+	// depletedCreditsUSDFloor treats balances below one minimal model request
+	// as exhausted: the upstream rejects such requests with 400 insufficient
+	// credits even though the balance is technically positive.
+	depletedCreditsUSDFloor = 1.0
 )
 
 // SupportedProviders returns provider-managed pools that can be collected from config.
@@ -288,6 +297,22 @@ func normalizeCommandCode(payload map[string]any) (pluginapi.QuotaFetchResponse,
 			RemainingFraction: (100 - usedPercent) / 100,
 			ResetTime:         stringValue(raw, "resetAt", "reset_at"),
 		})
+	}
+	if credits := mapValue(data, "credits"); credits != nil {
+		if balance, okBalance := numberValue(credits, "monthlyCredits", "monthly_credits", "remainingCredits", "remaining_credits"); okBalance {
+			// Mirror the plugin normalization: the upstream reports an absolute
+			// remaining balance without the plan allowance. A dust balance below
+			// one minimal request still 400s upstream, so it counts as exhausted
+			// and must drive quota-aware routing away from this credential.
+			fraction := 0.0
+			if balance >= depletedCreditsUSDFloor {
+				fraction = math.Min(1, balance/planMonthlyCreditsUSD)
+			}
+			buckets = append(buckets, pluginapi.QuotaBucket{
+				Window:            "monthly-credits",
+				RemainingFraction: fraction,
+			})
+		}
 	}
 	return responseFromBuckets("CommandCode", buckets)
 }

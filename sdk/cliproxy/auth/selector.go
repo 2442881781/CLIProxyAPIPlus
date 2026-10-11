@@ -851,6 +851,12 @@ func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, block
 	if auth.Quota.Exceeded && auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(now) {
 		return true, blockReasonCooldown, auth.Quota.NextRecoverAt
 	}
+	// Passive zero-quota observations are an eligibility constraint, not just a
+	// ranking signal. Reevaluate when the observation becomes stale so scheduler
+	// entries recover without inventing an upstream quota reset time.
+	if observation := authQuotaRemainingPercent(auth, model, now); observation.known && observation.percent == 0 {
+		return true, blockReasonOther, observation.observedAt.Add(quotaRoutingObservationTTL).Add(time.Nanosecond)
+	}
 	if model != "" {
 		if len(auth.ModelStates) > 0 {
 			modelKey := canonicalModelKey(model)

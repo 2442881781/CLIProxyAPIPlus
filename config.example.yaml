@@ -227,6 +227,12 @@ access:
 #     staging-retention: 1m
 
 # Routing strategy for selecting credentials when multiple match.
+# Fresh known 0% quota excludes a credential before priority selection and
+# session-affinity reuse. Unknown or stale quota stays eligible under the
+# configured strategy; positive quota below 10% is not an exclusion.
+# Provider-managed quota snapshots also apply to plugin-owned static pools.
+# If every candidate is exhausted, routing returns a local auth_unavailable
+# error without sending an upstream request. Passive observations expire after 15m.
 routing:
   strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).

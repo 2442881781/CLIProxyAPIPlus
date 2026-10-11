@@ -238,7 +238,7 @@ func (m *Manager) applyProviderQuotaFallback(auths []*Auth, model string, now ti
 	m.providerQuotaMu.RLock()
 	defer m.providerQuotaMu.RUnlock()
 	for _, candidate := range auths {
-		if candidate == nil || authQuotaRemainingPercent(candidate, model, now).known {
+		if candidate == nil || authQuotaRemainingPercent(candidate, m.selectionModelForAuth(candidate, model), now).known {
 			continue
 		}
 		provider := executorKeyFromAuth(candidate)

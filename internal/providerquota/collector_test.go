@@ -110,3 +110,36 @@ func TestPoolEnablementMatchesQuotaPageRule(t *testing.T) {
 		t.Fatalf("unparsable enabled must keep the pool collectable: %#v", sources)
 	}
 }
+
+func TestNormalizeCommandCodeDepletedMonthlyCredits(t *testing.T) {
+	payload := map[string]any{
+		"credits": map[string]any{
+			"monthlyCredits":   0.106,
+			"purchasedCredits": 0.0,
+			"freeCredits":      0.0,
+		},
+		"windowLimits": map[string]any{
+			"fiveHour": map[string]any{"used": 5.36, "cap": 14.0},
+			"weekly":   map[string]any{"used": 20.9, "cap": 35.0},
+		},
+	}
+	resp, remaining, err := normalizeCommandCode(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var monthly *pluginapi.QuotaBucket
+	for i := range resp.Groups[0].Buckets {
+		if resp.Groups[0].Buckets[i].Window == "monthly-credits" {
+			monthly = &resp.Groups[0].Buckets[i]
+		}
+	}
+	if monthly == nil {
+		t.Fatalf("monthly-credits bucket missing: %+v", resp)
+	}
+	if monthly.RemainingFraction != 0 {
+		t.Fatalf("dust balance remaining = %v, want 0", monthly.RemainingFraction)
+	}
+	if remaining != 0 {
+		t.Fatalf("aggregated remaining = %v, want 0", remaining)
+	}
+}

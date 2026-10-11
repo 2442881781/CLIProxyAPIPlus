@@ -676,36 +676,21 @@ func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, pro
 func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, provider, routeModel string, now time.Time) (priorityAuths, selectorAuths []*Auth, err error) {
 	_, sessionAffinity := selector.(*SessionAffinitySelector)
 	schedulerAcross := m.pluginSchedulerWantsAcrossPrioritiesLocked()
-
-	if !sessionAffinity && !schedulerAcross {
-		priorityAuths, err = m.availableAuthsForRouteModel(auths, provider, routeModel, now)
-		if err != nil {
-			return nil, nil, err
-		}
-		priorityAuths = cloneAuthSlice(priorityAuths)
-		m.applyProviderQuotaFallback(priorityAuths, routeModel, now)
-		return priorityAuths, priorityAuths, nil
+	// Overlay provider-owned quota before eligibility and priority filtering. A
+	// depleted high-priority pool must not hide usable lower-priority candidates.
+	auths = cloneAuthSlice(auths)
+	m.applyProviderQuotaFallback(auths, routeModel, now)
+	allAuths, errAvailable := m.availableAuthsForRouteModelWithPriorityMode(auths, provider, routeModel, now, sessionAffinity || schedulerAcross)
+	if errAvailable != nil {
+		return nil, nil, errAvailable
 	}
-
-	// One availability pass and one clone pass serve both lists: the highest priority tier is a
-	// subset of the across-priority candidates, so it is narrowed from the same cloned auths.
-	allAuths, errAcross := m.availableAuthsForRouteModelAcrossPriorities(auths, provider, routeModel, now)
-	if errAcross != nil {
-		return nil, nil, errAcross
-	}
-	allAuths = cloneAuthSlice(allAuths)
-	m.applyProviderQuotaFallback(allAuths, routeModel, now)
-
+	priorityAuths = highestPriorityAuths(allAuths)
+	selectorAuths = priorityAuths
 	if schedulerAcross {
 		priorityAuths = allAuths
-	} else {
-		priorityAuths = highestPriorityAuths(allAuths)
 	}
-
 	if sessionAffinity {
 		selectorAuths = allAuths
-	} else {
-		selectorAuths = highestPriorityAuths(allAuths)
 	}
 	return priorityAuths, selectorAuths, nil
 }

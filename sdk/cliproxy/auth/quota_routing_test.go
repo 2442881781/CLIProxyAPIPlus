@@ -2,11 +2,14 @@ package auth
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
 
 func TestQuotaStateRemainingPercent(t *testing.T) {
@@ -446,5 +449,107 @@ func TestQuotaStateRemainingPercentUsesNormalizedPluginObservation(t *testing.T)
 	}, now)
 	if !observation.known || observation.percent != 37.5 {
 		t.Fatalf("observation = %+v", observation)
+	}
+}
+
+func TestSelectorsExcludeFreshExhaustedQuota(t *testing.T) {
+	for _, strategy := range []string{"round-robin", "fill-first", "weighted", "quota-aware"} {
+		for _, pool := range []string{"single-zero", "all-zero", "unknown", "healthy", "lower-priority"} {
+			t.Run(strategy+"/"+pool, func(t *testing.T) {
+				now := time.Now()
+				var selector Selector = &RoundRobinSelector{}
+				switch strategy {
+				case "fill-first":
+					selector = &FillFirstSelector{}
+				case "weighted":
+					selector = &WeightedRoundRobinSelector{}
+				case "quota-aware":
+					selector = NewQuotaAwareSelector(selector)
+				}
+				zero := quotaRoutingTestAuth("a-zero", "codex", 1, now, map[string]string{"normalized_quota_remaining_percent": "0"})
+				auths := []*Auth{zero}
+				want := ""
+				switch pool {
+				case "all-zero":
+					auths = append(auths, quotaRoutingTestAuth("b-zero", "codex", 0, now, map[string]string{"normalized_quota_remaining_percent": "0"}))
+				case "unknown":
+					want = "b-unknown"
+					auths = append(auths, &Auth{ID: want, Provider: "codex", Attributes: map[string]string{"priority": "1"}})
+				case "healthy", "lower-priority":
+					want = "b-healthy"
+					priority := 1
+					if pool == "lower-priority" {
+						priority = 0
+					}
+					auths = append(auths, quotaRoutingTestAuth(want, "codex", priority, now, map[string]string{"normalized_quota_remaining_percent": "72"}))
+				}
+				for range 2 {
+					picked, errPick := selector.Pick(context.Background(), "codex", "model", cliproxyexecutor.Options{}, auths)
+					if want == "" {
+						var unavailable *Error
+						if picked != nil || !errors.As(errPick, &unavailable) || unavailable.Code != "auth_unavailable" {
+							t.Fatalf("selection = %#v, %v; want local auth_unavailable", picked, errPick)
+						}
+					} else if errPick != nil || picked == nil || picked.ID != want {
+						t.Fatalf("selection = %#v, %v; want %s", picked, errPick, want)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSessionAffinityFailsOverFromExhaustedQuota(t *testing.T) {
+	for _, identity := range []string{"explicit", "lcp"} {
+		t.Run(identity, func(t *testing.T) {
+			selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{Fallback: &RoundRobinSelector{}, QuotaAware: true})
+			defer selector.Stop()
+			now := time.Now()
+			bound := quotaRoutingTestAuth("a-bound", "codex", 1, now, map[string]string{"normalized_quota_remaining_percent": "50"})
+			unknown := &Auth{ID: "b-unknown", Provider: "codex"}
+			options := func() cliproxyexecutor.Options {
+				if identity == "explicit" {
+					return cliproxyexecutor.Options{Headers: http.Header{"X-Session-Id": {"zero-quota-session"}}}
+				}
+				return cliproxyexecutor.Options{
+					SourceFormat:    sdktranslator.FormatOpenAI,
+					OriginalRequest: []byte(`{"messages":[{"role":"system","content":"stable"},{"role":"user","content":"hello"}]}`),
+					Metadata:        map[string]any{cliproxyexecutor.CallerScopeMetadataKey: "quota-caller"},
+				}
+			}
+			first, errFirst := selector.Pick(context.Background(), "codex", "model", options(), []*Auth{bound, unknown})
+			if errFirst != nil || first == nil || first.ID != bound.ID {
+				t.Fatalf("initial selection = %#v, %v", first, errFirst)
+			}
+			bound.Quota.Signals["normalized_quota_remaining_percent"] = "0"
+			if picked, errPick := selector.Pick(context.Background(), "codex", "model", options(), []*Auth{bound}); picked != nil || errPick == nil {
+				t.Fatalf("exhausted binding = %#v, %v; want local failure", picked, errPick)
+			}
+			for range 2 {
+				picked, errPick := selector.Pick(context.Background(), "codex", "model", options(), []*Auth{bound, unknown})
+				if errPick != nil || picked == nil || picked.ID != unknown.ID {
+					t.Fatalf("failover selection = %#v, %v; want unknown-quota destination", picked, errPick)
+				}
+			}
+		})
+	}
+}
+
+func TestQuotaExhaustionRespectsModelAndObservationLifetime(t *testing.T) {
+	now := time.Now()
+	auth := quotaRoutingTestAuth("auth", "codex", 0, now, map[string]string{"normalized_quota_remaining_percent": "80"})
+	auth.ModelStates = map[string]*ModelState{"model-a": {Quota: QuotaState{ObservedAt: now, Signals: map[string]string{"normalized_quota_remaining_percent": "0"}}}}
+	if _, errAvailable := getAvailableAuths([]*Auth{auth}, "codex", "model-a(high)", now); errAvailable == nil {
+		t.Fatal("exhausted model remained available")
+	}
+	if _, errAvailable := getAvailableAuths([]*Auth{auth}, "codex", "model-b", now); errAvailable != nil {
+		t.Fatalf("unrelated model blocked: %v", errAvailable)
+	}
+	if _, errAvailable := getAvailableAuths([]*Auth{auth}, "codex", "model-a", now.Add(quotaRoutingObservationTTL+time.Nanosecond)); errAvailable != nil {
+		t.Fatalf("stale observation blocked routing: %v", errAvailable)
+	}
+	auth.ModelStates["model-a"].Quota.Signals["normalized_quota_remaining_percent"] = "5"
+	if _, errAvailable := getAvailableAuths([]*Auth{auth}, "codex", "model-a", now); errAvailable != nil {
+		t.Fatalf("positive quota below migration threshold blocked routing: %v", errAvailable)
 	}
 }

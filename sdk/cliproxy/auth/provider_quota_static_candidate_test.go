@@ -2,7 +2,9 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -72,5 +74,50 @@ func TestProviderQuotaRanksStaticPluginCandidateAgainstOrdinaryAuth(t *testing.T
 	}
 	if diagnostics[0].SelectedProvider != "commandcode" || diagnostics[0].SelectionReason != "highest_remaining_quota" {
 		t.Fatalf("routing diagnostic = %+v, want CommandCode highest quota", diagnostics[0])
+	}
+}
+
+func TestProviderQuotaExhaustionFiltersBeforePriorityAndAffinity(t *testing.T) {
+	for _, sticky := range []bool{false, true} {
+		t.Run(strconv.FormatBool(sticky), func(t *testing.T) {
+			var selector Selector = &RoundRobinSelector{}
+			if sticky {
+				affinity := NewSessionAffinitySelector(selector)
+				defer affinity.Stop()
+				selector = affinity
+			}
+			manager := NewManager(nil, selector, nil)
+			for _, provider := range []string{"commandcode", "opencode-go"} {
+				manager.RegisterExecutor(staticQuotaTestExecutor{provider: provider})
+				candidate := &Auth{ID: "plugin-static:" + provider, Provider: provider, Status: StatusActive, Attributes: map[string]string{"priority": "0"}}
+				if provider == "commandcode" {
+					candidate.Attributes["priority"] = "1"
+				}
+				MarkPluginStaticAuth(candidate)
+				if _, errRegister := manager.Register(WithSkipPersist(context.Background()), candidate); errRegister != nil {
+					t.Fatal(errRegister)
+				}
+			}
+			opts := cliproxyexecutor.Options{Headers: http.Header{"X-Session-Id": {"provider-zero-session"}}}
+			pick := func(wantProvider string) {
+				selected, _, provider, errPick := manager.pickNextMixed(context.Background(), []string{"commandcode", "opencode-go"}, "", opts, nil)
+				if errPick != nil || selected == nil || provider != wantProvider {
+					t.Fatalf("selection = %v, %q, %v; want %s", selected != nil, provider, errPick, wantProvider)
+				}
+			}
+			pick("commandcode")
+			if errObserve := manager.ObserveProviderQuota(context.Background(), ProviderQuotaSnapshot{Provider: "commandcode", RemainingPercent: 0, ObservedAt: time.Now()}); errObserve != nil {
+				t.Fatal(errObserve)
+			}
+			pick("opencode-go") // Unknown quota is eligible even below the exhausted tier.
+			if errObserve := manager.ObserveProviderQuota(context.Background(), ProviderQuotaSnapshot{Provider: "opencode-go", RemainingPercent: 0, ObservedAt: time.Now()}); errObserve != nil {
+				t.Fatal(errObserve)
+			}
+			selected, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"commandcode", "opencode-go"}, "", opts, nil)
+			var unavailable *Error
+			if selected != nil || !errors.As(errPick, &unavailable) || unavailable.Code != "auth_unavailable" {
+				t.Fatalf("all exhausted = %v, %v; want local auth_unavailable", selected != nil, errPick)
+			}
+		})
 	}
 }
