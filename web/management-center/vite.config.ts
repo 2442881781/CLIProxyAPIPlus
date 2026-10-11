@@ -47,6 +47,8 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(getVersion())
   },
   resolve: {
+    // Linked dependencies must share the renderer's React instance.
+    dedupe: ['react', 'react-dom'],
     alias: {
       '@': path.resolve(__dirname, './src')
     }

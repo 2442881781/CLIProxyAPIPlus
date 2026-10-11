@@ -56,6 +56,8 @@ The publisher runs `bun run build` for `web/management-center`, injects
 preserves the destination repository's `.github/workflows` directory, and
 records the real source revision in a `Source-Commit` trailer.
 
+Production builds deduplicate `react` and `react-dom` so linked dependency directories cannot introduce a second React instance. Before publishing, serve the built HTML with a local CPA host and verify that the login screen mounts, login succeeds, and `/management.html#/plugin-pages/museai/0` renders the registered Muse resource when enabled. Browser runtime errors fail acceptance even when the HTML hash and HTTP status are correct.
+
 ## Deploy
 
 ```bash

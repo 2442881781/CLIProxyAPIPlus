@@ -84,6 +84,8 @@ Verify and commit only task-related files, push `origin/main`, publish the trans
    bun run verify
    ```
 
+   Serve the exact built HTML with a local CPA host. In a browser, verify the login screen, an authenticated management route, and the Muse plugin iframe when enabled. Do not substitute a direct plugin-resource page or HTTP/hash checks for management-center startup. Linked dependency directories must resolve a single React/React DOM runtime; keep the Vite `resolve.dedupe` setting.
+
 5. For deployment script changes, also run:
 
    ```bash
@@ -208,6 +210,7 @@ A rollout is complete only when all applicable checks pass:
    Expected page codes are 200, 200, and 401 without a management key.
    Also verify that the served `/management.html` hash matches the published
    `static/management.html`, including requests that advertise gzip encoding.
+   Open the public `/management.html` in a browser, verify that the login screen mounts without runtime errors, and exercise the authenticated Muse plugin route when credentials are available. A direct resource page, matching HTML hash, or HTTP 200 alone does not prove that the management application starts.
 
 5. Deployment control endpoint:
 
