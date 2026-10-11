@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Muse.ai credential importer</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<main>
+<h1>Muse.ai → CLIProxyAPI</h1>
+<p>For the <strong>Muse.ai personal agent</strong>, not Meta Muse Code. Sign in to <strong>https://muse.ai</strong> in this Chrome profile first.</p>
+<form id="import-form" autocomplete="off">
+<label>CPA origin<input id="origin" type="url" required autocomplete="off" spellcheck="false" placeholder="https://cpa.example.com"></label>
+<p class="hint">HTTPS is required, except HTTP on localhost or 127.0.0.1. Enter the origin only, including its port if needed; no path, query, or credentials. The request is sent to exactly this origin. Chrome host permissions apply to all ports on the selected host.</p>
+<label>CPA management key<input id="key" type="password" required autocomplete="off" spellcheck="false"></label>
+<label>Account label (optional)<input id="label" autocomplete="off" maxlength="200" placeholder="Personal Muse.ai account"></label>
+<label>Existing credential name (optional)<input id="name" autocomplete="off" placeholder="Leave blank to create a new account"></label>
+<label>Browser proxy URL (optional)<input id="proxy" type="password" autocomplete="off" spellcheck="false" placeholder="Leave blank for CPA host policy"></label>
+<p class="hint">Click Import to request access to the selected CPA host and send all Muse.ai cookies, including HttpOnly cookies and actual persistent-cookie expiry times. Cookie values and your key are never displayed or stored by this extension. Session cookies have no fabricated expiry.</p>
+<button id="import" type="submit">Import into selected CPA origin</button>
+</form>
+<p id="status" role="status" aria-live="polite">No network requests or cookie reads occur until you click Import.</p>
+<p class="hint">Keep this popup open until completion. After a network failure, check the manager before retrying: the server may already have saved the account. Import does not probe Muse.ai or start a generation.</p>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

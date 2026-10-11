@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'">
+<title data-i18n>Muse.ai account manager · CLIProxyAPI</title>
+<style>
+:root{color-scheme:light dark;--bg:#f4f6fa;--panel:#fff;--text:#182238;--muted:#55627a;--border:#d6dce8;--accent:#3157cb;--danger:#b42332;--soft:#edf1fd;font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text)}main{max-width:1180px;margin:0 auto;padding:28px 20px 60px}h1{font-size:29px;margin:0}h2{font-size:20px;margin:0}h3{font-size:16px;margin:0 0 12px}p{margin:8px 0 16px}.muted,small{color:var(--muted)}header{margin-bottom:24px}section{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;margin:18px 0}.heading,.toolbar,.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.heading{justify-content:space-between;margin-bottom:16px}.toolbar{margin:12px 0}.actions{gap:6px}label{display:grid;gap:6px;font-weight:600}input,textarea,select,button{font:inherit;border:1px solid var(--border);border-radius:6px;padding:9px 11px}input,textarea,select{background:var(--panel);color:var(--text);width:100%}textarea{resize:vertical;min-height:110px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}button{background:var(--accent);color:#fff;cursor:pointer}button.secondary{background:var(--soft);color:var(--text)}button.danger{background:transparent;color:var(--danger);border-color:var(--danger)}button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #829aff;outline-offset:2px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.wide{grid-column:1/-1}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;text-align:left;font-size:14px}th,td{border-bottom:1px solid var(--border);padding:12px 10px;vertical-align:top}th{white-space:nowrap;color:var(--muted)}td{overflow-wrap:anywhere}td:last-child{min-width:240px}caption{text-align:left;color:var(--muted);padding-bottom:8px}.empty{text-align:center;color:var(--muted);padding:24px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--soft);padding:14px;border-radius:6px;margin:10px 0}.notice{min-height:24px;font-weight:600;overflow-wrap:anywhere}.notice.error{color:var(--danger)}.pill{display:inline-block;border:1px solid var(--border);border-radius:20px;padding:2px 9px;font-size:12px}.filter{min-width:220px;max-width:420px}details{margin-top:12px}summary{cursor:pointer;font-weight:600}dialog{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:12px;max-width:760px;width:90%;max-height:85vh;overflow:auto}dialog::backdrop{background:#0008}.detail{display:grid;grid-template-columns:130px 1fr;gap:8px}.detail dt{font-weight:600}.detail dd{margin:0;overflow-wrap:anywhere}[hidden]{display:none!important}@media(prefers-color-scheme:dark){:root{--bg:#111726;--panel:#1a2233;--text:#e6ecfa;--muted:#a9b5cc;--border:#354159;--accent:#5475ee;--danger:#ff8b99;--soft:#242f49}}@media(max-width:640px){main{padding:18px 12px}section{padding:14px}.detail{grid-template-columns:1fr}h1{font-size:24px}}
+</style>
+</head>
+<body>
+<main>
+<header><h1 data-i18n>Muse.ai manager</h1><p class="muted"><span data-i18n>Native CLIProxyAPI provider for the </span><strong data-i18n>Muse.ai personal agent</strong><span data-i18n> at muse.ai — not Meta Muse Code.</span></p><p data-i18n>Credentials stay on your CPA server. This page keeps the management key only in memory. Opening this page and listing local state do not contact Muse.ai; only the explicit Probe and Refresh cookies actions do.</p></header>
+<section aria-labelledby="connection-title">
+<div class="heading"><h2 id="connection-title" data-i18n>Management authentication</h2><span class="pill" id="connection-state" data-i18n>Locked</span></div>
+<form id="connect-form" autocomplete="off"><div class="grid"><label><span data-i18n>Management key</span><input id="management-key" type="password" autocomplete="off" spellcheck="false" required placeholder="CPA management key" data-i18n-placeholder></label><div class="toolbar"><button type="submit" data-i18n>Unlock &amp; load local state</button><button type="button" class="secondary" id="lock" disabled data-i18n>Lock &amp; clear</button></div></div></form>
+<p class="muted" data-i18n>Uses this page's CPA origin. The key is sent only in the Authorization header, never in URLs or browser storage. Lock or close this page to forget it.</p>
+</section>
+<p id="notice" class="notice" role="status" aria-live="polite" data-i18n>Enter your management key to continue.</p>
+<div id="manager" hidden>
+<section aria-labelledby="browser-title"><div class="heading"><h2 id="browser-title" data-i18n>Browser status</h2><button class="secondary" id="reload" data-i18n>Reload local state</button></div><pre id="browser-status" data-i18n>Not loaded.</pre><p class="muted" data-i18n>Status reads local browser state only; it does not launch a credential probe or generate content.</p></section>
+<section aria-labelledby="accounts-title">
+<div class="heading"><h2 id="accounts-title" data-i18n>Accounts</h2><button class="secondary" id="reload-accounts" data-i18n>Reload accounts</button></div>
+<div class="table-wrap"><table><caption data-i18n>Stored credentials; cookie values are never displayed.</caption><thead><tr><th data-i18n>Account</th><th data-i18n>State</th><th data-i18n>Cookies</th><th data-i18n>Expiry</th><th data-i18n>Actions</th></tr></thead><tbody id="accounts"></tbody></table></div>
+<details id="import-details"><summary data-i18n>Import or replace an account</summary><p class="muted" data-i18n>Prefer the extension to include HttpOnly cookies and actual expiry times. Manual Cookie headers cannot include HttpOnly cookies unless copied from an authenticated request. Import saves credentials only; it does not call Muse.ai.</p>
+<form id="import-form" autocomplete="off"><div class="grid"><label><span data-i18n>Label</span><input id="import-label" autocomplete="off" maxlength="200" placeholder="Personal account" data-i18n-placeholder></label><label><span data-i18n>Existing credential name (optional)</span><input id="import-name" autocomplete="off" placeholder="Leave blank to create a new account" data-i18n-placeholder></label><label class="wide"><span data-i18n>Browser proxy URL (optional)</span><input id="import-proxy" type="password" autocomplete="off" spellcheck="false" placeholder="Explicit account proxy; leave blank for host policy" data-i18n-placeholder></label><label class="wide"><span data-i18n>Cookies: JSON object or Cookie header</span><textarea id="import-cookies" required autocomplete="off" spellcheck="false" placeholder="Paste cookie JSON or a Cookie header; values will not be shown in results." data-i18n-placeholder></textarea></label><label class="wide"><span data-i18n>Expiry mapping (optional JSON object, Unix seconds)</span><textarea id="import-expiry" autocomplete="off" spellcheck="false" placeholder="Use actual expiries for persistent cookies; omit session cookies." data-i18n-placeholder></textarea></label></div><div class="toolbar"><button type="submit" data-i18n>Save account credentials</button><button type="reset" class="secondary" data-i18n>Clear import fields</button></div></form></details>
+</section>
+<section aria-labelledby="tasks-title"><div class="heading"><h2 id="tasks-title" data-i18n>Tasks</h2><button class="secondary" id="reload-tasks" data-i18n>Reload tasks</button></div><div class="toolbar"><label class="filter"><span data-i18n>Account filter (tasks &amp; media)</span><select id="account-filter"><option value="" data-i18n>All accounts</option></select></label></div><p class="muted" data-i18n>Inspection reads local records only and does not resume or resubmit a task. Delete removes the local record, not the upstream conversation.</p><div class="table-wrap"><table><thead><tr><th data-i18n>Task</th><th data-i18n>Model</th><th data-i18n>Status</th><th data-i18n>Created</th><th data-i18n>Actions</th></tr></thead><tbody id="tasks"></tbody></table></div></section>
+<section aria-labelledby="media-title"><div class="heading"><h2 id="media-title" data-i18n>Media</h2><button class="secondary" id="reload-media" data-i18n>Reload media</button></div><p class="muted" data-i18n>Downloads use the authenticated local media endpoint; no upstream media URL is opened. Delete removes the local media file.</p><div class="table-wrap"><table><thead><tr><th data-i18n>Name</th><th data-i18n>Type</th><th data-i18n>Size</th><th data-i18n>Created</th><th data-i18n>Actions</th></tr></thead><tbody id="media"></tbody></table></div></section>
+<section aria-labelledby="extension-title"><div class="heading"><h2 id="extension-title" data-i18n>Chrome cookie importer</h2><button id="download-extension" data-i18n>Download extension ZIP</button></div><p data-i18n>Extract the ZIP, open Chrome's Extensions page, enable Developer mode, then choose Load unpacked and select the extracted extension folder. Sign in to muse.ai before clicking the extension icon.</p><p class="muted" data-i18n>The extension requests cookies access only for muse.ai. At Import it asks for permission for your selected CPA host only, then sends cookies directly to that origin. No API key or cookies are saved by the extension.</p></section>
+</div>
+<dialog id="task-dialog" aria-labelledby="task-dialog-title"><div class="heading"><h2 id="task-dialog-title" data-i18n>Task details</h2><button class="secondary" id="close-task" data-i18n>Close</button></div><dl class="detail" id="task-details"></dl></dialog>
+</main>
+<script>
+'use strict';
+(() => {
+  const API = '/v8/management/plugins/museai';
+  const $ = id => document.getElementById(id);
+  let key = '';
+  let busy = false;
+  let session = 0;
+  const requests = new Set();
+  const downloads = new Set();
+  const forbiddenKeys = /cookie|token|secret|password|authorization|proxy|credential|key/i;
+  const statusKeys = new Set(['status','state','running','ready','available','connected','enabled','active','count','processes','pages','targets','instances','workers','version','browser','tasks','queued','pending','completed','failed','starting','closed','sessions','total','active_sessions']);
+  const chinese = {
+    'Muse.ai account manager · CLIProxyAPI': 'Muse.ai 账户管理 · CLIProxyAPI',
+    'Muse.ai manager': 'Muse.ai 管理',
+    'Native CLIProxyAPI provider for the ': 'CLIProxyAPI 原生接入 ',
+    'Muse.ai personal agent': 'Muse.ai 个人智能体',
+    ' at muse.ai — not Meta Muse Code.': '（muse.ai），并非 Meta Muse Code。',
+    'Credentials stay on your CPA server. This page keeps the management key only in memory. Opening this page and listing local state do not contact Muse.ai; only the explicit Probe and Refresh cookies actions do.': '凭据保存在你的 CPA 服务器上。此页面仅在内存中保留管理密钥。打开页面和查看本地状态不会访问 Muse.ai；只有主动执行“探测”或“刷新 Cookie”才会访问。',
+    'Management authentication': '管理认证',
+    'Management key': '管理密钥',
+    'CPA management key': 'CPA 管理密钥（不是客户端 API Key）',
+    'Unlock & load local state': '解锁并加载本地状态',
+    'Lock & clear': '锁定并清除',
+    "Uses this page's CPA origin. The key is sent only in the Authorization header, never in URLs or browser storage. Lock or close this page to forget it.": '使用此页面所在的 CPA 地址。密钥仅通过 Authorization 请求头发送，不会写入 URL 或浏览器存储。锁定或关闭页面即可清除密钥。',
+    'Enter your management key to continue.': '请输入管理密钥以继续。',
+    'Locked': '已锁定',
+    'Unlocked': '已解锁',
+    'Browser status': '浏览器状态',
+    'Reload local state': '重新加载本地状态',
+    'Not loaded.': '尚未加载。',
+    'Status reads local browser state only; it does not launch a credential probe or generate content.': '这里只读取本地浏览器状态，不会启动凭据探测或生成内容。',
+    'Accounts': '账户',
+    'Reload accounts': '重新加载账户',
+    'Stored credentials; cookie values are never displayed.': '已保存的凭据；不会显示 Cookie 值。',
+    'Account': '账户',
+    'State': '状态',
+    'Cookies': 'Cookie 数量',
+    'Expiry': '到期时间',
+    'Actions': '操作',
+    'Import or replace an account': '导入或替换账户',
+    'Prefer the extension to include HttpOnly cookies and actual expiry times. Manual Cookie headers cannot include HttpOnly cookies unless copied from an authenticated request. Import saves credentials only; it does not call Muse.ai.': '建议使用扩展导入，以包含 HttpOnly Cookie 和实际到期时间。手动 Cookie 请求头只有从已认证的请求中复制时才能包含 HttpOnly Cookie。导入只保存凭据，不会访问 Muse.ai。',
+    'Label': '账户标签',
+    'Personal account': '个人账户',
+    'Existing credential name (optional)': '已有凭据文件名（可选）',
+    'Leave blank to create a new account': '留空则创建新账户',
+    'Browser proxy URL (optional)': '浏览器代理地址（可选）',
+    'Explicit account proxy; leave blank for host policy': '指定账户代理；留空则使用 CPA 的代理策略',
+    'Cookies: JSON object or Cookie header': 'Cookie：JSON 对象或 Cookie 请求头',
+    'Paste cookie JSON or a Cookie header; values will not be shown in results.': '粘贴 Cookie JSON 或 Cookie 请求头；结果中不会显示 Cookie 值。',
+    'Expiry mapping (optional JSON object, Unix seconds)': '到期时间映射（可选 JSON 对象，Unix 秒）',
+    'Use actual expiries for persistent cookies; omit session cookies.': '填写持久 Cookie 的实际到期时间；会话 Cookie 无需填写。',
+    'Save account credentials': '保存账户凭据',
+    'Clear import fields': '清空导入内容',
+    'Tasks': '任务',
+    'Reload tasks': '重新加载任务',
+    'Account filter (tasks & media)': '账户筛选（任务与媒体）',
+    'All accounts': '全部账户',
+    'Inspection reads local records only and does not resume or resubmit a task. Delete removes the local record, not the upstream conversation.': '查看只读取本地记录，不会恢复或重新提交任务。删除只移除本地记录，不会删除上游会话。',
+    'Task': '任务',
+    'Model': '模型',
+    'Status': '状态',
+    'Created': '创建时间',
+    'Media': '媒体',
+    'Reload media': '重新加载媒体',
+    'Downloads use the authenticated local media endpoint; no upstream media URL is opened. Delete removes the local media file.': '下载使用需要认证的本地媒体接口，不会打开上游媒体地址。删除会移除本地媒体文件。',
+    'Name': '名称',
+    'Type': '类型',
+    'Size': '大小',
+    'Chrome cookie importer': 'Chrome Cookie 导入扩展',
+    'Download extension ZIP': '下载扩展 ZIP',
+    "Extract the ZIP, open Chrome's Extensions page, enable Developer mode, then choose Load unpacked and select the extracted extension folder. Sign in to muse.ai before clicking the extension icon.": '解压 ZIP，打开 Chrome 的“扩展程序”页面，启用“开发者模式”，点击“加载已解压的扩展程序”，选择解压后的扩展文件夹。点击扩展图标前，请先登录 muse.ai。',
+    'The extension requests cookies access only for muse.ai. At Import it asks for permission for your selected CPA host only, then sends cookies directly to that origin. No API key or cookies are saved by the extension.': '扩展仅读取 muse.ai 的 Cookie。点击导入时，只请求你选择的 CPA 站点权限，并将 Cookie 直接发送到该地址。扩展不会保存 API Key 或 Cookie。',
+    'Task details': '任务详情',
+    'Close': '关闭',
+    'Unknown': '未知',
+    'Not displayed': '不予显示',
+    'Unlock management first.': '请先解锁管理页面。',
+    'Management authentication rejected. Lock and enter a valid key.': '管理认证失败。请锁定页面后输入有效的管理密钥。',
+    'Management request failed (HTTP {status}). Check the CPA server logs.': '管理请求失败（HTTP {status}）。请查看 CPA 服务器日志。',
+    'The download endpoint returned a document instead of a file.': '下载接口返回了文档，而非文件。',
+    'Expected a machine JSON management response.': '管理接口未返回预期的 JSON 数据。',
+    'Invalid JSON. Check the import fields.': 'JSON 格式无效，请检查导入内容。',
+    'Operation failed. Check the CPA server logs; no credentials are shown here.': '操作失败。请查看 CPA 服务器日志；此处不会显示凭据。',
+    'Status received; sensitive details withheld.': '已收到状态；敏感详情已隐藏。',
+    'Expected accounts in the machine JSON response.': '管理接口未返回预期的账户列表。',
+    '{name} · index {index}': '{name} · 索引 {index}',
+    'Disabled': '已禁用',
+    'Enabled': '已启用',
+    'Enable': '启用',
+    'Disable': '禁用',
+    'Account state updated.': '账户状态已更新。',
+    'Rename': '重命名',
+    'Account label:': '账户标签：',
+    'Account label updated.': '账户标签已更新。',
+    'Probe': '探测',
+    'Refresh cookies': '刷新 Cookie',
+    'Delete': '删除',
+    'Delete this stored Muse.ai account? This cannot be undone.': '确定删除此 Muse.ai 账户凭据？此操作无法撤销。',
+    'Stored account deleted.': '账户凭据已删除。',
+    'No Muse.ai accounts. Import credentials below or use the Chrome extension.': '暂无 Muse.ai 账户。请在下方导入凭据，或使用 Chrome 扩展导入。',
+    'Probe this account now? This contacts Muse.ai using its credentials and configured proxy.': '确定立即探测此账户？将使用其凭据和配置的代理访问 Muse.ai。',
+    'Refresh cookies now? This contacts Muse.ai and may update stored credentials.': '确定立即刷新 Cookie？将访问 Muse.ai，并可能更新已保存的凭据。',
+    'Probing account…': '正在探测账户…',
+    'Refreshing account cookies…': '正在刷新账户 Cookie…',
+    'Account probe completed.': '账户探测完成。',
+    'Cookie refresh completed.': 'Cookie 刷新完成。',
+    'Expected tasks in the machine JSON response.': '管理接口未返回预期的任务列表。',
+    'Inspect': '查看详情',
+    'Delete record': '删除记录',
+    'Delete this local task record? The upstream conversation is not deleted.': '确定删除此本地任务记录？不会删除上游会话。',
+    'Task record deleted.': '任务记录已删除。',
+    'No local task records.': '暂无本地任务记录。',
+    'Muse thread': 'Muse 会话',
+    'Provider error': '提供方错误',
+    'Provider reported an error. Raw details are withheld to protect credentials; check server logs.': '提供方报告了错误。为保护凭据，已隐藏原始详情；请查看服务器日志。',
+    'None': '无',
+    '{count} item(s); see Media below.': '{count} 项；请查看下方媒体列表。',
+    'Media recorded; see Media below.': '已记录媒体；请查看下方媒体列表。',
+    'Expected media in the machine JSON response.': '管理接口未返回预期的媒体列表。',
+    '{size} bytes': '{size} 字节',
+    'Download': '下载',
+    'Media download prepared.': '媒体文件已准备下载。',
+    'Delete file': '删除文件',
+    'Delete this local media file? This cannot be undone.': '确定删除此本地媒体文件？此操作无法撤销。',
+    'Media file deleted.': '媒体文件已删除。',
+    'No local media files.': '暂无本地媒体文件。',
+    'Locked. In-memory key and account views cleared.': '已锁定。内存中的密钥和账户视图已清除。',
+    'Enter a management key.': '请输入管理密钥。',
+    'Local state loaded. No Muse.ai probe was requested.': '本地状态已加载，未请求 Muse.ai 探测。',
+    'Local state reloaded.': '本地状态已重新加载。',
+    'Local list reloaded.': '本地列表已重新加载。',
+    'Account filter applied.': '账户筛选已应用。',
+    'Extension ZIP download prepared.': '扩展 ZIP 已准备下载。',
+    'Cookie data is required.': '请填写 Cookie 数据。',
+    'Cookie JSON must be a non-empty object of string values.': 'Cookie JSON 必须是非空对象，且所有值都必须为字符串。',
+    'Expiry mapping must be a JSON object of non-negative Unix seconds.': '到期时间映射必须是 JSON 对象，所有值都必须为非负 Unix 秒数。',
+    'Credentials saved. No Muse.ai probe was requested.': '凭据已保存，未请求 Muse.ai 探测。',
+    'Yes': '是',
+    'No': '否',
+    'provider': '提供方',
+    'browser': '浏览器',
+    'tasks': '任务',
+    'status': '状态',
+    'state': '状态',
+    'running': '运行中',
+    'ready': '就绪',
+    'available': '可用',
+    'connected': '已连接',
+    'enabled': '已启用',
+    'active': '活动',
+    'count': '数量',
+    'processes': '进程',
+    'pages': '页面',
+    'targets': '目标',
+    'instances': '实例',
+    'workers': '工作进程',
+    'version': '版本',
+    'queued': '排队中',
+    'pending': '等待中',
+    'in_progress': '进行中',
+    'completed': '已完成',
+    'failed': '失败',
+    'starting': '启动中',
+    'closed': '已关闭',
+    'sessions': '会话',
+    'total': '总数',
+    'active_sessions': '活动会话',
+    'stopped': '已停止',
+    'idle': '空闲',
+    'disconnected': '未连接',
+    'unavailable': '不可用',
+    'disabled': '已禁用',
+    'unknown': '未知',
+    'ok': '正常'
+  };
+  let language = 'en';
+  let browserState = null;
+  class PageError extends Error {
+    constructor(message, values = {}) { super(message); this.values = values; }
+  }
+  function translate(message, values = {}) {
+    const template = language === 'zh-CN' && Object.hasOwn(chinese, message) ? chinese[message] : message;
+    return template.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(values, name) ? String(values[name]) : match);
+  }
+  function setText(node, message, values = {}) {
+    node.dataset.i18n = message; node.i18nValues = values; node.textContent = translate(message, values);
+  }
+  function setDate(node, value) {
+    node.dataset.i18nDate = ''; node.i18nDate = value; node.textContent = timestamp(value);
+  }
+  function selectedLanguage() {
+    const explicit = new URLSearchParams(location.search).get('lang');
+    if (explicit) return explicit;
+    try {
+      if (window.parent !== window && window.parent.document.documentElement.lang) return window.parent.document.documentElement.lang;
+    } catch (_) { /* Cross-origin embeds cannot read the parent language. */ }
+    try {
+      const stored = localStorage.getItem('cli-proxy-language');
+      if (stored) {
+        let value;
+        try { const parsed = JSON.parse(stored); value = parsed?.state?.language ?? parsed?.language ?? parsed; }
+        catch (_) { value = stored; }
+        if (typeof value === 'string' && ['zh-CN','zh-TW','en','ru'].includes(value)) return value;
+      }
+    } catch (_) { /* The browser may block preference storage. */ }
+    return navigator.languages?.[0] || navigator.language || 'en';
+  }
+  function localizedStatus(value) {
+    if (language !== 'zh-CN') return value;
+    if (typeof value === 'boolean') return translate(value ? 'Yes' : 'No');
+    if (typeof value === 'string') return translate(value);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [translate(name), localizedStatus(item)]));
+  }
+  function renderStatus() {
+    if (browserState === null) { setText($('browser-status'), 'Not loaded.'); return; }
+    $('browser-status').removeAttribute('data-i18n');
+    $('browser-status').textContent = JSON.stringify(localizedStatus(browserState), null, 2);
+  }
+  function applyLanguage() {
+    language = selectedLanguage().toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
+    document.documentElement.lang = language;
+    document.querySelectorAll('[data-i18n]').forEach(node => {
+      const message = node.dataset.i18n || node.textContent;
+      setText(node, message, node.i18nValues);
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(node => {
+      node.dataset.i18nPlaceholder ||= node.placeholder;
+      node.placeholder = translate(node.dataset.i18nPlaceholder);
+    });
+    document.querySelectorAll('[data-i18n-date]').forEach(node => { node.textContent = timestamp(node.i18nDate); });
+    renderStatus();
+  }
+
+  function notify(message, error = false, values = {}) {
+    setText($('notice'), message, values);
+    $('notice').classList.toggle('error', error);
+  }
+  function text(value) { return value == null ? '—' : String(value); }
+  function timestamp(value) {
+    if (!value) return '—';
+    const date = new Date(typeof value === 'number' ? value * 1000 : value);
+    return Number.isNaN(date.getTime()) ? translate('Unknown') : date.toLocaleString(language);
+  }
+  function safeStatus(value, depth = 0) {
+    if (depth > 4) return undefined;
+    if (typeof value === 'boolean' || typeof value === 'number' || value === null) return value;
+    if (typeof value === 'string') {
+      // Browser state is deliberately not a raw JSON dump: no paths, errors, or credentials.
+      return /^(?:ready|running|stopped|starting|closed|idle|connected|disconnected|available|unavailable|enabled|disabled|pending|completed|failed|unknown|ok|[0-9.]+)$/i.test(value) ? value : undefined;
+    }
+    if (Array.isArray(value)) return {count: value.length};
+    if (!value || typeof value !== 'object') return undefined;
+    const result = {};
+    for (const [name, item] of Object.entries(value)) {
+      if (forbiddenKeys.test(name) || !statusKeys.has(name)) continue;
+      const safe = safeStatus(item, depth + 1);
+      if (safe !== undefined) result[name] = safe;
+    }
+    return result;
+  }
+  function threadPath(value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== 'https:' || url.hostname !== 'muse.ai' || url.username || url.password) return 'Not displayed';
+      return url.origin + url.pathname; // Never show credential-bearing query or fragment data.
+    } catch (_) { return '—'; }
+  }
+  function button(label, handler, kind = 'secondary') {
+    const node = document.createElement('button');
+    node.type = 'button'; setText(node, label); node.className = kind;
+    node.addEventListener('click', () => run(handler));
+    return node;
+  }
+  function cell(row, value) {
+    const node = document.createElement('td'); node.textContent = text(value); row.append(node); return node;
+  }
+  function translatedCell(row, message, values = {}) {
+    const node = cell(row, ''); setText(node, message, values); return node;
+  }
+  function dateCell(row, value) {
+    const node = cell(row, ''); setDate(node, value); return node;
+  }
+  function allAccountsOption() {
+    const node = new Option('', ''); setText(node, 'All accounts'); return node;
+  }
+  function empty(body, columns, message) {
+    const row = document.createElement('tr'); const node = translatedCell(row, message);
+    node.colSpan = columns; node.className = 'empty'; body.append(row);
+  }
+  async function request(path, options = {}, query = {}, binary = false) {
+    if (!key) throw new PageError('Unlock management first.');
+    const url = new URL(API + path, location.origin);
+    for (const [name, value] of Object.entries(query)) if (value !== '' && value != null) url.searchParams.set(name, String(value));
+    const controller = new AbortController(); requests.add(controller);
+    const start = session;
+    const ensureUnlocked = () => { if (!key || start !== session) throw new PageError('Unlock management first.'); };
+    const headers = {Authorization: 'Bearer ' + key, Accept: binary ? '*/*' : 'application/json'};
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    try {
+      const response = await fetch(url, {...options, headers, cache:'no-store', credentials:'omit', redirect:'error', referrerPolicy:'no-referrer', signal:controller.signal});
+      ensureUnlocked();
+      if (!response.ok) {
+        // Never render returned error bodies, which may echo secrets from an import or proxy failure.
+        if (response.status === 401 || response.status === 403) throw new PageError('Management authentication rejected. Lock and enter a valid key.');
+        throw new PageError('Management request failed (HTTP {status}). Check the CPA server logs.', {status:response.status});
+      }
+      if (binary) {
+        const type = (response.headers.get('Content-Type') || '').split(';')[0].toLowerCase();
+        if (type.includes('json') || type === 'text/html') throw new PageError('The download endpoint returned a document instead of a file.');
+        const blob = await response.blob(); ensureUnlocked(); return blob;
+      }
+      if (response.status === 204) return {};
+      const type = response.headers.get('Content-Type') || '';
+      if (!/(?:application\/json|\+json)(?:;|$)/i.test(type)) throw new PageError('Expected a machine JSON management response.');
+      const data = await response.json(); ensureUnlocked(); return data;
+    } finally { requests.delete(controller); }
+  }
+  async function run(action) {
+    if (busy) return;
+    busy = true;
+    const start = session;
+    document.querySelectorAll('button').forEach(node => { if (node.id !== 'lock' && node.id !== 'close-task') node.disabled = true; });
+    $('account-filter').disabled = true;
+    try { await action(); }
+    catch (error) {
+      if (start === session) notify(error instanceof SyntaxError ? 'Invalid JSON. Check the import fields.' : error instanceof PageError ? error.message : 'Operation failed. Check the CPA server logs; no credentials are shown here.', true, error instanceof PageError ? error.values : {});
+    } finally {
+      busy = false;
+      document.querySelectorAll('button').forEach(node => { node.disabled = false; });
+      $('lock').disabled = !key;
+      $('account-filter').disabled = false;
+    }
+  }
+  function filter() { return {auth_index: $('account-filter').value}; }
+  async function loadStatus() {
+    const data = await request('/status');
+    const state = safeStatus(data.browser);
+    const taskState = safeStatus(data.tasks);
+    browserState = {provider:'museai', browser:state === undefined ? 'Status received; sensitive details withheld.' : state, tasks:taskState};
+    renderStatus();
+  }
+  async function loadAccounts() {
+    const data = await request('/accounts');
+    if (!Array.isArray(data.accounts)) throw new PageError('Expected accounts in the machine JSON response.');
+    const body = $('accounts'); body.replaceChildren();
+    const selected = $('account-filter').value;
+    $('account-filter').replaceChildren(allAccountsOption());
+    for (const account of data.accounts) {
+      const row = document.createElement('tr');
+      const accountCell = cell(row, account.label || account.name || account.auth_index);
+      const description = document.createElement('small'); setText(description, '{name} · index {index}', {name:text(account.name), index:text(account.auth_index)}); accountCell.append(document.createElement('br'), description);
+      translatedCell(row, account.disabled ? 'Disabled' : 'Enabled'); cell(row, account.cookie_count); dateCell(row, account.expires_at);
+      const actions = cell(row, ''); actions.className = 'actions';
+      actions.append(button(account.disabled ? 'Enable' : 'Disable', async () => {
+        await request('/accounts', {method:'PATCH', body:JSON.stringify({auth_index:account.auth_index, disabled:!account.disabled})});
+        await loadAccounts(); notify('Account state updated.');
+      }), button('Rename', async () => {
+        const label = prompt(translate('Account label:'), account.label || ''); if (label === null) return;
+        await request('/accounts', {method:'PATCH', body:JSON.stringify({auth_index:account.auth_index, label})});
+        await loadAccounts(); notify('Account label updated.');
+      }), button('Probe', () => accountOperation(account, 'probe')), button('Refresh cookies', () => accountOperation(account, 'refresh')), button('Delete', async () => {
+        if (!confirm(translate('Delete this stored Muse.ai account? This cannot be undone.'))) return;
+        await request('/accounts', {method:'DELETE'}, {auth_index:account.auth_index});
+        await loadAll(); notify('Stored account deleted.');
+      }, 'danger'));
+      body.append(row);
+      $('account-filter').append(new Option(account.label || account.name || String(account.auth_index), String(account.auth_index)));
+    }
+    if (!data.accounts.length) empty(body, 5, 'No Muse.ai accounts. Import credentials below or use the Chrome extension.');
+    if ([...$('account-filter').options].some(option => option.value === selected)) $('account-filter').value = selected;
+  }
+  async function accountOperation(account, operation) {
+    const message = operation === 'probe' ? 'Probe this account now? This contacts Muse.ai using its credentials and configured proxy.' : 'Refresh cookies now? This contacts Muse.ai and may update stored credentials.';
+    if (!confirm(translate(message))) return;
+    notify(operation === 'probe' ? 'Probing account…' : 'Refreshing account cookies…');
+    await request('/accounts/' + operation, {method:'POST', body:'{}'}, {auth_index:account.auth_index});
+    await loadAccounts(); await loadStatus();
+    notify(operation === 'probe' ? 'Account probe completed.' : 'Cookie refresh completed.');
+  }
+  async function loadTasks() {
+    const data = await request('/tasks', {}, filter());
+    if (!Array.isArray(data.tasks)) throw new PageError('Expected tasks in the machine JSON response.');
+    const body = $('tasks'); body.replaceChildren();
+    for (const task of data.tasks) {
+      const row = document.createElement('tr'); cell(row, task.id); cell(row, task.model); translatedCell(row, task.status); dateCell(row, task.created_at);
+      const actions = cell(row, ''); actions.className = 'actions';
+      actions.append(button('Inspect', () => inspectTask(task)), button('Delete record', async () => {
+        if (!confirm(translate('Delete this local task record? The upstream conversation is not deleted.'))) return;
+        await request('/tasks', {method:'DELETE'}, {...filter(), id:task.id}); await loadTasks(); notify('Task record deleted.');
+      }, 'danger')); body.append(row);
+    }
+    if (!data.tasks.length) empty(body, 5, 'No local task records.');
+  }
+  function inspectTask(task) {
+    const details = $('task-details'); details.replaceChildren();
+    const values = [['ID',task.id],['Model',task.model],['Status',task.status],['Created',task.created_at],['Muse thread',threadPath(task.thread_url)],['Provider error',task.error ? 'Provider reported an error. Raw details are withheld to protect credentials; check server logs.' : 'None'],['Media',Array.isArray(task.media) ? '{count} item(s); see Media below.' : task.media ? 'Media recorded; see Media below.' : 'None']];
+    for (const [name, value] of values) {
+      const title = document.createElement('dt'); setText(title, name);
+      const description = document.createElement('dd');
+      if (name === 'Created') setDate(description, value);
+      else if (['Status','Provider error','Media'].includes(name) || value === 'Not displayed') setText(description, text(value), {count:Array.isArray(task.media) ? task.media.length : 0});
+      else description.textContent = text(value);
+      details.append(title, description);
+    }
+    if (!$('task-dialog').open) $('task-dialog').showModal();
+  }
+  async function loadMedia() {
+    const data = await request('/media', {}, filter());
+    if (!Array.isArray(data.media)) throw new PageError('Expected media in the machine JSON response.');
+    const body = $('media'); body.replaceChildren();
+    for (const item of data.media) {
+      const row = document.createElement('tr'); cell(row, item.name); cell(row, item.mime);
+      if (typeof item.size === 'number') translatedCell(row, '{size} bytes', {size:item.size.toLocaleString(language)}); else cell(row, '—');
+      dateCell(row, item.created_at);
+      const actions = cell(row, ''); actions.className = 'actions';
+      actions.append(button('Download', async () => {
+        const blob = await request('/media/content', {}, {...filter(), name:item.name}, true); saveBlob(blob, item.name); notify('Media download prepared.');
+      }), button('Delete file', async () => {
+        if (!confirm(translate('Delete this local media file? This cannot be undone.'))) return;
+        await request('/media', {method:'DELETE'}, {...filter(), name:item.name}); await loadMedia(); notify('Media file deleted.');
+      }, 'danger')); body.append(row);
+    }
+    if (!data.media.length) empty(body, 5, 'No local media files.');
+  }
+  function saveBlob(blob, name) {
+    const url = URL.createObjectURL(blob); downloads.add(url);
+    const link = document.createElement('a'); link.href = url;
+    link.download = String(name || 'download').split(/[\\/]/).pop().replace(/[\x00-\x1f\x7f]/g, '_') || 'download';
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => { URL.revokeObjectURL(url); downloads.delete(url); }, 60000);
+  }
+  async function loadAll() { await loadAccounts(); await Promise.all([loadStatus(), loadTasks(), loadMedia()]); }
+  function lock() {
+    ++session; key = ''; requests.forEach(controller => controller.abort());
+    $('management-key').value = ''; $('import-form').reset(); $('manager').hidden = true; setText($('connection-state'), 'Locked'); $('lock').disabled = true;
+    for (const name of ['accounts','tasks','media','task-details']) $(name).replaceChildren();
+    browserState = null; renderStatus(); $('account-filter').replaceChildren(allAccountsOption());
+    if ($('task-dialog').open) $('task-dialog').close();
+    downloads.forEach(url => URL.revokeObjectURL(url)); downloads.clear(); notify('Locked. In-memory key and account views cleared.');
+  }
+  $('connect-form').addEventListener('submit', event => {
+    event.preventDefault(); if (busy) return;
+    const candidate = $('management-key').value.trim(); $('management-key').value = '';
+    if (!candidate) { notify('Enter a management key.', true); return; }
+    key = candidate; ++session;
+    run(async () => { await loadAll(); $('manager').hidden = false; setText($('connection-state'), 'Unlocked'); $('lock').disabled = false; notify('Local state loaded. No Muse.ai probe was requested.'); });
+  });
+  $('lock').addEventListener('click', lock);
+  $('reload').addEventListener('click', () => run(async () => { await loadAll(); notify('Local state reloaded.'); }));
+  for (const [id, loader] of [['reload-accounts',loadAccounts],['reload-tasks',loadTasks],['reload-media',loadMedia]]) $(id).addEventListener('click', () => run(async () => { await loader(); notify('Local list reloaded.'); }));
+  $('account-filter').addEventListener('change', () => run(async () => { await Promise.all([loadTasks(),loadMedia()]); notify('Account filter applied.'); }));
+  $('close-task').addEventListener('click', () => $('task-dialog').close());
+  $('download-extension').addEventListener('click', () => run(async () => { saveBlob(await request('/extension', {}, {}, true), 'museai-cookie-importer.zip'); notify('Extension ZIP download prepared.'); }));
+  $('import-form').addEventListener('submit', event => {
+    event.preventDefault(); if (busy) return;
+    run(async () => {
+      const raw = $('import-cookies').value.trim();
+      if (!raw) throw new PageError('Cookie data is required.');
+      const cookies = raw.startsWith('{') ? JSON.parse(raw) : raw;
+      if (typeof cookies === 'object' && (cookies === null || Array.isArray(cookies) || !Object.keys(cookies).length || Object.values(cookies).some(value => typeof value !== 'string'))) throw new PageError('Cookie JSON must be a non-empty object of string values.');
+      const body = {label:$('import-label').value.trim(), cookies};
+      for (const [field, id] of [['name','import-name'],['proxy_url','import-proxy']]) { const value = $(id).value.trim(); if (value) body[field] = value; }
+      const expiry = $('import-expiry').value.trim();
+      if (expiry) {
+        const values = JSON.parse(expiry);
+        if (!values || Array.isArray(values) || typeof values !== 'object' || Object.values(values).some(value => !Number.isFinite(value) || value < 0)) throw new PageError('Expiry mapping must be a JSON object of non-negative Unix seconds.');
+        body.cookies_exp = values;
+      }
+      // Clear sensitive form fields before sending, including failed submissions.
+      $('import-cookies').value = ''; $('import-expiry').value = ''; $('import-proxy').value = '';
+      await request('/accounts', {method:'POST', body:JSON.stringify(body)});
+      $('import-form').reset(); await loadAccounts(); notify('Credentials saved. No Muse.ai probe was requested.');
+    });
+  });
+  applyLanguage();
+  window.addEventListener('storage', event => { if (event.key === 'cli-proxy-language' || event.key === null) applyLanguage(); });
+  window.addEventListener('languagechange', applyLanguage);
+  try {
+    if (window.parent !== window) {
+      const observer = new MutationObserver(applyLanguage);
+      observer.observe(window.parent.document.documentElement, {attributes:true, attributeFilter:['lang']});
+      window.addEventListener('pagehide', () => observer.disconnect());
+    }
+  } catch (_) { /* Direct navigation and cross-origin embeds use the local preference. */ }
+  window.addEventListener('pagehide', lock);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Muse.ai → CLIProxyAPI credential importer",
+  "description": "Import Muse.ai personal-agent cookies directly into your chosen CPA server. Not Meta Muse Code.",
+  "version": "1.0.0",
+  "minimum_chrome_version": "102",
+  "permissions": ["cookies"],
+  "host_permissions": ["https://muse.ai/*"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "action": {
+    "default_title": "Import Muse.ai credentials into CPA",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"
+  }
+}
