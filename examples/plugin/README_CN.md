@@ -167,4 +167,4 @@ make -C examples/plugin build
 
 `host-callback` 使用最小插件资源承载，因为宿主回调只能从插件方法内部发起，不是独立能力。
 
-`management.register` 通过 `resources` 字段返回的菜单资源会由 CPA 暴露在 `/v0/resource/plugins/<pluginID>/...` 下。需要认证的插件自有 Management API 路由仍保留在 `/v0/management/...` 下。
+Schema 8 插件通过 `management.register` 返回的菜单资源暴露在 `/v8/resource/plugins/<pluginID>/...`，需要认证的 Management API 路由使用 `/v8/management/...`。旧版 Schema 保留声明的 `/v0` 路径。资源页面可以公开加载，但不能嵌入凭据或执行未认证的特权操作。宿主会在插件停用或卸载时终止所属的在途响应流，返回禁止重试的取消错误；不完整响应不会被标为成功。

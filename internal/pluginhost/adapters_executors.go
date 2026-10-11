@@ -500,6 +500,10 @@ func (a *executorAdapter) selectExecutorInputFormat(requested sdktranslator.Form
 	if executorFormatContains(a.inputFormats, requested) {
 		return requested, nil
 	}
+	// Media payloads are canonical JSON or multipart, never chat translation inputs.
+	if requested.String() == registry.OpenAIImageModelType || requested.String() == registry.OpenAIVideoModelType {
+		return "", fmt.Errorf("plugin executor %s does not support media input format %q", a.Identifier(), requested)
+	}
 	for _, format := range a.inputFormats {
 		if requested == "" || sdktranslator.HasRequestTransformer(requested, format) {
 			return format, nil
@@ -728,7 +732,7 @@ func (a *executorAdapter) Execute(ctx context.Context, auth *coreauth.Auth, req 
 		reporter.StartResponseTTFT()
 	}
 
-	pluginResp, errExecute := a.executor.Execute(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
+	pluginResp, errExecute := a.executor.Execute(ctx, buildExecutorRequest(ctx, a.host, a.provider, auth, prepared.req, prepared.opts))
 	if errExecute != nil {
 		return coreexecutor.Response{}, errExecute
 	}
@@ -786,7 +790,7 @@ func (a *executorAdapter) ExecuteStream(ctx context.Context, auth *coreauth.Auth
 		reporter.StartResponseTTFT()
 	}
 
-	pluginResp, errExecuteStream := a.executor.ExecuteStream(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
+	pluginResp, errExecuteStream := a.executor.ExecuteStream(ctx, buildExecutorRequest(ctx, a.host, a.provider, auth, prepared.req, prepared.opts))
 	if errExecuteStream != nil {
 		return nil, errExecuteStream
 	}
@@ -1014,7 +1018,7 @@ func (a *executorAdapter) CountTokens(ctx context.Context, auth *coreauth.Auth, 
 	if errPrepare != nil {
 		return coreexecutor.Response{}, errPrepare
 	}
-	pluginResp, errCountTokens := a.executor.CountTokens(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
+	pluginResp, errCountTokens := a.executor.CountTokens(ctx, buildExecutorRequest(ctx, a.host, a.provider, auth, prepared.req, prepared.opts))
 	if errCountTokens != nil {
 		return coreexecutor.Response{}, errCountTokens
 	}
@@ -1072,27 +1076,28 @@ func (a *executorAdapter) HttpRequest(ctx context.Context, auth *coreauth.Auth, 
 	return resp, nil
 }
 
-func buildExecutorRequest(host *Host, provider string, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) pluginapi.ExecutorRequest {
+func buildExecutorRequest(ctx context.Context, host *Host, provider string, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) pluginapi.ExecutorRequest {
 	if coreauth.IsPluginStaticAuth(auth) {
 		auth = nil
 	}
 	return pluginapi.ExecutorRequest{
-		AuthID:          authID(auth),
-		AuthProvider:    authProvider(auth),
-		Model:           req.Model,
-		Format:          req.Format.String(),
-		Stream:          opts.Stream,
-		Alt:             opts.Alt,
-		Headers:         cloneHeader(opts.Headers),
-		Query:           cloneValues(opts.Query),
-		OriginalRequest: bytes.Clone(opts.OriginalRequest),
-		SourceFormat:    opts.SourceFormat.String(),
-		Payload:         bytes.Clone(req.Payload),
-		Metadata:        mergeExecutorMetadata(req.Metadata, opts.Metadata),
-		StorageJSON:     storageJSONFromAuth(auth),
-		AuthMetadata:    cloneAnyMap(authMetadata(auth)),
-		AuthAttributes:  authAttributes(auth),
-		HTTPClient:      host.newHTTPClientWithProxy(auth, opts.ProxyURL, provider),
+		AuthID:           authID(auth),
+		AuthProvider:     authProvider(auth),
+		Model:            req.Model,
+		Format:           req.Format.String(),
+		Stream:           opts.Stream,
+		Alt:              opts.Alt,
+		Headers:          cloneHeader(opts.Headers),
+		Query:            cloneValues(opts.Query),
+		OriginalRequest:  bytes.Clone(opts.OriginalRequest),
+		SourceFormat:     opts.SourceFormat.String(),
+		Payload:          bytes.Clone(req.Payload),
+		Metadata:         mergeExecutorMetadata(req.Metadata, opts.Metadata),
+		StorageJSON:      storageJSONFromAuth(auth),
+		AuthMetadata:     cloneAnyMap(authMetadata(auth)),
+		AuthAttributes:   authAttributes(auth),
+		HTTPClient:       host.newHTTPClientWithProxy(auth, opts.ProxyURL, provider),
+		BrowserTransport: host.browserTransport(ctx, auth, opts.ProxyURL),
 	}
 }
 

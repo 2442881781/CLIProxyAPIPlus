@@ -28,7 +28,7 @@ func (s *Server) deploymentLifecycleMiddleware() gin.HandlerFunc {
 		}
 
 		path := c.Request.URL.Path
-		if path == "/healthz" || path == "/readyz" || path == "/v0/deployment/status" || path == "/v0/deployment/drain" || path == "/v0/deployment/routing-diagnostics" {
+		if path == "/healthz" || path == "/readyz" || path == "/v0/deployment/status" || path == "/v0/deployment/drain" || path == "/v0/deployment/routing-diagnostics" || path == "/v0/deployment/plugins" {
 			c.Next()
 			return
 		}
@@ -83,6 +83,18 @@ func (s *Server) routingDiagnostics(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"diagnostics": s.handlers.AuthManager.RecentRoutingDiagnostics(limit)})
+}
+
+func (s *Server) deploymentPlugins(c *gin.Context) {
+	if !s.authorizeDeploymentControl(c) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if s.mgmt == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "plugin state unavailable"})
+		return
+	}
+	s.mgmt.ListPlugins(c)
 }
 
 func (s *Server) authorizeDeploymentControl(c *gin.Context) bool {

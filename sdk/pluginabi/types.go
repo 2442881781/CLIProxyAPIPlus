@@ -18,7 +18,8 @@ const (
 	// Plugins that still require HTML entity escaping on JSON response strings
 	// should keep schema_version < 6.
 	// Version 7 adds the bounded host.auth.delete callback.
-	SchemaVersion uint32 = 7
+	// Version 8 adds operation cancellation, explicit browser transport, and scoped retry errors.
+	SchemaVersion uint32 = 8
 	// SchemaVersionStreamChunkOmitRequestBody is the first schema version that omits
 	// request bodies on payload stream-chunk interceptor calls.
 	SchemaVersionStreamChunkOmitRequestBody uint32 = 3
@@ -34,6 +35,8 @@ const (
 	// SchemaVersionHostAuthDelete is the first schema version that exposes the
 	// bounded host.auth.delete callback for plugin-owned physical auth files.
 	SchemaVersionHostAuthDelete uint32 = 7
+	// SchemaVersionHostOperationWait also selects the v8 plugin HTTP route prefixes.
+	SchemaVersionHostOperationWait uint32 = 8
 )
 
 const (
@@ -115,6 +118,8 @@ const (
 	MethodHostAuthSave           = "host.auth.save"
 	MethodHostAuthDelete         = "host.auth.delete"
 	MethodHostAffinityLookup     = "host.affinity.lookup"
+	// MethodHostOperationWait blocks until the owning callback scope is canceled or closed.
+	MethodHostOperationWait = "host.operation.wait"
 )
 
 type Envelope struct {
@@ -130,6 +135,10 @@ type Error struct {
 	// HTTPStatus is the HTTP status code (e.g. 401, 403, 429) to surface to the client.
 	// When omitted or 0, CPA defaults to HTTP 500 (internal_server_error).
 	HTTPStatus int `json:"http_status,omitempty"`
+	// RequestScoped prevents credential-wide cooldown for a request-specific failure.
+	RequestScoped bool `json:"request_scoped,omitempty"`
+	// NoRetry forbids resubmission, credential rotation, and refresh for this operation.
+	NoRetry bool `json:"no_retry,omitempty"`
 }
 
 // Error implements the error interface for Error.

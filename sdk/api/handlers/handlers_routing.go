@@ -324,6 +324,10 @@ func modelRoutersEnabled(host PluginModelRouterHost, skipPluginID string) bool {
 
 func (h *BaseAPIHandler) applyModelRouter(ctx context.Context, handlerType, modelName string, rawJSON []byte, stream bool, execOptions modelExecutionOptions) modelRouteDecision {
 	var decision modelRouteDecision
+	// Durable media retrieval is already bound to a concrete credential/provider.
+	if handlerType == "openai-video" && execOptions.ForcedProvider != "" && pinnedAuthIDFromContext(ctx) != "" {
+		return decision
+	}
 	host := h.modelRouterHost()
 	if host == nil || !modelRoutersEnabled(host, execOptions.SkipRouterPluginID) {
 		return decision

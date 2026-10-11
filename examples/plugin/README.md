@@ -98,6 +98,37 @@ Shared-library plugins can make `host.http.do` and `host.http.do_stream` cancela
 
 Each operation ID can be claimed by one HTTP callback. HTTP stream IDs are also scoped to the owning plugin. Cancel an opened operation if it will not be used, and close streams when finished. This API provides explicit cancellation, not a host-managed per-call timeout; a plugin that wants a deadline must arrange its own cancellation call.
 
+Schema 8 plugins can also observe cancellation of non-HTTP work (for example,
+owned Chromium/CDP sessions) using `host.operation.wait`. Forward the live
+`host_callback_id` and an optional fresh `operation_id` from
+`host.http.operation_open`. The blocking callback returns an envelope containing
+`{"canceled":true}` when the request, callback scope, operation, or plugin instance
+closes. A scope or operation already removed before the waiter starts returns an
+error; treat that as cancellation. IDs belong to the exact calling plugin instance.
+The waiter claims its operation, so do not share that ID with an HTTP callback.
+Release an opened operation with `host.http.cancel` when the owned work finishes.
+
+When a schema 8 plugin is disabled, the host removes its routable capabilities,
+cancels its existing callback scopes and HTTP operations, and invokes
+`plugin.quiesce`. Its library stays loaded for reconfiguration on reenable;
+the plugin must stop its owned work on quiesce without shutting down unrelated
+processes. Older plugin schemas keep their existing disable behavior.
+
+Executor streams belong to their host callback scope. Disabling or unloading
+the owning plugin closes in-flight streams with a request-scoped, non-retriable
+cancellation error, even if the plugin can no longer call `host.stream.close`.
+Accepted chunks remain ordered before that error; incomplete output is not
+reported as a successful completion.
+
+Executors receive `browser_transport` with the host-resolved `proxy_url`. An
+explicit `direct` overrides the global proxy. Unsupported custom transports,
+destination-dependent context proxy functions, and environment proxies with
+`NO_PROXY` bypass rules set `error`; configure an explicit request/account/global
+proxy or `direct` rather than silently changing the browser's routing policy.
+Browser executors must reject an error. Browser traffic is not a `HostHTTPClient`
+request and is not covered by
+the host's raw upstream HTTP request logs.
+
 ## Scheduler
 
 `scheduler` declares the scheduler capability. It can select a configured auth ID from the candidate list, delegate to the built-in `fill-first` or `round-robin` scheduler, or reject picks when `deny` is `true`.
@@ -129,6 +160,8 @@ When a plugin executor encounters an upstream failure (such as `401 Unauthorized
   - `>=500` -> HTTP 5xx with `type: "server_error"`, `code: "internal_server_error"`
 - **Important**: Both non-streaming (`executor.execute`) and streaming (`executor.execute_stream`) call sites must include `http_status` so failures are classified consistently.
 - Because native dynamic library plugins communicate across the C ABI via serialized JSON buffers, the status code must be encoded in the serialized JSON envelope (e.g. using `pluginabi.NewErrorEnvelope` or a custom envelope struct with an `http_status` field). Returning an unmarshaled Go error does not traverse the C ABI boundary.
+- `request_scoped: true` prevents credential-wide cooldown for request-specific failures.
+- `no_retry: true` prohibits replay, credential rotation, and refresh for that operation. Use it after an ambiguous or confirmed upstream submission. Stream errors carry these fields in `error_detail` on `host.stream.emit` and `host.stream.close`.
 
 Go plugins can import `github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi` and use `pluginabi.NewErrorEnvelope(code, message, httpStatus)`:
 
@@ -178,4 +211,4 @@ Artifacts are written to `examples/plugin/bin`.
 
 `host-callback` uses a minimal plugin resource because host callbacks are invoked from plugin methods and are not standalone capabilities.
 
-Menu resources returned by `management.register` through the `resources` field are exposed by CPA under `/v0/resource/plugins/<pluginID>/...`. Authenticated plugin Management API routes remain under `/v0/management/...`.
+Schema 8 menu resources returned by `management.register` are exposed under `/v8/resource/plugins/<pluginID>/...`; their authenticated Management API routes use `/v8/management/...`. Earlier schemas retain their declared `/v0` paths. Resource HTML can be public, so it must not embed credentials or perform unauthenticated privileged operations.

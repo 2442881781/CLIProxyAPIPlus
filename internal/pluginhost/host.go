@@ -223,6 +223,7 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 	h.runtimeConfig = cfg
 	h.mu.Unlock()
 
+	previousRecords := h.activeRecords()
 	if !rc.Enabled {
 		h.mu.Lock()
 		h.managementRoutes = make(map[string]managementRouteRecord)
@@ -231,6 +232,7 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 		h.snapshot.Store(emptySnapshot())
 		h.mu.Unlock()
 		h.refreshThinkingProviders(nil)
+		h.quiesceInactivePlugins(ctx, previousRecords, nil)
 		return
 	}
 
@@ -245,6 +247,7 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 		h.snapshot.Store(emptySnapshot())
 		h.mu.Unlock()
 		h.refreshThinkingProviders(nil)
+		h.quiesceInactivePlugins(ctx, previousRecords, nil)
 		return
 	}
 	files = h.withLoadedPluginFallbacks(files, rc.Items, desiredVersions)
@@ -404,6 +407,7 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 	h.snapshot.Store(&Snapshot{enabled: true, records: records, quotaSupportedProviders: make(map[string][]string)})
 	h.mu.Unlock()
 	h.refreshThinkingProviders(records)
+	h.quiesceInactivePlugins(ctx, previousRecords, records)
 	for _, fields := range hotReloadLogs {
 		log.WithFields(fields).Info("pluginhost: plugin hot reloaded")
 	}
@@ -411,6 +415,36 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 		if errCleanup := cleanupUnselectedPluginFiles(rc.Dir, loadedFiles); errCleanup != nil {
 			log.Warnf("pluginhost: failed to clean old plugin files: %v", errCleanup)
 		}
+	}
+}
+
+func (h *Host) quiesceInactivePlugins(ctx context.Context, previous, current []capabilityRecord) {
+	for _, record := range previous {
+		if record.plugin.SchemaVersion < pluginabi.SchemaVersionHostOperationWait {
+			continue
+		}
+		active := false
+		for _, next := range current {
+			if next.id == record.id {
+				active = true
+				break
+			}
+		}
+		if active {
+			continue
+		}
+		h.mu.Lock()
+		loaded := h.loaded[record.id]
+		h.mu.Unlock()
+		if loaded == nil {
+			continue
+		}
+		// Cancel existing work without closing the instance: its library remains
+		// loaded and can be reconfigured when the plugin is enabled again.
+		h.callbackContexts.closeMatching(record.id, loaded.callbackInstance)
+		h.httpOperations.cancelMatching(record.id, loaded.callbackInstance, false)
+		h.httpStreams.closeMatching(record.id, loaded.callbackInstance, false)
+		h.callQuiesce(ctx, loaded)
 	}
 }
 

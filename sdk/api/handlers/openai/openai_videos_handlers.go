@@ -164,7 +164,7 @@ func isSoraVideosModel(model string) bool {
 }
 
 func isSupportedVideosModel(model string) bool {
-	return isXAIVideosModel(model) || isSoraVideosModel(model)
+	return isRegisteredVideosModel(model) || isXAIVideosModel(model) || isSoraVideosModel(model)
 }
 
 func rejectUnsupportedVideosModel(c *gin.Context, model string) bool {
@@ -271,6 +271,32 @@ func videosCreateRequestFromForm(c *gin.Context) ([]byte, error) {
 		for _, ref := range strings.Split(refs, ",") {
 			if ref = strings.TrimSpace(ref); ref != "" {
 				rawJSON, _ = sjson.SetBytes(rawJSON, "reference_image_urls.-1", ref)
+			}
+		}
+	}
+	if isRegisteredVideosModel(gjson.GetBytes(rawJSON, "model").String()) && c.ContentType() == "multipart/form-data" {
+		form, errForm := c.MultipartForm()
+		if errForm != nil {
+			return nil, fmt.Errorf("read video multipart form: %w", errForm)
+		}
+		if form != nil {
+			defer func() {
+				if errRemove := form.RemoveAll(); errRemove != nil {
+					log.Warn("failed to remove video multipart temporary files")
+				}
+			}()
+			var images []string
+			for _, field := range []string{"input_reference", "image", "image[]"} {
+				for _, file := range form.File[field] {
+					dataURL, errImage := multipartFileToDataURL(file)
+					if errImage != nil {
+						return nil, fmt.Errorf("read video reference image: %w", errImage)
+					}
+					images = append(images, dataURL)
+				}
+			}
+			if len(images) > 0 {
+				rawJSON, _ = sjson.SetBytes(rawJSON, "images", images)
 			}
 		}
 	}
@@ -700,6 +726,10 @@ func (h *OpenAIAPIHandler) VideosCreate(c *gin.Context) {
 	if videoModel == "" {
 		videoModel = defaultXAIVideosModel
 	}
+	if isRegisteredVideosModel(videoModel) {
+		h.collectRegisteredVideosCreate(c, rawJSON, videoModel)
+		return
+	}
 	if rejectUnsupportedVideosModel(c, videoModel) {
 		return
 	}
@@ -726,7 +756,12 @@ func (h *OpenAIAPIHandler) XAIVideosExtensions(c *gin.Context) {
 }
 
 func (h *OpenAIAPIHandler) handleXAIVideosNativePost(c *gin.Context) {
-	rawJSON, err := readXAIVideosNativeRequest(c)
+	readRequest := readXAIVideosNativeRequest
+	creation := c.Request.URL.Path == videosPath || c.Request.URL.Path == xaiVideosGenerationsAPI
+	if creation {
+		readRequest = readVideosCreateRequest
+	}
+	rawJSON, err := readRequest(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
 			Error: handlers.ErrorDetail{
@@ -740,6 +775,16 @@ func (h *OpenAIAPIHandler) handleXAIVideosNativePost(c *gin.Context) {
 	videoModel := strings.TrimSpace(gjson.GetBytes(rawJSON, "model").String())
 	if videoModel == "" {
 		videoModel = defaultXAIVideosModel
+	}
+	if creation && isRegisteredVideosModel(videoModel) {
+		h.collectRegisteredVideosCreate(c, rawJSON, videoModel)
+		return
+	}
+	if c.ContentType() == "multipart/form-data" || c.ContentType() == "application/x-www-form-urlencoded" {
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{Error: handlers.ErrorDetail{
+			Message: "Invalid request: body must be valid JSON", Type: "invalid_request_error",
+		}})
+		return
 	}
 	if rejectUnsupportedNativeVideosModel(c, videoModel) {
 		return
@@ -764,6 +809,9 @@ func (h *OpenAIAPIHandler) XAIVideosRetrieve(c *gin.Context) {
 		})
 		return
 	}
+	if h.handleRegisteredVideosGet(c, requestID, "retrieve") {
+		return
+	}
 
 	payload := []byte(`{}`)
 	payload, _ = sjson.SetBytes(payload, "request_id", requestID)
@@ -779,6 +827,9 @@ func (h *OpenAIAPIHandler) VideosRetrieve(c *gin.Context) {
 				Type:    "invalid_request_error",
 			},
 		})
+		return
+	}
+	if h.handleRegisteredVideosGet(c, videoID, "retrieve") {
 		return
 	}
 
@@ -823,12 +874,18 @@ func (h *OpenAIAPIHandler) VideosRetrieve(c *gin.Context) {
 func (h *OpenAIAPIHandler) VideosContent(c *gin.Context) {
 	videoID := strings.TrimSpace(c.Param("video_id"))
 	if videoID == "" {
+		videoID = strings.TrimSpace(c.Param("request_id"))
+	}
+	if videoID == "" {
 		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
 			Error: handlers.ErrorDetail{
 				Message: "Invalid request: video_id is required",
 				Type:    "invalid_request_error",
 			},
 		})
+		return
+	}
+	if h.handleRegisteredVideosGet(c, videoID, "content") {
 		return
 	}
 

@@ -17,6 +17,7 @@ type callbackContextRegistry struct {
 
 type callbackContextEntry struct {
 	ctx      context.Context
+	cancel   context.CancelFunc
 	pluginID string
 	instance *hostCallbackInstance
 	cleanup  []callbackContextCleanup
@@ -40,9 +41,15 @@ func (r *callbackContextRegistry) open(ctx context.Context, pluginID string, ins
 	}
 	pluginID = strings.TrimSpace(pluginID)
 	ctx = withHostCallbackIdentity(ctx, pluginID, instance)
+	ctx, cancel := context.WithCancel(ctx)
 	id := strconv.FormatUint(r.next.Add(1), 10)
 	r.mu.Lock()
-	r.contexts[id] = callbackContextEntry{ctx: ctx, pluginID: pluginID, instance: instance}
+	if instance != nil && instance.closed.Load() {
+		r.mu.Unlock()
+		cancel()
+		return "", func() {}
+	}
+	r.contexts[id] = callbackContextEntry{ctx: ctx, cancel: cancel, pluginID: pluginID, instance: instance}
 	r.mu.Unlock()
 
 	var once sync.Once
@@ -53,6 +60,8 @@ func (r *callbackContextRegistry) open(ctx context.Context, pluginID string, ins
 			entry := r.contexts[id]
 			delete(r.contexts, id)
 			r.mu.Unlock()
+			// Wake operation waiters before running cleanup, which may wait on the plugin.
+			cancel()
 			cleanup = entry.cleanup
 			for _, item := range cleanup {
 				if item.fn != nil {
@@ -60,6 +69,31 @@ func (r *callbackContextRegistry) open(ctx context.Context, pluginID string, ins
 				}
 			}
 		})
+	}
+}
+
+func (r *callbackContextRegistry) closeMatching(pluginID string, instance *hostCallbackInstance) {
+	if r == nil {
+		return
+	}
+	var entries []callbackContextEntry
+	r.mu.Lock()
+	for id, entry := range r.contexts {
+		if entry.pluginID == pluginID && (instance == nil || entry.instance == instance) {
+			delete(r.contexts, id)
+			entries = append(entries, entry)
+		}
+	}
+	r.mu.Unlock()
+	for _, entry := range entries {
+		entry.cancel()
+	}
+	for _, entry := range entries {
+		for _, item := range entry.cleanup {
+			if item.fn != nil {
+				item.fn()
+			}
+		}
 	}
 }
 

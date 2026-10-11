@@ -56,6 +56,7 @@ type ModelExecutionRequest struct {
 	SkipInterceptorPluginID string
 	SkipRouterPluginID      string
 	ForcedProvider          string
+	AuthSelectionModel      string
 	AuthID                  string
 	ProxyURL                string
 	Path                    string
@@ -122,6 +123,7 @@ func (h *BaseAPIHandler) ExecuteModel(ctx context.Context, req ModelExecutionReq
 		SkipInterceptorPluginID: req.SkipInterceptorPluginID,
 		SkipRouterPluginID:      req.SkipRouterPluginID,
 		ForcedProvider:          req.ForcedProvider,
+		AuthSelectionModel:      req.AuthSelectionModel,
 		ProxyURL:                strings.TrimSpace(req.ProxyURL),
 		Path:                    strings.TrimSpace(req.Path),
 	})
@@ -158,6 +160,7 @@ func (h *BaseAPIHandler) ExecuteModelStream(ctx context.Context, req ModelExecut
 		SkipInterceptorPluginID: req.SkipInterceptorPluginID,
 		SkipRouterPluginID:      req.SkipRouterPluginID,
 		ForcedProvider:          req.ForcedProvider,
+		AuthSelectionModel:      req.AuthSelectionModel,
 		ProxyURL:                strings.TrimSpace(req.ProxyURL),
 		Path:                    strings.TrimSpace(req.Path),
 	})

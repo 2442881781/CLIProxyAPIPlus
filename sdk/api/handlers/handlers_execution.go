@@ -112,6 +112,16 @@ func (h *BaseAPIHandler) executeWithAuthManagerFormats(ctx context.Context, entr
 	rawResponseHeaders := cloneHeader(resp.Headers)
 	passthroughHeaders := executionPassthroughHeaders(h.Cfg, execOptions.InternalSource)
 	responseHeaders := downstreamHeadersFromExecutor(rawResponseHeaders, passthroughHeaders)
+	if entryProtocol == "openai-video" {
+		if responseHeaders == nil {
+			responseHeaders = make(http.Header)
+		}
+		for _, key := range []string{"Content-Type", "Content-Length", "Content-Disposition"} {
+			if value := rawResponseHeaders.Get(key); value != "" {
+				responseHeaders.Set(key, value)
+			}
+		}
+	}
 	body, responseHeaders := h.applyResponseInterceptors(ctx, lifecycle.requestID(), responseProtocol, normalizedModel, originalRequestedModel, executedOpts, rawResponseHeaders, responseHeaders, executedOpts.OriginalRequest, executedReq.Payload, resp.Payload, http.StatusOK, execOptions.SkipInterceptorPluginID, passthroughHeaders)
 	lifecycle.complete(pluginapi.RequestCompletionSucceeded, http.StatusOK, nil)
 	return body, responseHeaders, nil

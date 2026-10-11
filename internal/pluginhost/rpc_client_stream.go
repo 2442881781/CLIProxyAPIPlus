@@ -3,6 +3,7 @@ package pluginhost
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
@@ -14,8 +15,15 @@ func (a *rpcPluginAdapter) ExecuteStream(ctx context.Context, req pluginapi.Exec
 		return pluginapi.ExecutorStreamResponse{}, fmt.Errorf("plugin stream bridge is unavailable")
 	}
 	streamID, chunks, cleanupStream := a.host.streams.open(ctx)
-	callbackID, closeCallback := a.openHostCallbackContext(ctx)
+	callbackID, closeCallback := a.openHostCallbackContext(ctx, req.HTTPClient)
 	cleanup := combinedCleanup(cleanupStream, closeCallback)
+	canceled := rpcError{Code: "canceled", message: "Plugin stream canceled; submitted work was not repeated", statusCode: http.StatusRequestTimeout, requestScoped: true, noRetry: true}
+	// Unload rejects subsequent plugin callbacks, so the host must terminate
+	// the stream without relying on a final host.stream.close from the plugin.
+	if !a.host.addCallbackCleanup(callbackID, func() { a.host.streams.closeWithError(streamID, canceled) }) {
+		cleanup()
+		return pluginapi.ExecutorStreamResponse{}, canceled
+	}
 	rpcReq := rpcExecutorRequest{
 		ExecutorRequest: req,
 		StreamID:        streamID,
@@ -68,11 +76,19 @@ func cleanupWhenStreamDone(ctx context.Context, chunks <-chan pluginapi.Executor
 		if ctx != nil {
 			done = ctx.Done()
 		}
-		for chunk := range chunks {
+		for {
 			select {
-			case out <- chunk:
 			case <-done:
 				return
+			case chunk, ok := <-chunks:
+				if !ok {
+					return
+				}
+				select {
+				case out <- chunk:
+				case <-done:
+					return
+				}
 			}
 		}
 	}()

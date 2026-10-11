@@ -315,12 +315,24 @@ wait_ready() {
 }
 
 check_plugins() {
-  local service="$1" pid
-  pid="$(systemctl show -p MainPID --value "${service}")"
-  if [[ -n "${pid}" ]] && journalctl -u "${service}" "_PID=${pid}" --no-pager | grep -Eq 'failed to load plugin|plugin\.register failed|returned invalid metadata or no capabilities'; then
+  local port="$1" status
+  if ! status="$(control_curl GET "${port}" /v0/deployment/plugins)"; then
+    log "unable to query plugin registration state on ${port}"
     return 1
   fi
-  return 0
+  python3 -c '
+import json
+import sys
+state = json.load(sys.stdin)
+if not state["plugins_enabled"]:
+    raise SystemExit(0)
+failed = [plugin["id"] for plugin in state["plugins"]
+          if plugin["path"] and plugin["enabled"]
+          and not (plugin["registered"] and plugin["effective_enabled"])]
+if failed:
+    print("Enabled plugins failed to register: " + ", ".join(failed), file=sys.stderr)
+    raise SystemExit(1)
+' <<<"${status}"
 }
 
 wait_for_drain() {
@@ -532,9 +544,9 @@ if ! wait_ready "${NEXT_SERVICE}" "${NEXT_PORT}"; then
   systemctl stop "${NEXT_SERVICE}" || true
   fail "new slot health check failed"
 fi
-if ! check_plugins "${NEXT_SERVICE}"; then
+if ! check_plugins "${NEXT_PORT}"; then
   systemctl stop "${NEXT_SERVICE}" || true
-  fail "new process reported a plugin load failure"
+  fail "new process has an unregistered enabled plugin"
 fi
 
 log "switching nginx to ${NEXT_SLOT}"

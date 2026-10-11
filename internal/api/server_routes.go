@@ -81,6 +81,7 @@ func (s *Server) setupRoutes() {
 		c.JSON(http.StatusOK, s.deploymentStatus())
 	})
 	s.engine.GET("/v0/deployment/routing-diagnostics", s.routingDiagnostics)
+	s.engine.GET("/v0/deployment/plugins", s.deploymentPlugins)
 	s.engine.POST("/v0/deployment/drain", func(c *gin.Context) {
 		if !s.authorizeDeploymentControl(c) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -168,6 +169,7 @@ func (s *Server) setupRoutes() {
 		v1.POST("/videos/edits", openaiHandlers.XAIVideosEdits)
 		v1.POST("/videos/extensions", openaiHandlers.XAIVideosExtensions)
 		v1.GET("/videos/:request_id", openaiHandlers.XAIVideosRetrieve)
+		v1.GET("/videos/:request_id/content", openaiHandlers.VideosContent)
 		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 		v1.POST("/messages/count_tokens", claudeCodeHandlers.ClaudeCountTokens)
 		v1.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)

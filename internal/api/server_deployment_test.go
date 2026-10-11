@@ -6,10 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
@@ -203,5 +207,83 @@ func TestRoutingDiagnosticsReturnsSafeSnapshot(t *testing.T) {
 	}
 	if len(payload.Diagnostics) != 0 {
 		t.Fatalf("diagnostics len = %d, want 0", len(payload.Diagnostics))
+	}
+}
+
+func TestDeploymentPluginsRequiresLoopbackAndToken(t *testing.T) {
+	server := newTestServerWithOptions(t)
+	server.deploymentControlKey = "deploy-secret"
+
+	for _, testCase := range []struct {
+		name       string
+		remoteAddr string
+		token      string
+	}{
+		{name: "missing token", remoteAddr: "127.0.0.1:12345"},
+		{name: "wrong token", remoteAddr: "127.0.0.1:12345", token: "wrong"},
+		{name: "non-loopback", remoteAddr: "192.0.2.10:12345", token: "deploy-secret"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/v0/deployment/plugins", nil)
+			req.RemoteAddr = testCase.remoteAddr
+			req.Header.Set(deploymentControlHeader, testCase.token)
+			server.engine.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+			}
+		})
+	}
+}
+
+func TestDeploymentPluginsReportsFailedRegistrationWhileDraining(t *testing.T) {
+	pluginsDir := t.TempDir()
+	pluginPath := filepath.Join(pluginsDir, "museai-v0.1.0"+pluginhost.PluginExtension(runtime.GOOS))
+	if errWrite := os.WriteFile(pluginPath, []byte("invalid native plugin"), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	enabled := true
+	cfg := &config.Config{Plugins: config.PluginsConfig{
+		Enabled: true,
+		Dir:     pluginsDir,
+		Configs: map[string]config.PluginInstanceConfig{"museai": {Enabled: &enabled}},
+	}}
+	host := pluginhost.New()
+	t.Cleanup(host.ShutdownAll)
+	host.ApplyConfig(context.Background(), cfg)
+	server := newTestServerWithConfig(t, cfg, WithPluginHost(host))
+	server.deploymentControlKey = "deploy-secret"
+	server.deploymentDraining.Store(true)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v0/deployment/plugins", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set(deploymentControlHeader, "deploy-secret")
+	server.engine.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var payload struct {
+		PluginsEnabled bool `json:"plugins_enabled"`
+		Plugins        []struct {
+			ID               string `json:"id"`
+			Path             string `json:"path"`
+			Enabled          bool   `json:"enabled"`
+			Registered       bool   `json:"registered"`
+			EffectiveEnabled bool   `json:"effective_enabled"`
+		} `json:"plugins"`
+	}
+	if errDecode := json.Unmarshal(recorder.Body.Bytes(), &payload); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if !payload.PluginsEnabled || len(payload.Plugins) != 1 {
+		t.Fatalf("failed plugin missing from deployment state: %s", recorder.Body.String())
+	}
+	plugin := payload.Plugins[0]
+	if plugin.ID != "museai" || plugin.Path != pluginPath || !plugin.Enabled || plugin.Registered || plugin.EffectiveEnabled {
+		t.Fatalf("failed plugin reported as active: %+v", plugin)
+	}
+	if got := server.activeRequests.Load(); got != 0 {
+		t.Fatalf("deployment query counted as an active request: %d", got)
 	}
 }

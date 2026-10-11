@@ -282,7 +282,7 @@ func (s *Server) registeredManagementRouteKeys() map[string]struct{} {
 		return out
 	}
 	for _, route := range s.engine.Routes() {
-		if strings.HasPrefix(route.Path, "/v0/management/") || route.Path == "/v0/management" {
+		if strings.HasPrefix(route.Path, "/v0/management/") || route.Path == "/v0/management" || strings.HasPrefix(route.Path, "/v8/management/") || route.Path == "/v8/management" {
 			out[strings.ToUpper(strings.TrimSpace(route.Method))+" "+route.Path] = struct{}{}
 		}
 	}
@@ -297,11 +297,11 @@ func (s *Server) pluginManagementNoRoute(c *gin.Context) {
 		return
 	}
 	path := c.Request.URL.Path
-	if strings.HasPrefix(path, "/v0/resource/plugins/") {
+	if strings.HasPrefix(path, "/v0/resource/plugins/") || strings.HasPrefix(path, "/v8/resource/plugins/") {
 		s.pluginResourceNoRoute(c)
 		return
 	}
-	if path != "/v0/management" && !strings.HasPrefix(path, "/v0/management/") {
+	if path != "/v0/management" && !strings.HasPrefix(path, "/v0/management/") && path != "/v8/management" && !strings.HasPrefix(path, "/v8/management/") {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}

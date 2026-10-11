@@ -663,8 +663,9 @@ type ProviderExecutor interface {
 }
 
 // HostHTTPClient executes plugin HTTP requests through host transport policy.
-// Plugin executors must use this client for upstream calls so request-log can
-// capture the outbound request and raw upstream response when enabled.
+// Plugin executors must use this client for host-managed HTTP calls so request-log
+// can capture the outbound request and raw response. Plugin-owned browser HTTPS/WSS
+// may instead use BrowserTransport; that traffic is outside host raw request logs.
 type HostHTTPClient interface {
 	Do(context.Context, HTTPRequest) (HTTPResponse, error)
 	DoStream(context.Context, HTTPRequest) (HTTPStreamResponse, error)
@@ -986,6 +987,27 @@ type ExecutorHTTPResponse struct {
 	Body []byte
 }
 
+// BrowserTransport describes the effective proxy policy for plugin-owned HTTPS/WSS browsers.
+// Browser traffic is outside HostHTTPClient and is not captured by host raw request logs.
+// A nonempty Error must be refused rather than silently opening a direct connection.
+type BrowserTransport struct {
+	ProxyURL string `json:"proxy_url,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// HostOperationWaitRequest identifies a live callback scope owned by the calling instance.
+type HostOperationWaitRequest struct {
+	HostCallbackID string `json:"host_callback_id"`
+	// OperationID optionally claims an operation opened by host.http.operation_open.
+	// host.http.cancel wakes the waiter on local completion; join before unloading.
+	OperationID string `json:"operation_id,omitempty"`
+}
+
+// HostOperationWaitResponse signals cancellation or closure of the owning operation.
+type HostOperationWaitResponse struct {
+	Canceled bool `json:"canceled"`
+}
+
 // ExecutorRequest describes a model execution or token counting call.
 type ExecutorRequest struct {
 	// AuthID identifies the selected credential.
@@ -1020,6 +1042,8 @@ type ExecutorRequest struct {
 	AuthAttributes map[string]string
 	// HTTPClient executes upstream HTTP requests through host transport policy and request-log capture.
 	HTTPClient HostHTTPClient `json:"-"`
+	// BrowserTransport is the resolved request > auth > host > environment browser policy.
+	BrowserTransport *BrowserTransport `json:"browser_transport,omitempty"`
 }
 
 // ExecutorResponse returns a non-streaming executor result.

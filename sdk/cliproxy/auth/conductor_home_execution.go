@@ -27,6 +27,9 @@ func (m *Manager) executeHome(ctx context.Context, providers []string, req clipr
 		if errExecute == nil {
 			return response, nil
 		}
+		if isNoRetryError(errExecute) {
+			return cliproxyexecutor.Response{}, errExecute
+		}
 		if hasUpstreamExecutionAttempt(errExecute) {
 			preferredUpstreamErr = errExecute
 		}
@@ -164,6 +167,9 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			if errEnd := m.endHomeSelectionBeforeRedispatch(ctx, selection, "prepare_failed"); errEnd != nil {
 				return cliproxyexecutor.Response{}, errEnd
 			}
+			if isNoRetryError(errPrepare) {
+				return cliproxyexecutor.Response{}, errPrepare
+			}
 			lastErr = errPrepare
 			roundTiming.Observe(lastErr)
 			continue
@@ -240,6 +246,7 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 				return executor.Execute(execCtx, preparedAuth, execReq, execOpts)
 			}
 			startHomeExec := time.Now()
+			execReq.Model = cliproxyexecutor.PrepareExecutionModel(execCtx, execReq.Model)
 			response, errExecute = execute()
 			errExecute = markUpstreamExecutionAttemptFromContext(execCtx, errExecute)
 			durationHomeExec := time.Since(startHomeExec)
@@ -273,6 +280,11 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			action, okAction := matchRequestScopedErrorAction(preparedAuth, errExecute, m.runtimeConfigSnapshot())
 			applyRequestScopedActionToResult(action, okAction, &result)
 			m.reportHomeResult(execCtx, result, preparedAuth)
+			if isNoRetryError(errExecute) {
+				releaseAttempt()
+				selection.End("no_retry")
+				return cliproxyexecutor.Response{}, errExecute
+			}
 			lastErr = errExecute
 			if okAction {
 				if isRequestScopedStop(action, okAction) {

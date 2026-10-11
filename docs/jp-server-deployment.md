@@ -35,6 +35,7 @@ the slot state, and logs as writable paths.
 - `GET /healthz`: process liveness
 - `GET /readyz`: traffic eligibility; returns 503 while draining
 - `GET /v0/deployment/status`: active HTTP/SSE and WebSocket counts
+- `GET /v0/deployment/plugins`: discovered plugin files and actual registration/enablement state
 - `POST /v0/deployment/drain`: reject new work and begin draining
 
 The deployment endpoints require a per-host control token and loopback source
@@ -72,7 +73,7 @@ The deployment sequence is:
 5. merge any usage or credential changes recorded while that slot previously
    drained;
 6. start and validate the inactive slot on its private port;
-7. verify `/readyz` and plugin loading;
+7. verify `/readyz` and that every enabled plugin file is registered and effectively enabled;
 8. atomically switch the Nginx upstream and reload Nginx;
 9. verify both the private endpoint and public Nginx route;
 10. replace `/opt/cliproxy/static/management.html` and its gzip copy, retaining
@@ -85,6 +86,13 @@ The deployment sequence is:
 Nginx reload behavior preserves established downstream connections on old Nginx
 workers. Those connections continue to the previous backend while new
 connections use the new slot. Nginx does not migrate WebSockets between slots.
+
+Plugin acceptance queries the token-protected `/v0/deployment/plugins` endpoint
+on the new slot before cutover. Service liveness and journal entries alone are
+insufficient: plugin registration failures may be written to the effective
+auth directory's `logs/main.log`. An enabled file that fails registration
+(including a host/plugin schema mismatch) stops the new slot before Nginx
+switches, leaving the current slot serving traffic.
 
 ## State safety
 

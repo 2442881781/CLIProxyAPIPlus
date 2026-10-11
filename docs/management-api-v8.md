@@ -148,5 +148,15 @@ precedence and its legacy equivalent is removed. Individual v0 setters can
 update migrated fields. `PUT /v0/management/config.yaml` still replaces the
 complete file and accepts legacy, new, or mixed layouts.
 
-Plugin OAuth uses the shared v8 login endpoint. Other plugin-defined HTTP
-extensions retain their declared `/v0/management` routes.
+Plugin OAuth uses the shared v8 login endpoint. Schema 8 plugins register HTTP
+extensions under `/v8/management` and public menu resources under
+`/v8/resource/plugins/<id>`. Earlier plugin schemas retain their declared `/v0`
+paths. Resource pages must authenticate their management requests separately.
+
+The Muse.ai personal-agent provider uses Cookie import instead of OAuth. Its
+manager is `/v8/resource/plugins/museai/index`, with authenticated operations
+under `/v8/management/plugins/museai`. It is independent of Meta Muse Code.
+An installed Muse.ai library requires the schema 8 host's cancellation, browser
+transport, and pinned video execution support; advertising schema 8 alone is
+not sufficient. Use the token-protected deployment plugin state to confirm
+registration before exposing its manager.

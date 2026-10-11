@@ -20,6 +20,9 @@ import (
 // OpenAIImageModelType marks models that are callable through OpenAI-compatible image endpoints.
 const OpenAIImageModelType = "openai-image"
 
+// OpenAIVideoModelType marks models callable through canonical OpenAI video endpoints.
+const OpenAIVideoModelType = "openai-video"
+
 const (
 	DefaultClaudeMaxInputTokens  = 200000
 	DefaultClaudeMaxOutputTokens = 64000

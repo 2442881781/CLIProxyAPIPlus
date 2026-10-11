@@ -15,9 +15,11 @@ import (
 )
 
 const (
-	managementBasePath      = "/v0/management"
-	resourcePluginBasePath  = "/v0/resource/plugins"
-	legacyPluginRoutePrefix = "/plugins"
+	managementBasePath       = "/v0/management"
+	resourcePluginBasePath   = "/v0/resource/plugins"
+	legacyPluginRoutePrefix  = "/plugins"
+	managementV8BasePath     = "/v8/management"
+	resourceV8PluginBasePath = "/v8/resource/plugins"
 )
 
 type managementRouteRecord struct {
@@ -55,7 +57,8 @@ func (h *Host) RegisterManagementRoutes(ctx context.Context, reserved map[string
 		}
 
 		for _, item := range resp.Routes {
-			method, path, okRoute := normalizeManagementRoute(item)
+			basePath, _ := pluginRouteBasePaths(record.plugin.SchemaVersion)
+			method, path, okRoute := normalizeManagementRouteAt(item, basePath)
 			if !okRoute {
 				log.Warnf("pluginhost: plugin %s declared invalid management route %s %s", record.id, item.Method, item.Path)
 				continue
@@ -110,14 +113,22 @@ func (h *Host) callManagementRegistrar(ctx context.Context, record capabilityRec
 			err = fmt.Errorf("management registrar panic: %v", recovered)
 		}
 	}()
+	basePath, resourceBasePath := pluginRouteBasePaths(record.plugin.SchemaVersion)
 	return plugin.RegisterManagement(ctx, pluginapi.ManagementRegistrationRequest{
 		Plugin:           record.meta,
-		BasePath:         managementBasePath,
-		ResourceBasePath: resourcePluginBasePath + "/" + record.id,
+		BasePath:         basePath,
+		ResourceBasePath: resourceBasePath + "/" + record.id,
 	})
 }
 
-func normalizeManagementRoute(item pluginapi.ManagementRoute) (string, string, bool) {
+func pluginRouteBasePaths(schema uint32) (string, string) {
+	if schema >= pluginabi.SchemaVersionHostOperationWait {
+		return managementV8BasePath, resourceV8PluginBasePath
+	}
+	return managementBasePath, resourcePluginBasePath
+}
+
+func normalizeManagementRouteAt(item pluginapi.ManagementRoute, basePath string) (string, string, bool) {
 	if item.Handler == nil {
 		return "", "", false
 	}
@@ -136,15 +147,15 @@ func normalizeManagementRoute(item pluginapi.ManagementRoute) (string, string, b
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	if strings.HasPrefix(path, managementBasePath+"/") {
-		path = strings.TrimPrefix(path, managementBasePath)
+	if strings.HasPrefix(path, basePath+"/") {
+		path = strings.TrimPrefix(path, basePath)
 	}
 	path = strings.TrimRight(path, "/")
 	if path == "" {
 		return "", "", false
 	}
-	fullPath := managementBasePath + path
-	if !strings.HasPrefix(fullPath, managementBasePath+"/") {
+	fullPath := basePath + path
+	if !strings.HasPrefix(fullPath, basePath+"/") {
 		return "", "", false
 	}
 	if strings.ContainsAny(fullPath, " \t\r\n") || strings.Contains(fullPath, ":") || strings.Contains(fullPath, "*") {
@@ -167,7 +178,8 @@ func resourceRouteFromManagementRoute(item pluginapi.ManagementRoute) pluginapi.
 }
 
 func registerResourceRoute(routes map[string]resourceRouteRecord, record capabilityRecord, item pluginapi.ResourceRoute) bool {
-	path, okRoute := normalizeResourceRoute(record.id, item)
+	_, resourceBasePath := pluginRouteBasePaths(record.plugin.SchemaVersion)
+	path, okRoute := normalizeResourceRouteAt(record.id, item, resourceBasePath)
 	if !okRoute {
 		return false
 	}
@@ -186,7 +198,7 @@ func registerResourceRoute(routes map[string]resourceRouteRecord, record capabil
 	return true
 }
 
-func normalizeResourceRoute(pluginID string, item pluginapi.ResourceRoute) (string, bool) {
+func normalizeResourceRouteAt(pluginID string, item pluginapi.ResourceRoute, basePath string) (string, bool) {
 	if item.Handler == nil {
 		return "", false
 	}
@@ -203,7 +215,7 @@ func normalizeResourceRoute(pluginID string, item pluginapi.ResourceRoute) (stri
 		path = "/" + path
 	}
 
-	pluginBasePath := resourcePluginBasePath + "/" + pluginID
+	pluginBasePath := basePath + "/" + pluginID
 	if strings.HasPrefix(path, pluginBasePath+"/") {
 		path = strings.TrimPrefix(path, pluginBasePath)
 	} else if strings.HasPrefix(path, legacyPluginRoutePrefix+"/"+pluginID+"/") {

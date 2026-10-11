@@ -79,6 +79,83 @@ func TestRPCExecuteStreamClosesHostCallbackScopeOnContextCancelWhileChunkPending
 	}
 }
 
+func TestRPCExecuteStreamUnloadTerminatesOnlyOwnedStreams(t *testing.T) {
+	host := New()
+	t.Cleanup(host.ShutdownAll)
+	alpha := &hostCallbackInstance{}
+	bravo := &hostCallbackInstance{}
+	alphaClient := newStreamCallbackPluginClient()
+	bravoClient := newStreamCallbackPluginClient()
+	host.loaded["alpha"] = &loadedPlugin{id: "alpha", client: alphaClient, callbackInstance: alpha}
+	host.loaded["bravo"] = &loadedPlugin{id: "bravo", client: bravoClient, callbackInstance: bravo}
+	openStream := func(id string, instance *hostCallbackInstance, client pluginClient) pluginapi.ExecutorStreamResponse {
+		t.Helper()
+		adapter := &rpcPluginAdapter{id: id, host: host, client: client, instance: instance}
+		stream, errStream := adapter.ExecuteStream(context.Background(), pluginapi.ExecutorRequest{Stream: true})
+		if errStream != nil {
+			t.Fatal(errStream)
+		}
+		return stream
+	}
+	alphaStream := openStream("alpha", alpha, alphaClient)
+	bravoStream := openStream("bravo", bravo, bravoClient)
+	if errEmit := host.streams.emit(context.Background(), alphaClient.streamID, pluginapi.ExecutorStreamChunk{Payload: []byte("partial response")}); errEmit != nil {
+		t.Fatal(errEmit)
+	}
+	if !host.UnloadPlugin("alpha") {
+		t.Fatal("active plugin could not be unloaded")
+	}
+	var received []pluginapi.ExecutorStreamChunk
+	deadline := time.After(time.Second)
+	draining := true
+	for draining {
+		select {
+		case chunk, ok := <-alphaStream.Chunks:
+			if !ok {
+				draining = false
+				break
+			}
+			received = append(received, chunk)
+		case <-deadline:
+			t.Fatal("unloaded plugin left the client stream open")
+		}
+	}
+	if len(received) != 2 || string(received[0].Payload) != "partial response" || received[0].Err != nil {
+		t.Fatalf("unload lost or changed accepted response chunks: %+v", received)
+	}
+	terminal, ok := received[1].Err.(interface {
+		StatusCode() int
+		IsRequestScoped() bool
+		NoRetry() bool
+	})
+	if !ok || terminal.StatusCode() != http.StatusRequestTimeout || !terminal.IsRequestScoped() || !terminal.NoRetry() {
+		t.Fatalf("unload did not deliver a non-retriable cancellation: %v", received[1].Err)
+	}
+	if !callbackContextExists(host, bravoClient.callbackID) {
+		t.Fatal("targeted unload closed another plugin's callback scope")
+	}
+	if errEmit := host.streams.emit(context.Background(), bravoClient.streamID, pluginapi.ExecutorStreamChunk{Payload: []byte("unrelated response")}); errEmit != nil {
+		t.Fatal(errEmit)
+	}
+	host.streams.close(bravoClient.streamID, "")
+	select {
+	case chunk, ok := <-bravoStream.Chunks:
+		if !ok || string(chunk.Payload) != "unrelated response" || chunk.Err != nil {
+			t.Fatalf("targeted unload affected another plugin's response: %+v", chunk)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unrelated plugin stream stopped responding")
+	}
+	select {
+	case chunk, ok := <-bravoStream.Chunks:
+		if ok {
+			t.Fatalf("unrelated plugin received an extra terminal chunk: %+v", chunk)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unrelated plugin's completed stream remained open")
+	}
+}
+
 func callbackContextExists(host *Host, callbackID string) bool {
 	if host == nil || host.callbackContexts == nil {
 		return false

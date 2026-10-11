@@ -215,13 +215,7 @@ A rollout is complete only when all applicable checks pass:
    - public request without the token must return 404;
    - do not display the token in the final report.
 
-6. Plugins: journal output for the new process must show both `commandcode` and `opencode-go` loaded and registered. Treat any of these as deployment failure:
-
-   ```text
-   failed to load plugin
-   plugin.register failed
-   returned invalid metadata or no capabilities
-   ```
+6. Plugins: query `/v0/deployment/plugins` on the new private port with the deployment token. Every enabled discovered plugin file, including `commandcode`, `opencode-go`, and `museai` when configured, must report `registered=true` and `effective_enabled=true`. A disabled file is not a failure. Do not use journal entries as the acceptance gate: registration errors can be written only to the effective auth directory's `logs/main.log`. An enabled unregistered file is a deployment failure before Nginx cutover.
 
 7. Inspect recent logs for panic, fatal errors, repeated restarts, write-permission failures, and unexpected auth/state paths.
 

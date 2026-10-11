@@ -1285,3 +1285,57 @@ func TestExecuteStreamWithAuthManager_AllowsSplitOpenAIResponsesSSEEventLines(t 
 		t.Fatalf("unexpected second chunk.\nGot:  %q\nWant: %q", got[1], expectedData)
 	}
 }
+
+type submittedBootstrapError struct{}
+
+func (submittedBootstrapError) Error() string   { return "submitted stream failed" }
+func (submittedBootstrapError) StatusCode() int { return http.StatusBadGateway }
+func (submittedBootstrapError) NoRetry() bool   { return true }
+
+func TestExecuteStreamWithAuthManager_NoRetryAfterUndeliveredPayload(t *testing.T) {
+	for _, mode := range []string{"dropped", "buffered"} {
+		t.Run(mode, func(t *testing.T) {
+			protocol := "openai"
+			payload := "drop"
+			if mode == "buffered" {
+				protocol = "openai-response"
+				payload = `data: {"type":"response.output_text.delta","delta":"partial"`
+			}
+			executor := &bootstrapStreamExecutor{stream: func(_ context.Context, call int) (*coreexecutor.StreamResult, error) {
+				chunks := make(chan coreexecutor.StreamChunk, 2)
+				if call == 1 {
+					chunks <- coreexecutor.StreamChunk{Payload: []byte(payload)}
+					chunks <- coreexecutor.StreamChunk{Err: errors.Join(errors.New("after submission"), submittedBootstrapError{})}
+				} else {
+					chunks <- coreexecutor.StreamChunk{Payload: []byte("unexpected replay")}
+				}
+				close(chunks)
+				return &coreexecutor.StreamResult{Chunks: chunks}, nil
+			}}
+			handler, _ := registerBootstrapExecutor(t, executor)
+			if mode == "dropped" {
+				handler.SetPluginHost(&handlerInterceptorTestHost{interceptStreamChunk: func(_ context.Context, req pluginapi.StreamChunkInterceptRequest) pluginapi.StreamChunkInterceptResponse {
+					return pluginapi.StreamChunkInterceptResponse{DropChunk: string(req.Body) == "drop"}
+				}})
+			}
+			dataChan, _, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), protocol, "bootstrap-model", []byte(`{"model":"bootstrap-model"}`), "")
+			var output []byte
+			for chunk := range dataChan {
+				output = append(output, chunk...)
+			}
+			var terminal *interfaces.ErrorMessage
+			for message := range errChan {
+				if message != nil {
+					terminal = message
+				}
+			}
+			var marker interface{ NoRetry() bool }
+			if terminal == nil || terminal.StatusCode != http.StatusBadGateway || !errors.As(terminal.Error, &marker) || !marker.NoRetry() {
+				t.Fatalf("submitted failure lost: %+v", terminal)
+			}
+			if len(output) != 0 || executor.Calls() != 1 {
+				t.Fatalf("submitted stream replayed: calls=%d output=%q", executor.Calls(), output)
+			}
+		})
+	}
+}
