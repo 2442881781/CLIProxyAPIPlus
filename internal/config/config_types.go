@@ -116,6 +116,11 @@ type ClaudeConfig struct {
 	// ModelLevelCooling scopes Claude quota cooldowns to the requested model
 	// rather than cooling down the entire credential across all sibling models.
 	ModelLevelCooling bool `yaml:"model-level-cooling" json:"model-level-cooling"`
+	// ToolSearch enables Codex client tool_search on Claude Responses routes:
+	// Anthropic native tool search where the credential supports it, a pre-tool_search
+	// translation elsewhere, and per-credential search advertising in the Codex
+	// catalog. Default false keeps the translation that predates tool_search support.
+	ToolSearch bool `yaml:"tool-search" json:"tool-search"`
 }
 
 // ClaudeHeaderDefaults configures the measured Claude Code software baseline.
@@ -207,8 +212,6 @@ type CodexConfig struct {
 	// When set (e.g. "20s"), the stream is released once the time ceiling is reached, avoiding
 	// reverse-proxy timeouts (e.g. Nginx 60s proxy_read_timeout).
 	StreamBootstrapTimeout string `yaml:"stream-bootstrap-timeout,omitempty" json:"stream-bootstrap-timeout,omitempty"`
-	// OptimizeMultiAgentV2 optimizes official Codex multi-agent requests.
-	OptimizeMultiAgentV2 bool `yaml:"optimize-multi-agent-v2" json:"optimize-multi-agent-v2"`
 	// OrphanDelegationCompatibility enables opt-in compatibility for orphan Codex delegation outputs.
 	OrphanDelegationCompatibility bool `yaml:"orphan-delegation-compatibility" json:"orphan-delegation-compatibility"`
 	// ModelLevelCooling scopes Codex usage_limit_reached quota cooldowns to the requested model
@@ -563,6 +566,11 @@ type ClaudeKey struct {
 	// RebuildMidSystemMessage moves Claude messages with role "system" into the top-level system field.
 	RebuildMidSystemMessage bool `yaml:"rebuild-mid-system-message,omitempty" json:"rebuild-mid-system-message,omitempty"`
 
+	// NativeToolSearch trusts a custom base URL with Anthropic native tool search
+	// (defer_loading tools and tool_reference results) for Codex tool_search.
+	// Official api.anthropic.com credentials use native tool search without it.
+	NativeToolSearch bool `yaml:"native-tool-search,omitempty" json:"native-tool-search,omitempty"`
+
 	// DisableCooling overrides the global cooling policy for this credential when set.
 	// True disables auth/model cooldowns; false explicitly enables them.
 	DisableCooling *bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`
@@ -723,7 +731,7 @@ type CodexModel struct {
 	ForceMapping bool `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
 
 	// IsCompat converts Codex MultiAgentV2 agent_message items into portable
-	// Responses message/user input when codex.optimize-multi-agent-v2 is also true.
+	// Responses message/user input when client.codex.optimize-multi-agent-v2 is also true.
 	// Use this for third-party Responses-compatible endpoints that do not accept
 	// native agent_message items or empty-signature thinking blocks. Default false
 	// keeps the native behavior unchanged.

@@ -692,3 +692,121 @@ func TestJB_StreamWindowCommitsBeforeUpstreamFinishes(t *testing.T) {
 		t.Fatalf("committed streams must not retry, got %d upstream calls", upstreamCalls.Load())
 	}
 }
+
+func TestJB_StreamApplyPatchFailuresRetainAttemptUsage(t *testing.T) {
+	const refusal = "Sorry, I cannot complete this task because the request is outside my capabilities."
+	const firstUsage = "data: {\"id\":\"r\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n"
+	for _, tc := range []struct {
+		name       string
+		buffered   bool
+		first      string
+		retry      string
+		wantTotals []int64
+	}{
+		{name: "buffered empty EOF", buffered: true, wantTotals: []int64{0}},
+		{name: "buffered unfinished EOF", buffered: true, first: firstUsage + sseChunk("short"), wantTotals: []int64{8}},
+		{name: "buffered invalid patch", buffered: true, first: firstUsage + task6ProviderFixture("custom-compat", "stream", "apply_patch"), wantTotals: []int64{8}},
+		{name: "direct invalid patch", first: firstUsage + task6ProviderFixture("custom-compat", "stream", "apply_patch"), wantTotals: []int64{8}},
+		{name: "discarded invalid continuation", buffered: true, first: sseChunk(refusal) + firstUsage + "data: [DONE]\n\n", retry: strings.ReplaceAll(firstUsage, `"prompt_tokens":5,"completion_tokens":3,"total_tokens":8`, `"prompt_tokens":7,"completion_tokens":5,"total_tokens":12`) + task6ProviderFixture("custom-compat", "stream", "apply_patch"), wantTotals: []int64{8, 12}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				body := tc.first
+				if calls.Add(1) > 1 {
+					body = tc.retry
+				}
+				_, _ = io.WriteString(w, body)
+			}))
+			defer server.Close()
+			cfg := &config.Config{}
+			cfg.SDKConfig.JB.Enabled = new(true)
+			exec := NewOpenAICompatExecutor("openai", cfg)
+			engine := jb.NewEngine(&cfg.SDKConfig, t.TempDir())
+			if errLoad := engine.Load(); errLoad != nil {
+				t.Fatal(errLoad)
+			}
+			exec.SetJBEngine(engine)
+			auth := &cliproxyauth.Auth{ID: t.Name(), Provider: "openai", Attributes: map[string]string{"base_url": server.URL, "api_key": "test"}}
+			capture := &task6UsageCapture{id: auth.ID, records: make(chan usage.Record, 32)}
+			usage.RegisterNamedPlugin(t.Name(), capture)
+			t.Cleanup(func() { usage.RegisterNamedPlugin(t.Name(), jbUsageNoop{}) })
+			snapshot := storeaccess.JBSnapshot{JBEffective: config.JBEffective{RefusalRetry: tc.buffered}}
+			req := cliproxyexecutor.Request{Model: "gpt-5", Payload: []byte(task6PatchRequest)}
+			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse, OriginalRequest: req.Payload, Stream: true, Metadata: snapshot.InjectMetadata(nil)}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			type result struct {
+				stream *cliproxyexecutor.StreamResult
+				err    error
+			}
+			ready := make(chan result, 1)
+			go func() { stream, err := exec.ExecuteStream(ctx, auth, req, opts); ready <- result{stream, err} }()
+			var stream *cliproxyexecutor.StreamResult
+			select {
+			case res := <-ready:
+				if res.err != nil {
+					t.Fatal(res.err)
+				}
+				stream = res.stream
+			case <-time.After(2 * time.Second):
+				cancel()
+				<-ready
+				t.Fatal("apply_patch EOF blocked before exposing the response stream")
+			}
+			var body bytes.Buffer
+			var failures int
+			for chunk := range stream.Chunks {
+				if chunk.Err != nil {
+					failures++
+					assertTask6PatchError(t, chunk.Err)
+				}
+				body.Write(chunk.Payload)
+			}
+			if tc.retry == "" {
+				if failures != 1 || strings.Count(body.String(), `"type":"response.failed"`) != 1 || strings.Contains(body.String(), `"type":"response.completed"`) {
+					t.Fatalf("invalid patch failure contract: errors=%d body=%s", failures, body.String())
+				}
+			} else if failures != 0 || !strings.Contains(body.String(), refusal) || strings.Contains(body.String(), `"type":"response.failed"`) || stream.Headers.Get(jb.HeaderName) != string(jb.StateRefusalStands) {
+				t.Fatalf("failed continuation replaced the original response: errors=%d headers=%v body=%s", failures, stream.Headers, body.String())
+			}
+			if int(calls.Load()) != len(tc.wantTotals) {
+				t.Fatalf("upstream calls=%d, want %d", calls.Load(), len(tc.wantTotals))
+			}
+			usage.PublishRecord(t.Context(), usage.Record{RequestID: auth.ID + "-barrier"})
+			var records []usage.Record
+			timer := time.NewTimer(3 * time.Second)
+			defer timer.Stop()
+		usageLoop:
+			for {
+				select {
+				case record := <-capture.records:
+					if record.RequestID == auth.ID+"-barrier" {
+						break usageLoop
+					}
+					records = append(records, record)
+				case <-timer.C:
+					t.Fatal("usage barrier did not arrive")
+				}
+			}
+			if len(records) != len(tc.wantTotals) {
+				t.Fatalf("usage records=%+v, want totals %v", records, tc.wantTotals)
+			}
+			for _, total := range tc.wantTotals {
+				found := false
+				for _, record := range records {
+					if record.Detail.TotalTokens == total {
+						found = true
+						if record.Failed != (tc.retry == "") {
+							t.Errorf("usage outcome=%+v", record)
+						}
+					}
+				}
+				if !found {
+					t.Errorf("usage total %d missing from %+v", total, records)
+				}
+			}
+		})
+	}
+}

@@ -53,7 +53,7 @@ func sanitizeOpenAIResponsesReasoningEncryptedContent(ctx context.Context, provi
 }
 
 func sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx context.Context, provider string, body []byte, isCompat bool) []byte {
-	return sanitizeOpenAIResponsesReasoningEncryptedContentWithOptions(ctx, provider, body, isCompat, false)
+	return sanitizeOpenAIResponsesReasoningEncryptedContentWithOptions(ctx, provider, body, isCompat, isCompat)
 }
 
 func sanitizeOpenAIResponsesReasoningEncryptedContentKeepForeign(ctx context.Context, provider string, body []byte) []byte {
@@ -176,7 +176,9 @@ func sanitizeOpenAIResponsesReasoningEncryptedContentWithOptions(ctx context.Con
 			if rawSignature != strings.TrimSpace(rawSignature) {
 				reason = "encrypted_content has leading or trailing whitespace"
 			} else if _, err := signature.InspectGPTReasoningSignature(rawSignature); err != nil {
-				// Muse replays its own unknown-format encrypted reasoning across turns.
+				// When keepForeign is true (compat callers enable it via WithCompat),
+				// third-party Responses models (such as Muse) expect their own
+				// unknown-format encrypted_content to be replayed.
 				if !keepForeign || rawSignature == "" || signature.DetectSignatureProvider(rawSignature) != signature.SignatureProviderUnknown {
 					reason = err.Error()
 				}

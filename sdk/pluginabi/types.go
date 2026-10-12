@@ -120,6 +120,8 @@ const (
 	MethodHostAffinityLookup     = "host.affinity.lookup"
 	// MethodHostOperationWait blocks until the owning callback scope is canceled or closed.
 	MethodHostOperationWait = "host.operation.wait"
+
+	MethodHostRoutingResetCooldown = "host.routing.reset_cooldown"
 )
 
 type Envelope struct {

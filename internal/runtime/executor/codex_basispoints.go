@@ -245,7 +245,7 @@ func (e *CodexExecutor) translateBasispointsNonStream(ctx context.Context, repor
 			continue
 		}
 		eventData := bytes.TrimSpace(line[len(dataTag):])
-		reporter.ObserveCodexResponseModel(eventData)
+		reporter.ObserveResponseModel(eventData)
 		if helps.HasMeaningfulCodexOutputDelta(eventData) {
 			sawOutputDelta = true
 		}

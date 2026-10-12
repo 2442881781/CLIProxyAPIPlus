@@ -25,7 +25,11 @@ func TestSchemaEightDisableCancelsOwnedWorkAndAllowsReenable(t *testing.T) {
 					}
 				}}
 			}
-			host := NewForTest(&sequencePluginLoader{clients: []pluginClient{client("alpha"), client("bravo")}})
+			clients := []pluginClient{client("alpha"), client("bravo"), client("alpha")}
+			if global {
+				clients = append(clients, client("bravo"))
+			}
+			host := NewForTest(&sequencePluginLoader{clients: clients})
 			t.Cleanup(host.ShutdownAll)
 			cfg := &config.Config{Plugins: config.PluginsConfig{
 				Enabled: true, Dir: makePluginDir(t, "alpha", "bravo"), Configs: enabledPluginConfigs("alpha", "bravo"),
@@ -69,17 +73,21 @@ func TestSchemaEightDisableCancelsOwnedWorkAndAllowsReenable(t *testing.T) {
 			} else if bravoContext.Err() != nil || !host.PluginRegistered("bravo") {
 				t.Fatal("targeted disable affected another plugin")
 			}
-			if !host.PluginLoaded("alpha") || alpha.closed.Load() {
-				t.Fatal("disable prevented the retained library from being reenabled")
-			}
 			cfg.Plugins.Enabled = true
 			cfg.Plugins.Configs = enabledPluginConfigs("alpha", "bravo")
 			host.ApplyConfig(context.Background(), cfg)
 			if !host.PluginRegistered("alpha") {
 				t.Fatal("reenabled plugin did not become routable")
 			}
-			id, closeScope := host.openCallbackContextForPluginInstance(context.Background(), "alpha", alpha)
+			host.mu.Lock()
+			nextInstance := host.loaded["alpha"].callbackInstance
+			host.mu.Unlock()
+			id, closeScope := host.openCallbackContextForPluginInstance(context.Background(), "alpha", nextInstance)
 			defer closeScope()
+			if _, errStale := host.openHostHTTPOperation(caller, id); errStale == nil {
+				t.Fatal("disabled plugin instance gained access to the reenabled scope")
+			}
+			caller = withHostCallbackIdentity(context.Background(), "alpha", nextInstance)
 			nextID, errOpen := host.openHostHTTPOperation(caller, id)
 			if errOpen != nil {
 				t.Fatal(errOpen)

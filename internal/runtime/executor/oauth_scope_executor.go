@@ -24,9 +24,10 @@ func (e GeminiVertexExecutor) ForAPIKey() cliproxyauth.ProviderExecutor {
 	return &e
 }
 
-func (e OpenAICompatExecutor) ForAPIKey() cliproxyauth.ProviderExecutor {
-	e.cfg = e.cfg.ForAPIKey()
-	return &e
+func (e *OpenAICompatExecutor) ForAPIKey() cliproxyauth.ProviderExecutor {
+	scoped := &OpenAICompatExecutor{provider: e.provider, cfg: e.cfg.ForAPIKey()}
+	scoped.jbEngine.Store(e.jbEngine.Load())
+	return scoped
 }
 
 func (e MetaExecutor) ForAPIKey() cliproxyauth.ProviderExecutor {

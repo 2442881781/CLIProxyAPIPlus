@@ -1583,6 +1583,10 @@ func TestMetaExecutor_NormalizesToolFieldsForCodexUserAgent(t *testing.T) {
 	}
 }
 
+func TestMetaApplyPatchResponsesExecutor(t *testing.T) {
+	testApplyPatchResponsesExecutor(t, "meta", NewMetaExecutor(&config.Config{}), "muse-spark-1.3")
+}
+
 func TestMetaExecutor_Execute_PreservesMuseReasoningEncryptedContent_Issue6450(t *testing.T) {
 	var gotBody []byte
 
