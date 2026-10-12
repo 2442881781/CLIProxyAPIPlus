@@ -409,9 +409,12 @@ export interface ProviderQuotaWindow {
   usedPercent: number;
   remainingPercent: number;
   resetAtMs?: number | null;
+  /** Explicit recurring period; omitted when the provider does not identify one. */
+  periodHours?: number | null;
   usedValue?: number;
   limitValue?: number;
   unit?: string;
+  description?: string;
 }
 
 export type ProviderQuotaResetType = 'FIVE_HOUR' | 'WEEK';
@@ -426,6 +429,7 @@ export interface ProviderQuotaResetCredit {
 
 export interface ProviderQuotaData {
   plan?: string;
+  unlimited?: boolean;
   windows: ProviderQuotaWindow[];
   balance?: number;
   balanceUnit?: string;

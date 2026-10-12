@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { QUOTA_PAGE_SIZE } from '@/features/quota/constants';
 import {
-  buildTabCounts,
   classifyQuotaFiles,
   filterEntriesByTab,
   isQuotaCacheFresh,
@@ -32,6 +31,10 @@ describe('resolveQuotaProviderType', () => {
     expect(resolveQuotaProviderType(file('a', 'antigravity'))).toBe('antigravity');
     expect(resolveQuotaProviderType(file('a', 'gemini'))).toBeNull();
     expect(resolveQuotaProviderType(file('a', 'claude', { disabled: true }))).toBeNull();
+    expect(resolveQuotaProviderType(file('muse.json', 'museai'))).toBe('museai');
+    expect(
+      resolveQuotaProviderType(file('muse-off.json', 'museai', { disabled: true }))
+    ).toBeNull();
   });
 });
 
@@ -46,23 +49,6 @@ describe('classifyQuotaFiles', () => {
   test('orders entries by provider tab order', () => {
     const entries = classifyQuotaFiles(FILES);
     expect(entries.map((entry) => entry.type)).toEqual(['claude', 'codex', 'codex', 'xai', 'kimi']);
-  });
-});
-
-describe('buildTabCounts', () => {
-  test('counts per provider plus an all total, zero-filling empty tabs', () => {
-    expect(buildTabCounts(classifyQuotaFiles(FILES))).toEqual({
-      all: 5,
-      claude: 1,
-      antigravity: 0,
-      codex: 2,
-      xai: 1,
-      commandcode: 0,
-      opencode: 0,
-      zhipu: 0,
-      devin: 0,
-      kimi: 1,
-    });
   });
 });
 

@@ -28,6 +28,7 @@ import {
   ZHIPU_CONFIG,
 } from './providerApi/data';
 import { ProviderQuotaBody } from './providerApi/ProviderQuotaBody';
+import { MUSEAI_CONFIG } from './museai/data';
 
 /** Common structural subset shared by every provider quota state. */
 export interface QuotaCardState {
@@ -66,6 +67,7 @@ export const QUOTA_ADAPTERS: Record<QuotaProviderType, QuotaAdapter> = {
   opencode: { ...OPENCODE_CONFIG, Body: ProviderQuotaBody } as unknown as QuotaAdapter,
   zhipu: { ...ZHIPU_CONFIG, Body: ProviderQuotaBody } as unknown as QuotaAdapter,
   devin: { ...DEVIN_CONFIG, Body: ProviderQuotaBody } as unknown as QuotaAdapter,
+  museai: { ...MUSEAI_CONFIG, Body: ProviderQuotaBody } as unknown as QuotaAdapter,
 };
 
 export type QuotaMapUpdater = (

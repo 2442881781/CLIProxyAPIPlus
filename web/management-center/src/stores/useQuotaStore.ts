@@ -26,6 +26,7 @@ interface QuotaStoreState {
   opencodeQuota: Record<string, ProviderQuotaState>;
   zhipuQuota: Record<string, ProviderQuotaState>;
   devinQuota: Record<string, ProviderQuotaState>;
+  museaiQuota: Record<string, ProviderQuotaState>;
   setAntigravityQuota: (updater: QuotaUpdater<Record<string, AntigravityQuotaState>>) => void;
   setClaudeQuota: (updater: QuotaUpdater<Record<string, ClaudeQuotaState>>) => void;
   setCodexQuota: (updater: QuotaUpdater<Record<string, CodexQuotaState>>) => void;
@@ -35,6 +36,7 @@ interface QuotaStoreState {
   setOpencodeQuota: (updater: QuotaUpdater<Record<string, ProviderQuotaState>>) => void;
   setZhipuQuota: (updater: QuotaUpdater<Record<string, ProviderQuotaState>>) => void;
   setDevinQuota: (updater: QuotaUpdater<Record<string, ProviderQuotaState>>) => void;
+  setMuseaiQuota: (updater: QuotaUpdater<Record<string, ProviderQuotaState>>) => void;
   clearQuotaCache: () => void;
 }
 
@@ -56,6 +58,7 @@ export const useQuotaStore = create<QuotaStoreState>()((set) => ({
   opencodeQuota: {},
   zhipuQuota: {},
   devinQuota: {},
+  museaiQuota: {},
   setAntigravityQuota: (updater) =>
     set((state) => ({ antigravityQuota: resolveUpdater(updater, state.antigravityQuota) })),
   setClaudeQuota: (updater) =>
@@ -64,8 +67,7 @@ export const useQuotaStore = create<QuotaStoreState>()((set) => ({
     set((state) => ({ codexQuota: resolveUpdater(updater, state.codexQuota) })),
   setKimiQuota: (updater) =>
     set((state) => ({ kimiQuota: resolveUpdater(updater, state.kimiQuota) })),
-  setXaiQuota: (updater) =>
-    set((state) => ({ xaiQuota: resolveUpdater(updater, state.xaiQuota) })),
+  setXaiQuota: (updater) => set((state) => ({ xaiQuota: resolveUpdater(updater, state.xaiQuota) })),
   setCommandcodeQuota: (updater) =>
     set((state) => ({ commandcodeQuota: resolveUpdater(updater, state.commandcodeQuota) })),
   setOpencodeQuota: (updater) =>
@@ -74,6 +76,8 @@ export const useQuotaStore = create<QuotaStoreState>()((set) => ({
     set((state) => ({ zhipuQuota: resolveUpdater(updater, state.zhipuQuota) })),
   setDevinQuota: (updater) =>
     set((state) => ({ devinQuota: resolveUpdater(updater, state.devinQuota) })),
+  setMuseaiQuota: (updater) =>
+    set((state) => ({ museaiQuota: resolveUpdater(updater, state.museaiQuota) })),
   clearQuotaCache: () =>
     set((state) => ({
       cacheGeneration: state.cacheGeneration + 1,
@@ -86,6 +90,7 @@ export const useQuotaStore = create<QuotaStoreState>()((set) => ({
       opencodeQuota: {},
       zhipuQuota: {},
       devinQuota: {},
+      museaiQuota: {},
     })),
 }));
 

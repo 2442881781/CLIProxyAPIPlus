@@ -89,7 +89,7 @@ Check the CLI Proxy API server documentation/config comments for the full authen
   - OpenAI-compatible providers (multiple API keys, custom headers, model alias import via `/v1/models`, optional browser-side "chat/completions" test).
 - **Auth Files**: upload/download/delete JSON credentials, filter/search/pagination, runtime-only indicators, view supported models per credential (when the server supports it), manage OAuth excluded models (supports `*` wildcards), configure OAuth model alias mappings.
 - **OAuth**: start OAuth/device flows for Codex, Anthropic/Claude, Antigravity, Kimi, and xAI/Grok; poll status; submit callback URLs or xAI/Grok displayed codes; import Vertex JSON credentials and iFlow cookies.
-- **Quota Management**: manage quota limits and usage for Claude, Antigravity, Codex, Kimi, xAI/Grok, and other providers.
+- **Quota Management**: manage quota limits and usage for Claude, Antigravity, Codex, Kimi, xAI/Grok, and other providers. Muse.ai credentials expose native v8 subscription queries in both this page and Auth Files cards, including observed reset times and additional-token labels; failed queries are not presented as exhausted quota.
 - **Logs**: tail logs with incremental polling, auto-refresh, search, hide management traffic, clear logs; download request error log files.
 - **System**: quick links, update check, request logging toggle, local login data cleanup, and fetch `/v1/models` (grouped view). Requires at least one proxy API key to query models.
 

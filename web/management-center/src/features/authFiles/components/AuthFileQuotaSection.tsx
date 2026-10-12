@@ -57,6 +57,7 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
       return state.opencodeQuota[file.name] as QuotaCardState | undefined;
     if (quotaType === 'zhipu') return state.zhipuQuota[file.name] as QuotaCardState | undefined;
     if (quotaType === 'devin') return state.devinQuota[file.name] as QuotaCardState | undefined;
+    if (quotaType === 'museai') return state.museaiQuota[file.name] as QuotaCardState | undefined;
     return assertNever(quotaType);
   });
 

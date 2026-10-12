@@ -120,6 +120,7 @@ export function QuotaPage() {
   const opencodeQuota = useQuotaStore((state) => state.opencodeQuota);
   const zhipuQuota = useQuotaStore((state) => state.zhipuQuota);
   const devinQuota = useQuotaStore((state) => state.devinQuota);
+  const museaiQuota = useQuotaStore((state) => state.museaiQuota);
 
   const quotaByType = useMemo<Record<QuotaProviderType, Record<string, QuotaCardState>>>(
     () =>
@@ -133,6 +134,7 @@ export function QuotaPage() {
         opencode: opencodeQuota,
         zhipu: zhipuQuota,
         devin: devinQuota,
+        museai: museaiQuota,
       }) as unknown as Record<QuotaProviderType, Record<string, QuotaCardState>>,
     [
       antigravityQuota,
@@ -144,6 +146,7 @@ export function QuotaPage() {
       opencodeQuota,
       zhipuQuota,
       devinQuota,
+      museaiQuota,
     ]
   );
 

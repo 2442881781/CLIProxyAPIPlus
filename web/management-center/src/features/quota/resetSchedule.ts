@@ -133,7 +133,8 @@ export function collectQuotaRowInstants(
     provider === 'commandcode' ||
     provider === 'opencode' ||
     provider === 'zhipu' ||
-    provider === 'devin'
+    provider === 'devin' ||
+    provider === 'museai'
   ) {
     return collectRows((quota as { windows?: WindowLike[] }).windows ?? [], 'window');
   }

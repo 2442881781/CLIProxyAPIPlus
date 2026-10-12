@@ -27,7 +27,8 @@ export type QuotaProviderType =
   | 'commandcode'
   | 'opencode'
   | 'zhipu'
-  | 'devin';
+  | 'devin'
+  | 'museai';
 
 /** Structural contract used by storeSelector and storeSetter. */
 export interface QuotaStore {
@@ -40,6 +41,7 @@ export interface QuotaStore {
   opencodeQuota: Record<string, ProviderQuotaState>;
   zhipuQuota: Record<string, ProviderQuotaState>;
   devinQuota: Record<string, ProviderQuotaState>;
+  museaiQuota: Record<string, ProviderQuotaState>;
   setAntigravityQuota: (updater: QuotaUpdater<Record<string, AntigravityQuotaState>>) => void;
   setClaudeQuota: (updater: QuotaUpdater<Record<string, ClaudeQuotaState>>) => void;
   setCodexQuota: (updater: QuotaUpdater<Record<string, CodexQuotaState>>) => void;
@@ -49,6 +51,7 @@ export interface QuotaStore {
   setOpencodeQuota: (updater: QuotaUpdater<Record<string, ProviderQuotaState>>) => void;
   setZhipuQuota: (updater: QuotaUpdater<Record<string, ProviderQuotaState>>) => void;
   setDevinQuota: (updater: QuotaUpdater<Record<string, ProviderQuotaState>>) => void;
+  setMuseaiQuota: (updater: QuotaUpdater<Record<string, ProviderQuotaState>>) => void;
   clearQuotaCache: () => void;
 }
 

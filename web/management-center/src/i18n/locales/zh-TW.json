@@ -311,6 +311,7 @@
     "filter_opencode": "OpenCode Go",
     "filter_zhipu": "智譜 GLM",
     "filter_devin": "Devin",
+    "filter_museai": "Muse.ai",
     "filter_iflow": "iFlow",
     "filter_vertex": "Vertex",
     "filter_empty": "空檔案",
@@ -1555,6 +1556,7 @@
     "used_value": "已用 {{used}} / {{limit}} {{unit}}",
     "resets_at": "{{time}} 重設",
     "searches": "次",
+    "unlimited": "不限量",
     "windows": {
       "five_hour": "5 小時視窗",
       "rolling": "滾動視窗",
@@ -1563,7 +1565,9 @@
       "monthly": "每月額度",
       "session": "工作階段額度",
       "web_searches": "網頁搜尋",
-      "mcp": "MCP 每月額度"
+      "mcp": "MCP 每月額度",
+      "additional_tokens": "附加 Token 額度",
+      "subscription": "方案用量"
     }
   },
   "model_pressure": {

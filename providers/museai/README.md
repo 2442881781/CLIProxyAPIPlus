@@ -70,6 +70,14 @@ The host stamps `_plugin_owner` on imported credential files. Muse preserves thi
 
 The management page keeps its key only in memory. Lock clears account/import views and aborts pending page requests. Listing local browser/task/media state does not launch a browser or generate content. CPA's background credential refresher is separate from page actions.
 
+## Account quota
+
+Enabled Muse credentials appear in the management center's **Quota Management** page and their **Auth Files** quota cards. Refresh uses the native quota provider at `POST /v8/management/plugins/museai/quota` with `{"auth_index":"<credential-index>"}` and the CPA management key.
+
+The plugin opens Settings in an isolated account-bound Chromium page and captures the site's structured subscription response. It uses the site's current action rather than a hardcoded deployment hash. Querying quota does not submit a prompt, purchase credits, start a task, or update persisted cookies. Account operations share the existing account lock, proxy policy, and host cancellation scope.
+
+The response includes the observed plan/tier, subscription remaining fraction, actual reset time when provided, and additional-token remaining fraction with the site's own display label. Internal top-up credits are not converted to token counts. Unknown periods are labelled subscription usage; confirmed unmetered usage has `unlimited: true`. Authentication failures and unconfirmed data remain errors, never synthetic zero or unlimited quota. Muse does not support resetting account quota.
+
 ## Models and protocols
 
 | Model | Endpoints | Behavior |
@@ -138,7 +146,7 @@ From `providers/museai`:
 MUSEAI_TEST_CHROMIUM='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' go test -race ./...
 ```
 
-On Linux, substitute your installed Chromium path. Fixtures run actual owned Chromium/CDP against loopback servers, not Muse.ai; an explicitly configured missing browser fails rather than skips. Tests cover stream terminal/delta integrity, history boundaries, cancellation/isolation, authenticated proxy transport, rotated cookies, approval rejection, exact image/video selection, and durable task/media ownership. Host tests cover v8 routes, cancellation ownership, no-retry propagation, and registered video pinning.
+On Linux, substitute your installed Chromium path. Fixtures run actual owned Chromium/CDP against loopback servers, not Muse.ai; an explicitly configured missing browser fails rather than skips. Tests cover stream terminal/delta integrity, history boundaries, cancellation/isolation, authenticated proxy transport, rotated cookies, approval rejection, exact image/video selection, durable task/media ownership, and quota queries through pointer-only Settings menus with keyboard shortcut labels. Quota regressions also distinguish expired login, canceled observations, unknown data, exhausted limits, and confirmed unlimited usage. Host tests cover v8 routes, cancellation ownership, no-retry propagation, and registered video pinning.
 
 Real Muse login, permissions, quota consumption, site DOM stability, and actual generated quality require authorized post-deployment acceptance. Very fast upstream replies without observed Stop or explicit terminal evidence remain unconfirmed until cancellation; this is intentional rather than false completion.
 

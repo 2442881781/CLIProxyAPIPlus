@@ -12,6 +12,7 @@
 
 import { DAY_MS, HOUR_MS } from '@/utils/time/durations';
 import type { QuotaProviderType } from './providers/types';
+import type { ProviderQuotaState } from '@/types';
 
 export { DAY_MS, HOUR_MS };
 
@@ -406,6 +407,27 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
           remaining: clampPercent(100 - (window.usedPercent as number)),
         })),
       resetCredits,
+    };
+  }
+
+  if (provider === 'museai') {
+    // Muse's data adapter validates the normalized quota once at the API boundary.
+    const museQuota = quota as ProviderQuotaState;
+    const windows = museQuota.windows.filter((window) => typeof window.resetAtMs === 'number');
+    const chosen = pickLaneWindow(windows, maxPeriodHours);
+    if (!chosen) return empty;
+    return {
+      ...empty,
+      anchorMs: chosen.resetAtMs ?? null,
+      periodHours: chosen.periodHours ?? null,
+      remaining:
+        typeof chosen.usedPercent === 'number' ? clampPercent(100 - chosen.usedPercent) : null,
+      limits: windows
+        .filter((window) => typeof window.usedPercent === 'number')
+        .map((window) => ({
+          label: window.label ?? '',
+          remaining: clampPercent(100 - (window.usedPercent as number)),
+        })),
     };
   }
 

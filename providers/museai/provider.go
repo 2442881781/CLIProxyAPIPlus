@@ -231,7 +231,7 @@ func dispatch(method string, raw []byte) (any, error) {
 	}
 	defer p.workers.Done()
 	switch method {
-	case pluginabi.MethodAuthIdentifier, pluginabi.MethodExecutorIdentifier:
+	case pluginabi.MethodAuthIdentifier, pluginabi.MethodExecutorIdentifier, pluginabi.MethodQuotaIdentifier:
 		return map[string]string{"identifier": providerID}, nil
 	case pluginabi.MethodModelStatic, pluginabi.MethodModelForAuth:
 		return pluginapi.ModelResponse{Provider: providerID, Models: models()}, nil
@@ -241,6 +241,12 @@ func dispatch(method string, raw []byte) (any, error) {
 		return nil, requestError("cookie_import_required", "Muse.ai uses Cookie import; open the Muse.ai plugin page, not Meta Muse Code OAuth")
 	case pluginabi.MethodAuthRefresh:
 		return p.refreshAuth(raw)
+	case pluginabi.MethodQuotaDescribe:
+		return pluginapi.QuotaDescribeResponse{SupportedProviders: []string{providerID}, DisplayName: "Muse.ai"}, nil
+	case pluginabi.MethodQuotaFetch:
+		return p.fetchQuota(raw)
+	case pluginabi.MethodQuotaReset:
+		return nil, &pluginabi.Error{Code: "unsupported_operation", Message: "Muse.ai does not support resetting account quota", HTTPStatus: 501, RequestScoped: true, NoRetry: true}
 	case pluginabi.MethodExecutorCountTokens:
 		return nil, &pluginabi.Error{Code: "unsupported_operation", Message: "Muse.ai does not expose a token counting endpoint", HTTPStatus: 501, RequestScoped: true, NoRetry: true}
 	case pluginabi.MethodExecutorHTTPRequest:
@@ -268,7 +274,7 @@ func registration() any {
 			{Name: "data-dir", Type: pluginapi.ConfigFieldTypeString, Description: "Private directory for browser runtime, video tasks and media; credentials remain in CPA auth storage"},
 			{Name: "no-sandbox", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Explicitly disable Chromium sandbox only when required by an isolated deployment"},
 		}},
-		"capabilities": map[string]any{"model_provider": true, "auth_provider": true, "executor": true, "executor_model_scope": "oauth", "executor_input_formats": []string{"openai", "openai-response", "openai-image", "openai-video"}, "executor_output_formats": []string{"openai", "openai-response", "openai-image", "openai-video"}, "management_api": true},
+		"capabilities": map[string]any{"model_provider": true, "auth_provider": true, "executor": true, "executor_model_scope": "oauth", "executor_input_formats": []string{"openai", "openai-response", "openai-image", "openai-video"}, "executor_output_formats": []string{"openai", "openai-response", "openai-image", "openai-video"}, "management_api": true, "quota_provider": true},
 	}
 }
 

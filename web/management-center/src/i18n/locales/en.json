@@ -311,6 +311,7 @@
     "filter_opencode": "OpenCode Go",
     "filter_zhipu": "Zhipu GLM",
     "filter_devin": "Devin",
+    "filter_museai": "Muse.ai",
     "filter_iflow": "iFlow",
     "filter_vertex": "Vertex",
     "filter_empty": "Empty",
@@ -1529,6 +1530,7 @@
     "used_value": "{{used}} / {{limit}} {{unit}} used",
     "resets_at": "Resets {{time}}",
     "searches": "searches",
+    "unlimited": "Unlimited usage",
     "windows": {
       "five_hour": "5-hour window",
       "rolling": "Rolling window",
@@ -1537,7 +1539,9 @@
       "monthly": "Monthly",
       "session": "Session",
       "web_searches": "Web searches",
-      "mcp": "MCP monthly quota"
+      "mcp": "MCP monthly quota",
+      "additional_tokens": "Additional tokens",
+      "subscription": "Subscription usage"
     }
   },
   "model_pressure": {

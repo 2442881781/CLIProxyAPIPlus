@@ -11,6 +11,7 @@ export const QUOTA_TAB_ORDER: readonly QuotaProviderType[] = [
   'opencode',
   'zhipu',
   'devin',
+  'museai',
 ];
 
 export type QuotaTabId = 'all' | QuotaProviderType;

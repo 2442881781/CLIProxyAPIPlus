@@ -82,6 +82,9 @@ export function ProviderQuotaBody({ quota, classes }: ProviderQuotaBodyProps) {
           )}
         </div>
       ) : null}
+      {quota.unlimited && (
+        <div className={classes.quotaMessage}>{t('provider_quota.unlimited')}</div>
+      )}
 
       {quota.windows.map((window, index) => (
         <div key={window.id} className={classes.quotaRow}>
@@ -113,6 +116,9 @@ export function ProviderQuotaBody({ quota, classes }: ProviderQuotaBodyProps) {
                 })}
               </span>
             ) : null}
+            {window.description && (
+              <span className={classes.quotaAmount}>{window.description}</span>
+            )}
           </div>
         </div>
       ))}

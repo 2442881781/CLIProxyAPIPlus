@@ -1740,10 +1740,12 @@ type QuotaMetric struct {
 
 // QuotaFetchResponse carries normalized quota information for management UI rendering.
 type QuotaFetchResponse struct {
-	Subscription       *QuotaSubscription `json:"subscription,omitempty"`
-	Summary            []QuotaMetric      `json:"summary,omitempty"`
-	ServerTimeOffsetMs int64              `json:"serverTimeOffsetMs,omitempty"`
-	Groups             []QuotaGroup       `json:"groups,omitempty"`
+	Subscription *QuotaSubscription `json:"subscription,omitempty"`
+	// Unlimited distinguishes confirmed unmetered usage from missing quota data.
+	Unlimited          bool          `json:"unlimited,omitempty"`
+	Summary            []QuotaMetric `json:"summary,omitempty"`
+	ServerTimeOffsetMs int64         `json:"serverTimeOffsetMs,omitempty"`
+	Groups             []QuotaGroup  `json:"groups,omitempty"`
 }
 
 // UnmarshalJSON supports both camelCase and snake_case field names.

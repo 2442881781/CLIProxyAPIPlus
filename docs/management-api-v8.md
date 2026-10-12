@@ -160,3 +160,11 @@ An installed Muse.ai library requires the schema 8 host's cancellation, browser
 transport, and pinned video execution support; advertising schema 8 alone is
 not sufficient. Use the token-protected deployment plugin state to confirm
 registration before exposing its manager.
+
+Muse quota uses `POST /v8/management/plugins/museai/quota` with
+`{"auth_index":"<credential-index>"}`. The native provider queries the site's
+Settings subscription without generating content or updating stored cookies.
+Normalized `subscription` and `groups[].buckets` include the observed remaining
+fractions, actual reset timestamps, and original additional-token display label.
+`unlimited: true` denotes confirmed unmetered usage; missing quota data is an
+error. The provider does not support quota reset.

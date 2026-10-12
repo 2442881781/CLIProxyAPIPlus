@@ -15,6 +15,7 @@ import {
   OPENCODE_CONFIG,
   ZHIPU_CONFIG,
 } from './providers/providerApi/data';
+import { MUSEAI_CONFIG } from './providers/museai/data';
 import type { QuotaProviderType } from './providers/types';
 import {
   QUOTA_CACHE_TTL_MS,
@@ -33,6 +34,7 @@ const QUOTA_FILTER_MAP: Record<QuotaProviderType, (file: AuthFileItem) => boolea
   opencode: OPENCODE_CONFIG.filterFn,
   zhipu: ZHIPU_CONFIG.filterFn,
   devin: DEVIN_CONFIG.filterFn,
+  museai: MUSEAI_CONFIG.filterFn,
 };
 
 export interface QuotaFileEntry {
