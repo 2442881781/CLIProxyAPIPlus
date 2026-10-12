@@ -168,3 +168,10 @@ Normalized `subscription` and `groups[].buckets` include the observed remaining
 fractions, actual reset timestamps, and original additional-token display label.
 `unlimited: true` denotes confirmed unmetered usage; missing quota data is an
 error. The provider does not support quota reset.
+
+With quota-aware routing enabled, the lifecycle collector queries enabled
+credential quota providers at startup and on subsequent refreshes. The plugin
+host receives its auth manager before the first refresh, so persisted account
+credentials are available before the API server is created. Credential reloads
+retain the newest quota observation; older or missing file snapshots must not
+erase a live observation. Failed queries retain the last successful observation.
