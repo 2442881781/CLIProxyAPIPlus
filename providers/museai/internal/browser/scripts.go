@@ -5,11 +5,19 @@ package browser
 const domHelpers = `
 const visible = e => !!e && !!(e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
 const textarea = () => [...document.querySelectorAll('textarea')].find(visible);
-const composer = () => { const t=textarea(); return t && (t.closest('form,[data-testid="hatch-composer"]') || t.parentElement.parentElement.parentElement); };
+const composer = () => { const t=textarea(); return t && (t.closest('form,[data-testid="hatch-composer"],[data-hatch-composer-chrome]') || t.parentElement.parentElement.parentElement); };
 const agents = () => [...document.querySelectorAll('div[class*="hatch-chat-groupable-bubble"][class*="hatch-agent-bubble-bg"],[data-message-role="assistant"],[data-testid="hatch-agent-message"]')].filter((e,i,a)=>!a.some((p,j)=>j!==i && p.contains(e)));
 const users = () => [...document.querySelectorAll('div[class*="hatch-chat-groupable-bubble"][class*="chat-user-bubble"],[data-message-role="user"],[data-testid="hatch-user-message"]')].filter((e,i,a)=>!a.some((p,j)=>j!==i && p.contains(e)));
 const stopButton = () => [...document.querySelectorAll('[data-testid="hatch-composer-stop-button"],button[aria-label="Stop" i],button[aria-label="Stop generating" i],button[aria-label="停止"],button[aria-label="停止生成"]')].find(visible);
 const sendButton = () => { const c=composer(); return c && [...c.querySelectorAll('button,[role="button"]')].find(e=>visible(e) && (e.dataset.testid==='hatch-composer-send-button' || /^(send|send message|发送|发送消息)$/i.test(e.getAttribute('aria-label')||'') || /^(send|发送)$/i.test((e.innerText||'').trim()))); };
+const attachmentState = () => {
+ const c=composer();if(!c)return {count:0,pending:true,failed:false};
+ const count=selector=>[...c.querySelectorAll(selector)].filter(visible).length;
+ // Muse renders named status overlays while processing or uploading a preview.
+ const pending=[...c.querySelectorAll('[role="progressbar"],[data-upload-state="uploading"],[aria-busy="true"],[role="status"][aria-label]')].some(visible);
+ const scope=c.closest('[data-hatch-composer-root]')||c;
+ return {count:Math.max(count('button[aria-label*="Remove attachment" i],button[aria-label*="移除附件"],button[aria-label*="删除附件"]'),count('[data-testid^="hatch-chat-attachment-presentation-"]'),count('img:not([src*="avatar"]),video')),pending,failed:[...scope.querySelectorAll('[role="alert"]')].some(visible)};
+};
 const blocked = () => [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],[aria-modal="true"],[data-testid*="approval"],[data-testid*="permission"]')].some(visible);
 const root = document.querySelector('main,[class*="hatch-chat-scroll"],[class*="chat-scroll"]');
 if(root) for(const e of [root,...root.querySelectorAll('[class*="scroll"]')]) { const s=getComputedStyle(e);if(s.overflowY==='auto'||s.overflowY==='scroll')e.scrollTop=e.scrollHeight; }
@@ -22,18 +30,28 @@ const as=agents(),us=users();return {agents:as.length,users:us.length,sources:[.
 const preparePromptJS = `(prompt=>{` + domHelpers + `
 if(blocked())return false;const t=textarea();if(!t)return false;t.scrollIntoView({block:'center'});t.focus();
 const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;setter.call(t,prompt);t.dispatchEvent(new Event('input',{bubbles:true}));t.dispatchEvent(new Event('change',{bubbles:true}));return true;})`
-const sendStateJS = `(prompt=>{` + domHelpers + `
-const t=textarea(),b=sendButton();return {ready:!blocked() && !!t && t.value===prompt && !!b && !b.disabled,blocked:blocked()};})`
-const clickSendJS = `(prompt=>{` + domHelpers + `
-if(blocked())return false;const t=textarea(),b=sendButton();if(!t||t.value!==prompt||!b||b.disabled)return false;b.click();return true;})`
+const sendStateJS = `((prompt,referenceCount)=>{` + domHelpers + `
+const t=textarea(),b=sendButton(),refs=referenceCount>0?attachmentState():null;
+const referenceFailed=!!refs && (refs.failed || (!refs.pending && refs.count<referenceCount));
+return {ready:!blocked() && !!t && t.value===prompt && !!b && !b.disabled && (!refs || !refs.pending) && !referenceFailed,blocked:blocked(),referenceFailed};})`
+const clickSendJS = `((prompt,referenceCount)=>{` + domHelpers + `
+if(blocked())return {clicked:false};const t=textarea(),b=sendButton(),refs=referenceCount>0?attachmentState():null;
+if(refs && (refs.failed || refs.pending || refs.count<referenceCount))return {clicked:false,referenceFailed:true};
+if(!t||t.value!==prompt||!b||b.disabled)return {clicked:false};b.click();return {clicked:true};})`
 const uploadJS = `(refs=>{` + domHelpers + `
-if(blocked())return false;const c=composer(),input=c && c.querySelector('input[type="file"]');if(!input)return false;
+if(blocked())return false;const c=composer(),input=c && c.querySelector('input[type="file"]');if(!input||input.disabled)return false;
 const dt=new DataTransfer();for(let i=0;i<refs.length;i++){const r=refs[i],s=atob(r.data),bytes=new Uint8Array(s.length);for(let j=0;j<s.length;j++)bytes[j]=s.charCodeAt(j);const ext=r.mime.split('/')[1].replace('jpeg','jpg');dt.items.add(new File([bytes],'reference_'+i+'.'+ext,{type:r.mime}));}
 input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));input.dispatchEvent(new Event('input',{bubbles:true}));return true;})`
 const uploadStateJS = `(()=>{` + domHelpers + `
-const c=composer();return {blocked:blocked(),count:c?Math.max(c.querySelectorAll('button[aria-label*="Remove attachment" i],button[aria-label*="移除附件"],button[aria-label*="删除附件"]').length,c.querySelectorAll('[data-testid^="hatch-chat-attachment-presentation-"]').length,c.querySelectorAll('img:not([src*="avatar"]),video').length):0,pending:c?!!c.querySelector('[role="progressbar"],[data-upload-state="uploading"],[aria-busy="true"]'):true};})()`
+return {...attachmentState(),blocked:blocked()};})()`
 const pollJS = `(opts=>{` + domHelpers + `
 const us=users(),as=agents();let selected=[];
+// Both agent and user messages use group/msg; only a group containing a user turn is input media.
+const inputComposer=composer();
+const inputMedia = e => {
+ const group=e.closest('[class~="group/msg"]');
+ return !!(inputComposer && inputComposer.contains(e)) || !!e.closest('form,[class*="chat-user-bubble"],[data-message-role="user"],[data-testid="hatch-user-message"]') || !!group && us.some(u=>group.contains(u));
+};
 if(opts.resume){const last=us[us.length-1];if(last)selected=as.filter(e=>!!(last.compareDocumentPosition(e)&Node.DOCUMENT_POSITION_FOLLOWING));}
 else {const sent=us[opts.users];if(sent)selected=as.filter(e=>!!(sent.compareDocumentPosition(e)&Node.DOCUMENT_POSITION_FOLLOWING));selected=selected.filter(e=>!e.closest('form,[class*="chat-user-bubble"]'));}
 const renderedText=value=>value.replace(/\s+/g,' ').trim();
@@ -42,11 +60,11 @@ const text=selected.map(e=>(e.innerText||'').trim()).filter(Boolean).join('\n\n'
 const terminal=selected.length>0 && selected.every(e=>e.getAttribute('data-message-status')==='completed' || e.getAttribute('data-status')==='completed' || e.getAttribute('data-state')==='complete' || !!e.querySelector('[data-testid="hatch-message-completed"],[data-message-status="completed"]'));
 const turnUser=opts.resume?us[us.length-1]:us[opts.users];
 const resultRoots=[...selected];if(turnUser)for(const e of document.querySelectorAll('[data-testid^="hatch-chat-attachment-presentation-"]')){
- if(!(turnUser.compareDocumentPosition(e)&Node.DOCUMENT_POSITION_FOLLOWING) || e.closest('form,[class*="chat-user-bubble"],[class*="group/msg"]') || resultRoots.some(p=>p.contains(e)))continue;
+ if(!(turnUser.compareDocumentPosition(e)&Node.DOCUMENT_POSITION_FOLLOWING) || inputMedia(e) || resultRoots.some(p=>p.contains(e)))continue;
  resultRoots.push(e);
 }
 const media=[],seen=new Set();for(const agent of resultRoots)for(const e of agent.querySelectorAll('img,video')){
- if(e.closest('form,[class*="chat-user-bubble"]'))continue;
+ if(inputMedia(e))continue;
  const video=e.tagName==='VIDEO';let src=e.currentSrc||e.src||'';if(video && !src){const s=e.querySelector('source');src=s && s.src || '';}
  if(!src || seen.has(src) || opts.sources.includes(src) || (!video && /avatar|emoji/i.test(src)))continue;
  const attachment=e.closest('[data-testid^="hatch-chat-attachment-presentation-"]');

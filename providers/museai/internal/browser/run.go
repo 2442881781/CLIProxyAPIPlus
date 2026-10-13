@@ -11,6 +11,7 @@ import (
 	_ "image/png"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -151,18 +152,24 @@ func (e *Engine) execute(ctx context.Context, in Input, emit func(Event) error, 
 				return result, err
 			}
 		}
-		if err = s.prepare(operation, in.Prompt, e.cfg.PollInterval); err != nil {
+		if err = s.prepare(operation, in.Prompt, len(in.References), e.cfg.PollInterval); err != nil {
 			return result, err
 		}
 		// Mark ambiguous dispatch as submitted BEFORE issuing the single click.
 		// Transport loss after dispatch must never cause upstream resubmission.
 		submitted = true
-		var clicked bool
-		if err = s.page.evaluate(operation, clickSendJS+"("+jsArg(in.Prompt)+")", &clicked); err != nil {
+		var dispatch struct {
+			Clicked         bool `json:"clicked"`
+			ReferenceFailed bool `json:"referenceFailed"`
+		}
+		if err = s.page.evaluate(operation, clickSendJS+"("+jsArg(in.Prompt)+","+strconv.Itoa(len(in.References))+")", &dispatch); err != nil {
 			return result, err
 		}
-		if !clicked {
+		if !dispatch.Clicked {
 			submitted = false
+			if dispatch.ReferenceFailed {
+				return result, &Error{Code: "reference_upload_failed", Message: "Muse reference image was not ready for submission; no message was sent", HTTPStatus: http.StatusBadRequest}
+			}
 			return result, errors.New("composer refused submission")
 		}
 	}
@@ -317,7 +324,7 @@ func (s *session) waitReady(ctx context.Context, poll time.Duration) error {
 		}
 	}
 }
-func (s *session) prepare(ctx context.Context, prompt string, poll time.Duration) error {
+func (s *session) prepare(ctx context.Context, prompt string, references int, poll time.Duration) error {
 	var prepared bool
 	if err := s.page.evaluate(ctx, preparePromptJS+"("+jsArg(prompt)+")", &prepared); err != nil {
 		return err
@@ -325,16 +332,21 @@ func (s *session) prepare(ctx context.Context, prompt string, poll time.Duration
 	if !prepared {
 		return errors.New("cannot focus composer")
 	}
+	expression := sendStateJS + "(" + jsArg(prompt) + "," + strconv.Itoa(references) + ")"
 	for {
 		var state struct {
-			Ready   bool `json:"ready"`
-			Blocked bool `json:"blocked"`
+			Ready           bool `json:"ready"`
+			Blocked         bool `json:"blocked"`
+			ReferenceFailed bool `json:"referenceFailed"`
 		}
-		if err := s.page.evaluate(ctx, sendStateJS+"("+jsArg(prompt)+")", &state); err != nil {
+		if err := s.page.evaluate(ctx, expression, &state); err != nil {
 			return err
 		}
 		if state.Blocked {
 			return &Error{Code: "approval_required", Message: "Muse requires a user approval; no approval was clicked", HTTPStatus: 409}
+		}
+		if state.ReferenceFailed {
+			return &Error{Code: "reference_upload_failed", Message: "Muse reference image processing or upload failed; no message was sent", HTTPStatus: http.StatusBadRequest}
 		}
 		if state.Ready {
 			return nil
@@ -355,13 +367,15 @@ func (s *session) upload(ctx context.Context, references []Reference, poll time.
 		return err
 	}
 	if !uploaded {
-		return errors.New("reference upload rejected")
+		return &Error{Code: "reference_upload_failed", Message: "Muse did not accept the reference image; no message was sent", HTTPStatus: http.StatusBadRequest}
 	}
+	observed := false
 	for {
 		var state struct {
 			Count   int  `json:"count"`
 			Pending bool `json:"pending"`
 			Blocked bool `json:"blocked"`
+			Failed  bool `json:"failed"`
 		}
 		if err := s.page.evaluate(ctx, uploadStateJS, &state); err != nil {
 			return err
@@ -369,9 +383,13 @@ func (s *session) upload(ctx context.Context, references []Reference, poll time.
 		if state.Blocked {
 			return &Error{Code: "approval_required", Message: "Muse requires a user approval; no approval was clicked", HTTPStatus: 409}
 		}
+		if state.Failed || (observed && !state.Pending && state.Count < len(references)) {
+			return &Error{Code: "reference_upload_failed", Message: "Muse reference image processing or upload failed; no message was sent", HTTPStatus: http.StatusBadRequest}
+		}
 		if state.Count >= len(references) && !state.Pending {
 			return nil
 		}
+		observed = observed || state.Pending || state.Count > 0
 		if err := delay(ctx, poll); err != nil {
 			return err
 		}

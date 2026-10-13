@@ -297,7 +297,8 @@ func asPluginError(err error) *pluginabi.Error {
 	}
 	var be *browser.Error
 	if errors.As(err, &be) {
-		return &pluginabi.Error{Code: be.Code, Message: be.Message, HTTPStatus: be.HTTPStatus, RequestScoped: be.Submitted, NoRetry: be.Submitted}
+		requestScoped := be.Submitted || be.Code == "reference_upload_failed"
+		return &pluginabi.Error{Code: be.Code, Message: be.Message, HTTPStatus: be.HTTPStatus, RequestScoped: requestScoped, NoRetry: requestScoped}
 	}
 	if errors.Is(err, context.Canceled) {
 		return &pluginabi.Error{Code: "canceled", Message: "Muse operation canceled; submitted work was not repeated", HTTPStatus: 408, RequestScoped: true, NoRetry: true}

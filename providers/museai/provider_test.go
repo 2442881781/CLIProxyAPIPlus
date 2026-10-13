@@ -233,6 +233,14 @@ func TestDurableTaskRecoveryAndMediaOwnership(t *testing.T) {
 	}
 }
 
+func TestReferenceFailureDoesNotRotateCredentials(t *testing.T) {
+	errReference := &browser.Error{Code: "reference_upload_failed", Message: "Muse reference image processing or upload failed; no message was sent", HTTPStatus: 400}
+	classified := asPluginError(errReference)
+	if !classified.RequestScoped || !classified.NoRetry || classified.HTTPStatus != 400 {
+		t.Fatalf("reference rejection would retry or penalize the credential: %+v", classified)
+	}
+}
+
 func TestAccountQueueCancellationAndIsolation(t *testing.T) {
 	p := &provider{gates: make(map[string]chan struct{})}
 	unlock, errLock := p.lockAccount(context.Background(), "a")

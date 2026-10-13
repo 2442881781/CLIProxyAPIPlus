@@ -35,6 +35,60 @@ document.querySelector('button').onclick=()=>{const u=document.createElement('di
 		t.Fatal("reference preview selected instead of agent image")
 	}
 }
+
+func TestRunImageSelectsAgentAttachmentSibling(t *testing.T) {
+	png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+	const page = `<!doctype html><body><main><div class="group/msg"><div data-message-role="assistant">history</div><div data-testid="hatch-chat-attachment-presentation-old"><img src="/old.png"></div></div></main><form><textarea></textarea><button type="button" aria-label="Send">Send</button></form><script>
+document.querySelector('button').onclick=()=>{
+ const messages=document.querySelector('main'),userGroup=document.createElement('div');userGroup.className='group/msg ms-auto';
+ const user=document.createElement('div');user.dataset.messageRole='user';user.textContent=document.querySelector('textarea').value;userGroup.append(user);
+ userGroup.insertAdjacentHTML('beforeend','<div data-testid="hatch-chat-attachment-presentation-user"><img src="/input.png"></div>');messages.append(userGroup);
+ const agentGroup=document.createElement('div');agentGroup.className='group/msg justify-start';agentGroup.innerHTML='<div data-message-role="assistant" data-message-status="completed">Generated image</div><div data-testid="hatch-chat-attachment-presentation-result"><img src="/result.png"></div>';messages.append(agentGroup);history.replaceState(null,'','/thread/image');
+};</script>`
+	engine, _ := fixtureEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/result.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(png)
+		case "/old.png", "/input.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("not generated image bytes"))
+		default:
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = fmt.Fprint(w, page)
+		}
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	result, err := engine.Run(ctx, Input{Kind: "image", Prompt: "make image without references"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Media) != 1 || !bytes.Equal(result.Media[0].Data, png) {
+		t.Fatal("agent attachment outside its text bubble was missed or user/history media was selected")
+	}
+}
+
+func TestRunImageWithoutMediaDoesNotComplete(t *testing.T) {
+	const page = `<!doctype html><body><main></main><form><textarea></textarea><button type="button" aria-label="Send">Send</button></form><script>
+document.querySelector('button').onclick=()=>{const messages=document.querySelector('main'),user=document.createElement('div');user.dataset.messageRole='user';user.textContent=document.querySelector('textarea').value;messages.append(user);const agent=document.createElement('div');agent.dataset.messageRole='assistant';agent.dataset.messageStatus='completed';agent.textContent='No image was generated';messages.append(agent);};</script>`
+	engine, _ := fixtureEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, page)
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_, err := engine.Run(ctx, Input{Kind: "image", Prompt: "make image"}, func(e Event) error {
+		if e.Completed {
+			t.Error("text-only reply was reported as image success")
+		}
+		return nil
+	})
+	typed, ok := err.(*Error)
+	if !ok || typed.Code != "missing_media" || typed.HTTPStatus != http.StatusBadGateway || !typed.Submitted {
+		t.Fatalf("text-only image result did not fail without retry: %#v", err)
+	}
+}
 func TestStopVisibleCannotComplete(t *testing.T) {
 	const page = `<!doctype html><body><main></main><form><textarea></textarea><button type="button" aria-label="Send">Send</button></form><script>
 document.querySelector('button').onclick=()=>{const m=document.querySelector('main'),u=document.createElement('div');u.dataset.messageRole='user';u.textContent=document.querySelector('textarea').value;m.append(u);history.replaceState(null,'','/thread/stop');const a=document.createElement('div');a.dataset.messageRole='assistant';a.dataset.messageStatus='completed';a.textContent='stable but still running';m.append(a);const b=document.createElement('button');b.dataset.testid='hatch-composer-stop-button';b.onclick=()=>b.remove();document.querySelector('form').append(b);};</script>`
