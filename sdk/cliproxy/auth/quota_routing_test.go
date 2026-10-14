@@ -67,6 +67,40 @@ func TestQuotaStateRemainingPercent(t *testing.T) {
 			known: true,
 		},
 		{
+			name:     "codex exhausted plan window with credits stays usable",
+			provider: "codex",
+			signals: map[string]string{
+				"X-Codex-Primary-Used-Percent": "100",
+				"X-Codex-Credits-Has-Credits":  "True",
+				"X-Codex-Credits-Balance":      "56438.77",
+				"X-Codex-Credits-Unlimited":    "False",
+			},
+			want:  0,
+			known: false,
+		},
+		{
+			name:     "codex exhausted plan window without credits blocks",
+			provider: "codex",
+			signals: map[string]string{
+				"X-Codex-Primary-Used-Percent": "100",
+				"X-Codex-Credits-Has-Credits":  "False",
+				"X-Codex-Credits-Balance":      "0",
+			},
+			want:  0,
+			known: true,
+		},
+		{
+			name:     "codex exhausted plan window with zero balance blocks",
+			provider: "codex",
+			signals: map[string]string{
+				"X-Codex-Primary-Used-Percent": "100",
+				"X-Codex-Credits-Has-Credits":  "True",
+				"X-Codex-Credits-Balance":      "0",
+			},
+			want:  0,
+			known: true,
+		},
+		{
 			name:     "devin uses limiting window",
 			provider: "devin",
 			signals: map[string]string{
@@ -174,6 +208,26 @@ func TestQuotaAwareSelectorPrefersHighestRemainingWithinHighestPriority(t *testi
 	}
 	if picked.ID != "high-priority-high" {
 		t.Fatalf("picked = %q, want high-priority-high", picked.ID)
+	}
+}
+
+func TestQuotaAwareSelectorKeepsExhaustedWindowCredentialWithCreditsEligible(t *testing.T) {
+	now := time.Now()
+	selector := NewQuotaAwareSelector(&RoundRobinSelector{})
+	auths := []*Auth{
+		quotaRoutingTestAuth("plan-exhausted-with-credits", "codex", 0, now, map[string]string{
+			"X-Codex-Primary-Used-Percent": "100",
+			"X-Codex-Credits-Has-Credits":  "True",
+			"X-Codex-Credits-Balance":      "56438.77",
+		}),
+	}
+
+	picked, errPick := selector.Pick(context.Background(), "codex", "gpt-6-astra", cliproxyexecutor.Options{}, auths)
+	if errPick != nil {
+		t.Fatalf("Pick(): %v", errPick)
+	}
+	if picked.ID != "plan-exhausted-with-credits" {
+		t.Fatalf("picked = %q, want plan-exhausted-with-credits", picked.ID)
 	}
 }
 

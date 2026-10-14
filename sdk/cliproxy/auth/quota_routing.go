@@ -175,7 +175,36 @@ func codexRemainingPercent(signals map[string]string) (float64, bool) {
 	if !baseFound {
 		return 0, false
 	}
+	if baseUsed >= 100 && codexHasCredits(signals) {
+		// A positive credit balance can still serve requests after the plan
+		// window is exhausted, so the watermark is demoted from an eligibility
+		// constraint to unknown instead of blocking selection.
+		return 0, false
+	}
 	return 100 - baseUsed, true
+}
+
+// codexHasCredits reports whether the credential carries a positive
+// pay-as-you-go credit balance, which keeps it usable when plan windows exhaust.
+func codexHasCredits(signals map[string]string) bool {
+	hasCredits := false
+	for key, value := range signals {
+		if strings.EqualFold(strings.TrimSpace(key), "x-codex-credits-has-credits") &&
+			strings.EqualFold(strings.TrimSpace(value), "true") {
+			hasCredits = true
+			break
+		}
+	}
+	if !hasCredits {
+		return false
+	}
+	for key, value := range signals {
+		if strings.EqualFold(strings.TrimSpace(key), "x-codex-credits-balance") {
+			balance, ok := parseQuotaNumber(value)
+			return ok && balance > 0
+		}
+	}
+	return false
 }
 
 func maxCodexUsedPercent(signals map[string]string, include func(string) bool) (float64, bool) {
