@@ -4,6 +4,8 @@ English | [中文](README_CN.md) | [日本語](README_JA.md)
 
 This private fork incorporates upstream [v8.0.44](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.44) (`1f917e77c`) and requires Go 1.26.10 or newer. Private quota-aware routing, model allowlists, deployment controls, and schema 8 plugin extensions are retained. Rebuild native plugins with the matching checkout and toolchain when upgrading the host; an upstream host binary does not include these private extensions.
 
+OpenAI-compatible video providers can mark a configured model with `video: true` (`image: false`). Creation through `/v1/videos` or `/v1/videos/generations` forwards JSON to the provider's `/videos`; task retrieval forwards to `/videos/{id}` using the original credential and upstream model. Keep the returned `cpa-video.*` task ID intact. Both creation and retrieval enforce access-key/group model allowlists. Provider-specific JSON fields such as `duration` and reference images are preserved; no chat translation is applied. `/v1/videos/{id}/content` requires the upstream to implement `/videos/{id}/content`; a returned media URL is not automatically fetched. For a provider prefix `muse2api`, explicitly allow `muse2api/muse-video` in restricted groups.
+
 If you want to use CLIProxyAPI on your desktop, we recommend our [EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) desktop client. It provides a graphical configuration UI, automatic updates, system tray integration, and one-click start/stop for the CLIProxyAPI service.
 
 CLIProxyAPI is a proxy server that provides OpenAI/Gemini/Claude/Codex/Grok compatible API interfaces for CLI.

@@ -10,7 +10,7 @@ const COLLAPSED_LIMIT = 10;
 
 interface ModelEntriesEditorProps {
   models: ModelEntryInput[];
-  /** Only OpenAI-compatible entries can expose the image-generation capability. */
+  /** OpenAI-compatible entries expose image and video capabilities. */
   supportsImage: boolean;
   /** Every backend provider model can override its thinking capability. */
   supportsThinking: boolean;
@@ -91,6 +91,11 @@ export function ModelEntriesEditor({
                     {t('providersPage.form.modelBadgeImage')}
                   </span>
                 ) : null}
+                {supportsImage && !expanded && entry.video === true ? (
+                  <span className={styles.entryBadge}>
+                    {t('providersPage.form.modelBadgeVideo')}
+                  </span>
+                ) : null}
                 {supportsThinking && !expanded && hasThinking ? (
                   <span className={styles.entryBadge}>
                     {t('providersPage.form.modelBadgeThinking')}
@@ -135,11 +140,26 @@ export function ModelEntriesEditor({
                       className={styles.checkboxBox}
                       checked={entry.image === true}
                       disabled={mutating}
-                      onChange={(e) => onUpdate(idx, { image: e.target.checked })}
+                      onChange={(e) => onUpdate(idx, { image: e.target.checked, ...(e.target.checked ? { video: false } : {}) })}
                     />
                     <span className={styles.checkboxText}>
                       <span>{t('providersPage.form.modelImage')}</span>
                       <small>{t('providersPage.form.modelImageHint')}</small>
+                    </span>
+                  </label>
+                ) : null}
+                {supportsImage ? (
+                  <label className={styles.checkboxRow}>
+                    <input
+                      type="checkbox"
+                      className={styles.checkboxBox}
+                      checked={entry.video === true}
+                      disabled={mutating}
+                      onChange={(e) => onUpdate(idx, { video: e.target.checked, ...(e.target.checked ? { image: false } : {}) })}
+                    />
+                    <span className={styles.checkboxText}>
+                      <span>{t('providersPage.form.modelVideo')}</span>
+                      <small>{t('providersPage.form.modelVideoHint')}</small>
                     </span>
                   </label>
                 ) : null}

@@ -9,6 +9,7 @@ export interface ModelAlias {
   priority?: number;
   testModel?: string;
   image?: boolean;
+  video?: boolean;
   thinking?: Record<string, unknown>;
 }
 

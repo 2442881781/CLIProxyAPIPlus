@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
@@ -56,6 +57,9 @@ func decodeRegisteredVideoTask(id string) (registeredVideoTask, error) {
 }
 
 func (h *OpenAIAPIHandler) collectRegisteredVideosCreate(c *gin.Context, body []byte, model string) {
+	if !authorizeRegisteredVideoModel(c, model) {
+		return
+	}
 	ctx, cancel := h.GetContextWithCancel(h, c, context.Background())
 	defer cancel(nil)
 	authID, executionModel := "", model
@@ -92,6 +96,13 @@ func (h *OpenAIAPIHandler) handleRegisteredVideosGet(c *gin.Context, videoID, op
 		h.WriteErrorResponse(c, &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: err})
 		return true
 	}
+	selectionModel := task.SelectionModel
+	if selectionModel == "" {
+		selectionModel = task.Model
+	}
+	if !authorizeRegisteredVideoModel(c, selectionModel) {
+		return true
+	}
 	if h.AuthManager == nil {
 		h.WriteErrorResponse(c, &interfaces.ErrorMessage{StatusCode: http.StatusServiceUnavailable, Error: fmt.Errorf("video credential is unavailable")})
 		return true
@@ -106,10 +117,6 @@ func (h *OpenAIAPIHandler) handleRegisteredVideosGet(c *gin.Context, videoID, op
 	defer cancel(nil)
 	ctx = handlers.WithPinnedAuthID(ctx, task.AuthID)
 	ctx = coreexecutor.WithPinnedExecutionModel(ctx, task.Model)
-	selectionModel := task.SelectionModel
-	if selectionModel == "" {
-		selectionModel = task.Model
-	}
 	response, errMsg := h.ExecuteModel(ctx, handlers.ModelExecutionRequest{EntryProtocol: registry.OpenAIVideoModelType, ExitProtocol: registry.OpenAIVideoModelType, Model: task.Model, AuthSelectionModel: selectionModel, AuthID: task.AuthID, ForcedProvider: auth.Provider, Body: body, Headers: c.Request.Header, Query: c.Request.URL.Query(), Path: c.Request.URL.Path})
 	if errMsg != nil {
 		h.WriteErrorResponse(c, errMsg)
@@ -133,4 +140,37 @@ func (h *OpenAIAPIHandler) handleRegisteredVideosGet(c *gin.Context, videoID, op
 	handlers.WriteUpstreamHeaders(c.Writer.Header(), response.Headers)
 	c.Data(http.StatusOK, "application/json", out)
 	return true
+}
+
+// Task URLs do not contain a request-body model, so authentication alone cannot
+// enforce model allowlists. Check the public selection model before execution.
+func authorizeRegisteredVideoModel(c *gin.Context, model string) bool {
+	metadata, exists := c.Get("accessMetadata")
+	if !exists {
+		return true
+	}
+	keyID := ""
+	switch values := metadata.(type) {
+	case map[string]string:
+		keyID = values["key_id"]
+	case map[string]any:
+		keyID, _ = values["key_id"].(string)
+	}
+	if keyID == "" {
+		return true
+	}
+	store := storeaccess.DefaultStore()
+	if store != nil {
+		key := store.Get(keyID)
+		if key != nil && key.ModelAllowed(model) {
+			group := store.GroupFor(key)
+			if group == nil || group.ModelAllowed(model) {
+				return true
+			}
+		}
+	}
+	c.AbortWithStatusJSON(http.StatusForbidden, handlers.ErrorResponse{Error: handlers.ErrorDetail{
+		Message: "API key or group is not allowed to use model: " + model, Type: "forbidden",
+	}})
+	return false
 }

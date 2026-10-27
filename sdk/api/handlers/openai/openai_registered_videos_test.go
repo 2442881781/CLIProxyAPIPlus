@@ -3,9 +3,12 @@ package openai
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	apihandlers "github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
@@ -145,5 +148,40 @@ func TestRegisteredVideoTaskRetainsAliasAndUpstreamPinAfterRestart(t *testing.T)
 		if model != upstreamModel || second.authIDs[i] != authID || second.ids[i] != "native-task" {
 			t.Fatalf("task pin changed: model=%s auth=%s id=%s", model, second.authIDs[i], second.ids[i])
 		}
+	}
+}
+
+func TestRegisteredVideoChecksGroupModelOnCreateAndRetrieve(t *testing.T) {
+	store, err := storeaccess.Configure(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := store.Create("sk-cpa-video-restricted", storeaccess.AccessKey{Group: "restricted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertGroup(storeaccess.Group{Name: "restricted", AllowedModels: []string{"allowed/video"}}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewOpenAIAPIHandler(apihandlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, nil))
+	id, err := encodeRegisteredVideoTask(registeredVideoTask{Version: 1, Model: "upstream-video", SelectionModel: "denied/video", AuthID: "credential", ID: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"create", "retrieve", "content"} {
+		t.Run(operation, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(response)
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/videos/"+id, nil)
+			c.Set("accessMetadata", map[string]string{"key_id": key.ID})
+			if operation == "create" {
+				handler.collectRegisteredVideosCreate(c, []byte(`{"prompt":"bird"}`), "denied/video")
+			} else {
+				handler.handleRegisteredVideosGet(c, id, operation)
+			}
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("%s bypassed model policy: %d %s", operation, response.Code, response.Body.String())
+			}
+		})
 	}
 }

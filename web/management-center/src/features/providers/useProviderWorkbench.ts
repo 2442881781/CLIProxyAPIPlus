@@ -143,6 +143,7 @@ const buildModelAliases = (
       };
       if (includeImage) {
         entry.image = m.image === true;
+        entry.video = m.video === true;
       }
       return entry;
     })

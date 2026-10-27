@@ -68,7 +68,7 @@ const OPENAI_PROVIDER_FIELDS = [
 ] as const;
 
 const MODEL_ALIAS_FIELDS = ['name', 'alias', 'priority', 'test-model', 'thinking'] as const;
-const OPENAI_MODEL_ALIAS_FIELDS = [...MODEL_ALIAS_FIELDS, 'image'] as const;
+const OPENAI_MODEL_ALIAS_FIELDS = [...MODEL_ALIAS_FIELDS, 'image', 'video'] as const;
 
 const API_KEY_ENTRY_FIELDS = ['api-key', 'proxy-url', 'weight'] as const;
 
@@ -306,6 +306,9 @@ const serializeModelAliases = (models?: ModelAlias[], includeOpenAIFields = fals
           }
           if (includeOpenAIFields && model.image) {
             payload.image = true;
+          }
+          if (includeOpenAIFields && model.video) {
+            payload.video = true;
           }
           if (model.thinking) {
             payload.thinking = model.thinking;

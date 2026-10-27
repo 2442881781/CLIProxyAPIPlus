@@ -76,3 +76,16 @@ func joinModalities(modalities []string) string {
 	}
 	return out
 }
+
+func TestBuildOpenAICompatibilityVideoModel(t *testing.T) {
+	models := buildOpenAICompatibilityConfigModels(&config.OpenAICompatibility{
+		Name:   "video-provider",
+		Models: []config.OpenAICompatibilityModel{{Name: "upstream-video", Alias: "movie", Video: true}},
+	})
+	if len(models) != 1 || models[0].ID != "movie" || models[0].Type != registry.OpenAIVideoModelType {
+		t.Fatalf("video route not registered: %+v", models)
+	}
+	if models[0].Thinking != nil {
+		t.Fatal("chat thinking defaults leaked into video model")
+	}
+}

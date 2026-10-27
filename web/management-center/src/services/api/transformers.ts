@@ -51,6 +51,10 @@ const normalizeModelAliases = (models: unknown): ModelAlias[] => {
       if (image !== undefined) {
         entry.image = image;
       }
+      const video = normalizeBoolean(item.video);
+      if (video !== undefined) {
+        entry.video = video;
+      }
       if (thinking) {
         entry.thinking = thinking;
       }

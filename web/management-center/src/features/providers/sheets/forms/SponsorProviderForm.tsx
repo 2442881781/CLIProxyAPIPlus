@@ -128,6 +128,7 @@ const modelsFromConfig = (
         priority?: number;
         testModel?: string;
         image?: boolean;
+        video?: boolean;
         thinking?: Record<string, unknown>;
       }>
     | undefined
@@ -139,6 +140,7 @@ const modelsFromConfig = (
         priority: model.priority,
         testModel: model.testModel,
         image: model.image === true,
+        video: model.video === true,
         thinkingJson: model.thinking ? JSON.stringify(model.thinking, null, 2) : '',
         thinkingLevels: readThinkingLevels(model.thinking),
       }))
