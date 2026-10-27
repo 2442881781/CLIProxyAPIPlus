@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	storeaccess "github.com/router-for-me/CLIProxyAPI/v8/internal/access/store_access"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/jb"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -130,6 +131,18 @@ func (e *jbWiringExecutor) CloseExecutionSession(sessionID string) {
 	if closer, ok := e.inner.(coreauth.ExecutionSessionCloser); ok && closer != nil {
 		closer.CloseExecutionSession(sessionID)
 	}
+}
+
+// SharesExecutionSessionsWith preserves shared upstream connections during reload.
+func (e *jbWiringExecutor) SharesExecutionSessionsWith(other coreauth.ProviderExecutor) bool {
+	sharer, ok := e.inner.(coreauth.ExecutionSessionSharer)
+	return ok && sharer.SharesExecutionSessionsWith(UnwrapJBWiringExecutor(other))
+}
+
+// UsesConfig reports the configuration snapshot used by the underlying executor.
+func (e *jbWiringExecutor) UsesConfig(cfg *config.Config) bool {
+	user, ok := e.inner.(interface{ UsesConfig(*config.Config) bool })
+	return ok && user.UsesConfig(cfg)
 }
 
 // RequestToFormat forwards the executor's preferred upstream format; an empty

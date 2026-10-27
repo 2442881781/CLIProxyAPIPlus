@@ -1,6 +1,7 @@
 package pluginhost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -157,18 +159,89 @@ func (h *Host) callHostAuthDelete(ctx context.Context, request []byte) ([]byte, 
 		return nil, fmt.Errorf("failed to delete auth file: %w", errRemove)
 	}
 	if manager := h.currentAuthManager(); manager != nil {
-		cleanPath := filepath.Clean(path)
 		for _, auth := range manager.List() {
-			if auth == nil {
+			if auth == nil || isRuntimeOnlyAuth(auth) {
 				continue
 			}
-			authPath := strings.TrimSpace(authAttribute(auth, coreauth.AttributePath))
-			if authPath != "" && filepath.Clean(authPath) == cleanPath {
+			if authMatchesPhysicalFile(auth, path) {
 				manager.Remove(ctx, auth.ID)
+				registry.GetGlobalRegistry().UnregisterClient(auth.ID)
 			}
 		}
 	}
 	return marshalRPCResult(pluginapi.HostAuthDeleteResponse{Name: filepath.Base(name), Path: path})
+}
+
+func (h *Host) callHostAuthModels(ctx context.Context, request []byte) ([]byte, error) {
+	_ = ctx
+	var req pluginapi.HostAuthModelsRequest
+	if len(bytesTrimSpace(request)) > 0 {
+		if errUnmarshal := json.Unmarshal(request, &req); errUnmarshal != nil {
+			return nil, fmt.Errorf("decode host auth models request: %w", errUnmarshal)
+		}
+	}
+	reg := registry.GetGlobalRegistry()
+	authIndex := strings.TrimSpace(req.AuthIndex)
+	if authIndex != "" {
+		auth, errGet := h.authByIndex(authIndex)
+		if errGet != nil {
+			return nil, errGet
+		}
+		return marshalRPCResult(pluginapi.HostAuthModelsResponse{
+			Credentials: []pluginapi.HostAuthModels{buildHostAuthModels(auth, reg)},
+		})
+	}
+	manager := h.currentAuthManager()
+	if manager == nil {
+		return marshalRPCResult(pluginapi.HostAuthModelsResponse{
+			Credentials: []pluginapi.HostAuthModels{},
+		})
+	}
+	auths := manager.List()
+	credentials := make([]pluginapi.HostAuthModels, 0, len(auths))
+	for _, auth := range auths {
+		if auth == nil {
+			continue
+		}
+		credentials = append(credentials, buildHostAuthModels(auth, reg))
+	}
+	sort.Slice(credentials, func(i, j int) bool {
+		leftID := strings.ToLower(credentials[i].ID)
+		rightID := strings.ToLower(credentials[j].ID)
+		if leftID != rightID {
+			return leftID < rightID
+		}
+		if credentials[i].ID != credentials[j].ID {
+			return credentials[i].ID < credentials[j].ID
+		}
+		return credentials[i].AuthIndex < credentials[j].AuthIndex
+	})
+	return marshalRPCResult(pluginapi.HostAuthModelsResponse{
+		Credentials: credentials,
+	})
+}
+
+func buildHostAuthModels(auth *coreauth.Auth, reg *registry.ModelRegistry) pluginapi.HostAuthModels {
+	auth.EnsureIndex()
+	var regModels []*registry.ModelInfo
+	if reg != nil && strings.TrimSpace(auth.ID) != "" {
+		regModels = reg.GetModelsForClient(auth.ID)
+	}
+	models := make([]string, 0, len(regModels))
+	for _, m := range regModels {
+		if m == nil {
+			continue
+		}
+		if id := strings.TrimSpace(m.ID); id != "" {
+			models = append(models, id)
+		}
+	}
+	return pluginapi.HostAuthModels{
+		ID:        auth.ID,
+		AuthIndex: auth.Index,
+		Provider:  strings.TrimSpace(auth.Provider),
+		Models:    models,
+	}
 }
 
 func (h *Host) listAuthFiles() ([]pluginapi.HostAuthFileEntry, error) {
@@ -424,10 +497,10 @@ func (h *Host) saveAuthFile(ctx context.Context, name string, data []byte) (stri
 	}
 	pluginID := hostCallbackPluginIDFromContext(ctx)
 	pluginActive := pluginID == "" || h.hasActiveAuthProviderPlugin(pluginID)
-	var auth *coreauth.Auth
+	var auths []*coreauth.Auth
 	if pluginActive {
 		var errBuild error
-		auth, errBuild = h.buildAuthFromFileData(ctx, dst, data)
+		auths, errBuild = h.buildAuthsFromFileData(ctx, dst, data)
 		if errBuild != nil {
 			return "", errBuild
 		}
@@ -438,7 +511,7 @@ func (h *Host) saveAuthFile(ctx context.Context, name string, data []byte) (stri
 	if !pluginActive {
 		return dst, nil
 	}
-	if errUpsert := h.upsertAuthRecord(ctx, auth); errUpsert != nil {
+	if errUpsert := h.upsertAuthRecordsForPath(ctx, dst, auths); errUpsert != nil {
 		return "", errUpsert
 	}
 	return dst, nil
@@ -457,7 +530,7 @@ func (h *Host) hasActiveAuthProviderPlugin(pluginID string) bool {
 	return false
 }
 
-func (h *Host) buildAuthFromFileData(ctx context.Context, path string, data []byte) (*coreauth.Auth, error) {
+func (h *Host) buildAuthsFromFileData(ctx context.Context, path string, data []byte) ([]*coreauth.Auth, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("auth path is empty")
 	}
@@ -473,98 +546,297 @@ func (h *Host) buildAuthFromFileData(ctx context.Context, path string, data []by
 		return nil, fmt.Errorf("invalid auth file: %w", errUnmarshal)
 	}
 	coreauth.NormalizeCredentialMetadata(metadata)
-	if h != nil {
-		providerHint, _ := metadata["type"].(string)
-		var auths []*coreauth.Auth
-		var handled bool
-		var errParse error
-		if pluginID := hostCallbackPluginIDFromContext(ctx); pluginID != "" {
-			for _, record := range h.activeRecords() {
-				if record.id != pluginID || record.plugin.Capabilities.AuthProvider == nil {
-					continue
-				}
-				auths, handled, errParse = h.callParseAuths(ctx, record, pluginapi.AuthParseRequest{
-					Provider: strings.TrimSpace(providerHint), Path: path, FileName: filepath.Base(path), RawJSON: data,
-				})
-				break
-			}
-		} else {
-			auths, handled, errParse = h.ParseAuths(ctx, pluginapi.AuthParseRequest{
-				Provider: strings.TrimSpace(providerHint), Path: path, FileName: filepath.Base(path), RawJSON: data,
-			})
-		}
-		if errParse != nil {
-			return nil, errParse
-		}
-		if handled {
-			if len(auths) != 1 || auths[0] == nil {
-				return nil, fmt.Errorf("host auth save requires exactly one auth per file")
-			}
-			parsed := auths[0].Clone()
-			parsed.FileName = filepath.Base(path)
-			return parsed, nil
-		}
+	if errWeight := coreauth.ValidateAuthWeight(&coreauth.Auth{Metadata: metadata}); errWeight != nil {
+		return nil, fmt.Errorf("invalid auth weight: %w", errWeight)
 	}
 	provider, _ := metadata["type"].(string)
-	if strings.TrimSpace(provider) == "" {
+	provider = strings.TrimSpace(provider)
+
+	fileName := filepath.Base(path)
+	defaultAuthID := h.authIDForPath(path)
+	if defaultAuthID == "" {
+		defaultAuthID = path
+	}
+	disabled, okDisabled := parseBoolValue(metadata["disabled"])
+	now := time.Now().UTC()
+
+	parseRequest := pluginapi.AuthParseRequest{
+		Provider: provider,
+		Path:     path,
+		FileName: defaultAuthID,
+		RawJSON:  data,
+	}
+	var parsedAuths []*coreauth.Auth
+	var handled bool
+	var errParse error
+	if pluginID := hostCallbackPluginIDFromContext(ctx); pluginID != "" {
+		for _, record := range h.activeRecords() {
+			if record.id != pluginID || record.plugin.Capabilities.AuthProvider == nil {
+				continue
+			}
+			parsedAuths, handled, errParse = h.callParseAuths(ctx, record, parseRequest)
+			break
+		}
+	} else {
+		parsedAuths, handled, errParse = h.ParseAuths(ctx, parseRequest)
+	}
+	if errParse != nil {
+		return nil, fmt.Errorf("invalid auth file: %w", errParse)
+	}
+	if handled {
+		out := make([]*coreauth.Auth, 0, len(parsedAuths))
+		for _, auth := range parsedAuths {
+			if auth == nil {
+				continue
+			}
+			if errWeight := coreauth.ValidateAuthWeight(auth); errWeight != nil {
+				return nil, fmt.Errorf("invalid auth weight: %w", errWeight)
+			}
+			out = append(out, auth)
+		}
+		for index, auth := range out {
+			coreauth.NormalizeCredentialMetadata(auth.Metadata)
+			if len(out) == 1 {
+				if auth.Metadata == nil {
+					auth.Metadata = make(map[string]any, len(metadata))
+				}
+				for key, value := range metadata {
+					if _, exists := auth.Metadata[key]; !exists {
+						auth.Metadata[key] = value
+					}
+				}
+				if pts, ok := auth.Storage.(*pluginTokenStorage); ok && pts != nil && len(bytes.TrimSpace(pts.rawJSON)) == 0 {
+					pts.rawJSON = bytes.Clone(data)
+				}
+			}
+			if len(out) > 1 {
+				coreauth.MarkPluginVirtualAuth(auth, path, index)
+			}
+			if strings.TrimSpace(auth.FileName) == "" {
+				auth.FileName = fileName
+			}
+			if len(out) == 1 && (strings.TrimSpace(auth.ID) == "" || auth.ID == defaultAuthID) {
+				if existing := h.findExistingAuthForSave(auth.ID, path, true); existing != nil && strings.TrimSpace(existing.ID) != "" {
+					auth.ID = strings.TrimSpace(existing.ID)
+				}
+			}
+			if strings.TrimSpace(auth.ID) == "" {
+				auth.ID = defaultAuthID
+			}
+			auth.CreatedAt = now
+			auth.UpdatedAt = now
+			if auth.Attributes == nil {
+				auth.Attributes = make(map[string]string)
+			}
+			auth.Attributes[coreauth.AttributePath] = path
+			auth.Attributes[coreauth.AttributeSource] = path
+			auth.Attributes[coreauth.AttributeSourceBackend] = coreauth.AuthSourceFile
+			if okDisabled && disabled {
+				auth.Disabled = true
+				auth.Status = coreauth.StatusDisabled
+				if auth.Metadata == nil {
+					auth.Metadata = make(map[string]any)
+				}
+				auth.Metadata["disabled"] = true
+			}
+			if p, ok := metadata["proxy_url"].(string); ok && auth.ProxyURL == "" {
+				auth.ProxyURL = strings.TrimSpace(p)
+			}
+			if pref, ok := metadata["prefix"].(string); ok && auth.Prefix == "" {
+				auth.Prefix = strings.Trim(strings.TrimSpace(pref), "/")
+			}
+			if errWeight := coreauth.ApplyAuthWeightMetadata(auth, metadata); errWeight != nil {
+				return nil, fmt.Errorf("invalid auth weight: %w", errWeight)
+			}
+			coreauth.ApplyAuthPriorityMetadata(auth, metadata)
+			if _, inherited := auth.Attributes[coreauth.AttributeFilePriority]; inherited {
+				if setter, ok := auth.Storage.(interface{ SetMetadata(map[string]any) }); ok {
+					setter.SetMetadata(auth.Metadata)
+				}
+			}
+			coreauth.ApplyCustomHeadersFromMetadata(auth)
+			if existing := h.findExistingAuthForSave(auth.ID, path, len(out) == 1); existing != nil {
+				preserveExistingAuthState(auth, existing)
+			}
+		}
+		return out, nil
+	}
+
+	if provider == "" {
 		provider = "unknown"
 	}
 	label := provider
 	if email, ok := metadata["email"].(string); ok && strings.TrimSpace(email) != "" {
 		label = strings.TrimSpace(email)
 	}
-	authID := h.authIDForPath(path)
-	if authID == "" {
-		authID = path
+	authID := defaultAuthID
+	existing := h.findExistingAuthForSave(authID, path, true)
+	if existing != nil && strings.TrimSpace(existing.ID) != "" {
+		authID = strings.TrimSpace(existing.ID)
 	}
 	status := coreauth.StatusActive
-	disabled := false
-	if d, okDisabled := parseBoolValue(metadata["disabled"]); okDisabled && d {
-		disabled = true
+	if okDisabled && disabled {
 		status = coreauth.StatusDisabled
+	} else {
+		disabled = false
 	}
 	auth := &coreauth.Auth{
 		ID:       authID,
 		Provider: provider,
-		FileName: filepath.Base(path),
+		FileName: fileName,
 		Label:    label,
 		Status:   status,
 		Disabled: disabled,
 		Attributes: map[string]string{
-			"path":   path,
-			"source": path,
+			coreauth.AttributePath:          path,
+			coreauth.AttributeSource:        path,
+			coreauth.AttributeSourceBackend: coreauth.AuthSourceFile,
 		},
 		Metadata:  metadata,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
-	if manager := h.currentAuthManager(); manager != nil {
-		if existing, ok := manager.GetByID(authID); ok {
-			auth.CreatedAt = existing.CreatedAt
-			auth.LastRefreshedAt = existing.LastRefreshedAt
-			auth.NextRetryAfter = existing.NextRetryAfter
-			auth.Runtime = existing.Runtime
-		}
+	if existing != nil {
+		preserveExistingAuthState(auth, existing)
 	}
-	if errWeight := coreauth.ValidateAuthWeight(auth); errWeight != nil {
+	if errWeight := coreauth.ApplyAuthWeightMetadata(auth, metadata); errWeight != nil {
 		return nil, fmt.Errorf("invalid auth weight: %w", errWeight)
 	}
+	coreauth.ApplyAuthPriorityMetadata(auth, metadata)
 	coreauth.ApplyCustomHeadersFromMetadata(auth)
-	return auth, nil
+	return []*coreauth.Auth{auth}, nil
 }
 
-func (h *Host) upsertAuthRecord(ctx context.Context, auth *coreauth.Auth) error {
+func preserveExistingAuthState(dst, existing *coreauth.Auth) {
+	if dst == nil || existing == nil {
+		return
+	}
+	dst.RegistrationEpoch = existing.RegistrationEpoch
+	if !existing.CreatedAt.IsZero() {
+		dst.CreatedAt = existing.CreatedAt
+	}
+	dst.LastRefreshedAt = existing.LastRefreshedAt
+	dst.NextRetryAfter = existing.NextRetryAfter
+	dst.NextRefreshAfter = existing.NextRefreshAfter
+	dst.Runtime = existing.Runtime
+	if !existing.Disabled && existing.Status != coreauth.StatusDisabled && !dst.Disabled && dst.Status != coreauth.StatusDisabled {
+		if len(dst.ModelStates) == 0 && len(existing.ModelStates) > 0 {
+			dst.ModelStates = existing.ModelStates
+		}
+	}
+}
+
+func (h *Host) findExistingAuthForSave(authID, path string, allowPathFallback bool) *coreauth.Auth {
 	manager := h.currentAuthManager()
-	if manager == nil || auth == nil {
+	if manager == nil {
 		return nil
 	}
-	if existing, ok := manager.GetByID(auth.ID); ok {
-		auth.CreatedAt = existing.CreatedAt
-		_, errUpdate := manager.Update(ctx, auth)
-		return errUpdate
+	authID = strings.TrimSpace(authID)
+	defaultID := h.authIDForPath(path)
+	if authID != "" && (!allowPathFallback || authID != defaultID) {
+		if existing, ok := manager.GetByID(authID); ok && existing != nil {
+			return existing
+		}
 	}
-	_, errRegister := manager.Register(ctx, auth)
-	return errRegister
+	if !allowPathFallback {
+		return nil
+	}
+	var matched *coreauth.Auth
+	for _, candidate := range manager.List() {
+		if candidate == nil || isRuntimeOnlyAuth(candidate) || coreauth.IsPluginVirtualAuth(candidate) {
+			continue
+		}
+		if !authMatchesPhysicalFile(candidate, path) {
+			continue
+		}
+		if matched == nil || (matched.ID == defaultID && candidate.ID != defaultID) {
+			matched = candidate
+		}
+	}
+	if matched != nil {
+		return matched
+	}
+	if authID != "" {
+		if existing, ok := manager.GetByID(authID); ok && existing != nil {
+			return existing
+		}
+	}
+	return nil
+}
+
+func authMatchesPhysicalFile(auth *coreauth.Auth, path string) bool {
+	if auth == nil || strings.TrimSpace(path) == "" {
+		return false
+	}
+	if sameHostAuthFilePath(authAttribute(auth, coreauth.AttributePath), path) ||
+		sameHostAuthFilePath(authAttribute(auth, coreauth.AttributeSource), path) ||
+		sameHostAuthFilePath(authAttribute(auth, coreauth.AttributeVirtualSource), path) {
+		return true
+	}
+	if strings.TrimSpace(authAttribute(auth, coreauth.AttributePath)) == "" {
+		return strings.EqualFold(strings.TrimSpace(auth.FileName), filepath.Base(path))
+	}
+	return false
+}
+
+func sameHostAuthFilePath(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	if absLeft, errLeft := filepath.Abs(left); errLeft == nil {
+		left = absLeft
+	}
+	if absRight, errRight := filepath.Abs(right); errRight == nil {
+		right = absRight
+	}
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+func (h *Host) upsertAuthRecordsForPath(ctx context.Context, path string, auths []*coreauth.Auth) error {
+	manager := h.currentAuthManager()
+	if manager == nil {
+		return nil
+	}
+	keepIDs := make(map[string]struct{}, len(auths))
+	for _, auth := range auths {
+		if auth == nil || strings.TrimSpace(auth.ID) == "" {
+			continue
+		}
+		keepIDs[auth.ID] = struct{}{}
+		if existing, ok := manager.GetByID(auth.ID); ok && existing != nil {
+			if !existing.CreatedAt.IsZero() {
+				auth.CreatedAt = existing.CreatedAt
+			}
+			if _, errUpdate := manager.Update(ctx, auth); errUpdate != nil {
+				return errUpdate
+			}
+			continue
+		}
+		if _, errRegister := manager.Register(ctx, auth); errRegister != nil {
+			return errRegister
+		}
+	}
+	skipPersistCtx := coreauth.WithSkipPersist(ctx)
+	for _, existing := range manager.List() {
+		if existing == nil || isRuntimeOnlyAuth(existing) {
+			continue
+		}
+		if _, keep := keepIDs[existing.ID]; keep {
+			continue
+		}
+		if authMatchesPhysicalFile(existing, path) {
+			manager.Remove(skipPersistCtx, existing.ID)
+			registry.GetGlobalRegistry().UnregisterClient(existing.ID)
+		}
+	}
+	return nil
 }
 
 func isUnsafeAuthFileName(name string) bool {
@@ -704,26 +976,7 @@ func (h *Host) resolvedAuthDir() string {
 }
 
 func (h *Host) authIDForPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	path = filepath.Clean(path)
-	if !filepath.IsAbs(path) {
-		if abs, errAbs := filepath.Abs(path); errAbs == nil {
-			path = abs
-		}
-	}
-	id := path
-	if authDir := h.resolvedAuthDir(); authDir != "" {
-		if rel, errRel := filepath.Rel(authDir, path); errRel == nil && rel != "" {
-			id = rel
-		}
-	}
-	if runtime.GOOS == "windows" {
-		id = strings.ToLower(id)
-	}
-	return id
+	return authIDForPath(path, h.resolvedAuthDir())
 }
 
 func authEmail(auth *coreauth.Auth) string {

@@ -184,6 +184,8 @@ func (h *Host) callFromPlugin(ctx context.Context, method string, request []byte
 		return h.callHostAuthSave(ctx, request)
 	case pluginabi.MethodHostAuthDelete:
 		return h.callHostAuthDelete(ctx, request)
+	case pluginabi.MethodHostAuthModels:
+		return h.callHostAuthModels(ctx, request)
 	case pluginabi.MethodHostAffinityLookup:
 		return h.callHostAffinityLookup(ctx, request)
 	case pluginabi.MethodHostRoutingResetCooldown:
@@ -208,7 +210,7 @@ func (h *Host) callbackHTTPClient(ctx context.Context) pluginapi.HostHTTPClient 
 			return client
 		}
 	}
-	return h.newHTTPClient(nil)
+	return h.newHTTPClientWithProxy(nil, oauthProxyURLFromContext(ctx))
 }
 
 func (h *Host) callbackHTTPClientForRequest(ctx context.Context, raw []byte) (pluginapi.HostHTTPClient, error) {
@@ -520,6 +522,7 @@ func modelExecutionRequestFromPlugin(req pluginapi.HostModelExecutionRequest, sk
 		AuthID:                  req.AuthID,
 		ProxyURL:                strings.TrimSpace(req.ProxyURL),
 		Path:                    strings.TrimSpace(req.Path),
+		CallerScope:             strings.TrimSpace(req.CallerScope),
 	}
 }
 

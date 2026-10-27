@@ -17,7 +17,11 @@ const (
 	// Version 6 preserves raw JSON bodies for plugin management responses.
 	// Plugins that still require HTML entity escaping on JSON response strings
 	// should keep schema_version < 6.
-	// Version 7 adds the bounded host.auth.delete callback.
+	// Version 7 adds the bounded host.auth.delete callback and lets request
+	// interceptors opt out of receiving the request body per phase via the
+	// request_interceptor_omit_body_before/after capabilities. The host omits
+	// RequestInterceptRequest.Body for that phase instead of cloning and
+	// Base64-encoding it. Plugins on schema_version < 7 still receive the body.
 	// Version 8 adds operation cancellation, explicit browser transport, and scoped retry errors.
 	SchemaVersion uint32 = 8
 	// SchemaVersionStreamChunkOmitRequestBody is the first schema version that omits
@@ -37,6 +41,9 @@ const (
 	SchemaVersionHostAuthDelete uint32 = 7
 	// SchemaVersionHostOperationWait also selects the v8 plugin HTTP route prefixes.
 	SchemaVersionHostOperationWait uint32 = 8
+	// SchemaVersionRequestInterceptorOmitBody is the first schema version where
+	// request interceptors may opt out of receiving the request body per phase.
+	SchemaVersionRequestInterceptorOmitBody uint32 = 7
 )
 
 const (
@@ -117,6 +124,7 @@ const (
 	MethodHostAuthGetRuntime     = "host.auth.get_runtime"
 	MethodHostAuthSave           = "host.auth.save"
 	MethodHostAuthDelete         = "host.auth.delete"
+	MethodHostAuthModels         = "host.auth.models"
 	MethodHostAffinityLookup     = "host.affinity.lookup"
 	// MethodHostOperationWait blocks until the owning callback scope is canceled or closed.
 	MethodHostOperationWait = "host.operation.wait"
@@ -141,6 +149,12 @@ type Error struct {
 	RequestScoped bool `json:"request_scoped,omitempty"`
 	// NoRetry forbids resubmission, credential rotation, and refresh for this operation.
 	NoRetry bool `json:"no_retry,omitempty"`
+	// RetryAfterSeconds carries upstream retry guidance for cooldown and response headers.
+	// It is an optional hint. Schema-version agreement does not negotiate support for
+	// this field, and older hosts silently ignore it, so plugins must not depend on it
+	// for correctness. The same pair is accepted as error_detail on host.stream.emit
+	// and host.stream.close.
+	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
 }
 
 // Error implements the error interface for Error.

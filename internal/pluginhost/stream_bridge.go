@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -45,16 +46,47 @@ type streamBridgeClose struct {
 }
 
 type rpcStreamEmitRequest struct {
-	StreamID    string           `json:"stream_id"`
-	Payload     []byte           `json:"payload,omitempty"`
-	Error       string           `json:"error,omitempty"`
+	StreamID string `json:"stream_id"`
+	Payload  []byte `json:"payload,omitempty"`
+	Error    string `json:"error,omitempty"`
+	// ErrorDetail optionally carries the structured plugin error (status, code,
+	// retry-after). It takes precedence over Error when present.
 	ErrorDetail *pluginabi.Error `json:"error_detail,omitempty"`
 }
 
 type rpcStreamCloseRequest struct {
-	StreamID    string           `json:"stream_id"`
-	Error       string           `json:"error,omitempty"`
+	StreamID string `json:"stream_id"`
+	Error    string `json:"error,omitempty"`
+	// ErrorDetail optionally carries the structured plugin error (status, code,
+	// retry-after). It takes precedence over Error when present.
 	ErrorDetail *pluginabi.Error `json:"error_detail,omitempty"`
+}
+
+// rpcStreamError builds the error reported to the client for a plugin stream
+// failure. A structured detail keeps the HTTP status and retry metadata that a
+// plain message cannot carry.
+func rpcStreamError(message string, detail *pluginabi.Error) error {
+	if detail != nil {
+		text := strings.TrimSpace(detail.Message)
+		if text == "" {
+			text = strings.TrimSpace(message)
+		}
+		if text == "" {
+			text = "plugin stream failed"
+		}
+		return rpcError{
+			Code:              strings.TrimSpace(detail.Code),
+			message:           text,
+			statusCode:        detail.HTTPStatus,
+			retryAfterSeconds: detail.RetryAfterSeconds,
+			requestScoped:     detail.RequestScoped,
+			noRetry:           detail.NoRetry,
+		}
+	}
+	if message != "" {
+		return fmt.Errorf("%s", message)
+	}
+	return nil
 }
 
 func newStreamBridge() *streamBridge {
@@ -164,7 +196,7 @@ func (s *streamBridgeStream) emit(ctx context.Context, chunk pluginapi.ExecutorS
 	return <-request.done
 }
 
-func (s *streamBridgeStream) close(err error) {
+func (s *streamBridgeStream) closeWithError(err error) {
 	if s == nil {
 		return
 	}
@@ -238,16 +270,6 @@ func (b *streamBridge) close(id string, errorMessage string) {
 	b.closeWithError(id, rpcStreamError(errorMessage, nil))
 }
 
-func rpcStreamError(message string, detail *pluginabi.Error) error {
-	if detail != nil {
-		return rpcError{Code: detail.Code, message: detail.Message, statusCode: detail.HTTPStatus, requestScoped: detail.RequestScoped, noRetry: detail.NoRetry}
-	}
-	if message != "" {
-		return fmt.Errorf("%s", message)
-	}
-	return nil
-}
-
 func (b *streamBridge) closeWithError(id string, err error) {
 	if b == nil || id == "" {
 		return
@@ -259,5 +281,5 @@ func (b *streamBridge) closeWithError(id string, err error) {
 	if stream == nil {
 		return
 	}
-	stream.close(err)
+	stream.closeWithError(err)
 }

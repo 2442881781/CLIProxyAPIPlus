@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // ExecutorManager is the registration surface RegisterExecutors needs.
@@ -50,9 +52,23 @@ func (h *Host) RegisterExecutors(manager ExecutorManager, modelRegistry modelPro
 	selectedModels := make(map[string][]*registry.ModelInfo)
 	providerModels := make(map[string][]*registry.ModelInfo)
 	claimedProviders := make(map[string]string)
+	claimedModels := make(map[string]struct{})
 	for _, registration := range registrations {
-		if !registration.hasExecutor {
-			appendModelsForProvider(providerModels, registration.provider, registration.models)
+		if registration.hasExecutor {
+			continue
+		}
+		appendModelsForProvider(providerModels, registration.provider, registration.models)
+		// Reserve native catalog models before plugin arbitration, independently of
+		// credential publication or exclusions. This preserves native priority without
+		// publishing availability, which remains credential-bound.
+		if h.providerHasNativeExecutor(manager, registration.provider) {
+			for _, model := range registration.models {
+				if model != nil {
+					if modelID := strings.TrimSpace(model.ID); modelID != "" {
+						claimedModels[modelID] = struct{}{}
+					}
+				}
+			}
 		}
 	}
 	for _, record := range records {
@@ -75,8 +91,25 @@ func (h *Host) RegisterExecutors(manager ExecutorManager, modelRegistry modelPro
 		if owner := claimedProviders[provider]; owner != "" && owner != record.id {
 			continue
 		}
+		models := registration.models[:0]
+		for _, model := range registration.models {
+			if model == nil {
+				continue
+			}
+			modelID := strings.TrimSpace(model.ID)
+			if modelID == "" {
+				continue
+			}
+			if _, reserved := claimedModels[modelID]; reserved {
+				continue
+			}
+			models = append(models, model)
+		}
+		if len(models) == 0 {
+			continue
+		}
 		claimedProviders[provider] = record.id
-		selectedModels[record.id] = cloneRegistryModels(registration.models)
+		selectedModels[record.id] = models
 	}
 
 	seenProviders := make(map[string]struct{})
@@ -165,6 +198,7 @@ func (h *Host) commitExecutorState(ctx context.Context, snap *Snapshot, manager 
 		}
 	}
 	h.executorModelClientIDs = nextModelClients
+	h.mu.Unlock()
 
 	for _, registration := range registrations {
 		if registration.adapter != nil && registration.provider != "" {
@@ -178,7 +212,6 @@ func (h *Host) commitExecutorState(ctx context.Context, snap *Snapshot, manager 
 		}
 		manager.UnregisterExecutor(provider)
 	}
-	h.mu.Unlock()
 
 	staticProviders := make(map[string]struct{}, len(registrations))
 	for _, registration := range registrations {
@@ -442,12 +475,23 @@ func (a *executorAdapter) prepareExecutorCall(req coreexecutor.Request, opts cor
 		return preparedExecutorCall{}, errOutput
 	}
 
+	baseModel := strings.TrimSpace(req.Model)
+	modelInfo := a.lookupPluginModelInfo(baseModel)
+	if parsed := thinking.ParseSuffix(req.Model); parsed.HasSuffix && modelInfo == nil {
+		baseModel = strings.TrimSpace(parsed.ModelName)
+		modelInfo = a.lookupPluginModelInfo(baseModel)
+	}
+	if baseModel == "" {
+		baseModel = req.Model
+	}
+
 	nativeReq := req
 	nativeOpts := opts
+	var updatesChanged bool
 	if inputRequested != "" && inputRequested != inputFormat {
 		translated := sdktranslator.TranslateRequestEnvelope(context.Background(), inputRequested, inputFormat, sdktranslator.RequestEnvelope{
 			Format: inputRequested,
-			Model:  req.Model,
+			Model:  baseModel,
 			Stream: opts.Stream,
 			Body:   req.Payload,
 		})
@@ -455,6 +499,53 @@ func (a *executorAdapter) prepareExecutorCall(req coreexecutor.Request, opts cor
 			return preparedExecutorCall{}, translated.Err
 		}
 		nativeReq.Payload = translated.Body
+		updatesChanged = translated.ConfigurationUpdatesChanged
+	}
+	hasPluginThinkingTarget := modelInfo != nil ||
+		registry.LookupModelInfo(baseModel, a.provider) != nil ||
+		thinking.GetProviderApplier(a.provider) != nil
+	if hasPluginThinkingTarget && baseModel != "" && gjson.GetBytes(nativeReq.Payload, "model").Exists() {
+		nativeReq.Payload = helps.SetStringIfDifferent(nativeReq.Payload, "model", baseModel)
+	}
+	originalTranslated := nativeReq.Payload
+	if len(nativeReq.Payload) > 0 {
+		body, errThinking := helps.ApplyRequestThinkingWithModelInfo(
+			nativeReq.Payload,
+			req,
+			opts,
+			inputRequested.String(),
+			inputFormat.String(),
+			a.provider,
+			modelInfo,
+			updatesChanged,
+		)
+		if errThinking != nil {
+			return preparedExecutorCall{}, errThinking
+		}
+		nativeReq.Payload = body
+	}
+	// User payload rules are the last host-side mutation before the plugin sees
+	// the request, matching on the suffix-free model like the built-in executors
+	// and using the canonical client format as source protocol.
+	if a.host != nil {
+		if cfg := a.host.currentRuntimeConfig(); cfg != nil {
+			finalizeOpts := opts
+			if inputRequested != "" {
+				finalizeOpts.SourceFormat = inputRequested
+			}
+			if len(req.Metadata) > 0 {
+				finalizeOpts.Metadata = mergeExecutorMetadata(req.Metadata, opts.Metadata)
+			}
+			root := ""
+			if inputFormat == sdktranslator.FormatAntigravity {
+				root = "request"
+			}
+			finalize := helps.NewPayloadFinalizer(cfg, a.provider, baseModel, inputFormat.String(), root, originalTranslated, req, finalizeOpts)
+			nativeReq.Payload = finalize(nativeReq.Payload)
+		}
+	}
+	if hasPluginThinkingTarget {
+		nativeReq.Model = baseModel
 	}
 	nativeReq.Format = outputFormat
 	nativeOpts.SourceFormat = inputFormat
@@ -468,6 +559,24 @@ func (a *executorAdapter) prepareExecutorCall(req coreexecutor.Request, opts cor
 		inputFormat:     inputFormat,
 		outputFormat:    outputFormat,
 	}, nil
+}
+
+func (a *executorAdapter) lookupPluginModelInfo(baseModel string) *registry.ModelInfo {
+	baseModel = strings.TrimSpace(baseModel)
+	if a == nil || a.host == nil || baseModel == "" {
+		return nil
+	}
+	for _, model := range a.host.ModelsForProvider(a.provider) {
+		if model != nil && strings.EqualFold(strings.TrimSpace(model.ID), baseModel) {
+			return model
+		}
+	}
+	for _, model := range a.host.modelRegistration(a.pluginID).models {
+		if model != nil && strings.EqualFold(strings.TrimSpace(model.ID), baseModel) {
+			return model
+		}
+	}
+	return nil
 }
 
 func (a *executorAdapter) RequestToFormat(req coreexecutor.Request, opts coreexecutor.Options) sdktranslator.Format {
@@ -832,7 +941,6 @@ func (a *executorAdapter) observeAndTranslateExecutorStream(ctx context.Context,
 	var streamErr error
 	var publishOnce sync.Once
 	var lineBuffer []byte
-	const maxLineBufferSize = 64 * 1024
 
 	publishResult := func() {
 		publishOnce.Do(func() {
@@ -903,10 +1011,6 @@ func (a *executorAdapter) observeAndTranslateExecutorStream(ctx context.Context,
 							helps.ObservePluginExecutorStreamUsage(prepared.outputFormat.String(), lineBuffer, &streamUsage)
 							lineBuffer = nil
 						}
-					}
-					if len(lineBuffer) > maxLineBufferSize {
-						helps.ObservePluginExecutorStreamUsage(prepared.outputFormat.String(), lineBuffer, &streamUsage)
-						lineBuffer = nil
 					}
 				}
 
@@ -1031,11 +1135,50 @@ func (a *executorAdapter) CountTokens(ctx context.Context, auth *coreauth.Auth, 
 	if errCountTokens != nil {
 		return coreexecutor.Response{}, errCountTokens
 	}
+	var payload []byte
+	translatedTokenCount := false
+	if prepared.outputFormat != prepared.requestedFormat {
+		// A token-count reply is not a model response; translating it as one
+		// wraps the count in a full completion message.
+		if count, okCount := pluginExecutorTokenCount(prepared.outputFormat, pluginResp.Payload); okCount {
+			if sdktranslator.HasTokenCountTransformer(prepared.outputFormat, prepared.requestedFormat) {
+				translated := sdktranslator.TranslateTokenCount(ctx, prepared.outputFormat, prepared.requestedFormat, count, pluginResp.Payload)
+				payload = translated
+				translatedTokenCount = true
+			}
+		}
+	}
+	if !translatedTokenCount {
+		payload = a.translateExecutorResponse(ctx, prepared, pluginResp.Payload, false, nil)
+	}
 	return coreexecutor.Response{
-		Payload:  a.translateExecutorResponse(ctx, prepared, pluginResp.Payload, false, nil),
+		Payload:  payload,
 		Metadata: cloneAnyMap(pluginResp.Metadata),
 		Headers:  cloneHeader(pluginResp.Headers),
 	}, nil
+}
+
+func pluginExecutorTokenCount(format sdktranslator.Format, payload []byte) (int64, bool) {
+	for _, path := range []string{"choices", "content", "candidates", "output", "response.output"} {
+		if gjson.GetBytes(payload, path).Exists() {
+			return 0, false
+		}
+	}
+	// response.usage.input_tokens is the native Codex count shape.
+	paths := []string{"usage.prompt_tokens", "input_tokens", "response.usage.input_tokens", "totalTokens", "total_tokens"}
+	if format == sdktranslator.FormatGemini {
+		paths = []string{"totalTokens", "usageMetadata.promptTokenCount", "input_tokens", "total_tokens"}
+	}
+	for _, path := range paths {
+		value := gjson.GetBytes(payload, path)
+		if value.Exists() && value.Type == gjson.Number {
+			count, errParse := strconv.ParseInt(value.Raw, 10, 64)
+			if errParse == nil && count >= 0 {
+				return count, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (a *executorAdapter) HttpRequest(ctx context.Context, auth *coreauth.Auth, req *http.Request) (resp *http.Response, err error) {

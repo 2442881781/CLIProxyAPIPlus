@@ -31,13 +31,13 @@ func TestOAuthModelPolicyAppliesToPluginAPIKeys(t *testing.T) {
 			OAuthExcludedModels: map[string][]string{provider: {"allowed-secret"}},
 		},
 	}
-	if got := svc.oauthAllowedModels(provider, coreauth.AuthKindAPIKey); len(got) != 1 || got[0] != "allowed-*" {
+	if got := svc.oauthAllowedModelsForConfig(svc.currentConfig(), provider, coreauth.AuthKindAPIKey); len(got) != 1 || got[0] != "allowed-*" {
 		t.Fatalf("plugin API-key allowlist missing: %#v", got)
 	}
 	if got := svc.oauthExcludedModels(provider, coreauth.AuthKindAPIKey); len(got) != 1 || got[0] != "allowed-secret" {
 		t.Fatalf("plugin API-key exclusions missing: %#v", got)
 	}
-	if got := svc.oauthAllowedModels("claude", coreauth.AuthKindAPIKey); got != nil {
+	if got := svc.oauthAllowedModelsForConfig(svc.currentConfig(), "claude", coreauth.AuthKindAPIKey); got != nil {
 		t.Fatalf("built-in API-key provider must ignore OAuth policy, got %#v", got)
 	}
 }

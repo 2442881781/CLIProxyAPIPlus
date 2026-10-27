@@ -4,7 +4,7 @@ Native C-ABI provider for the [Muse.ai personal agent](https://muse.ai/), not Me
 
 ## Requirements and build
 
-- Go 1.26+, a C compiler, and this checkout's schema 8 host extensions. Older CPA hosts do not provide the operation cancellation or registered video contracts.
+- Go 1.26.10+, a C compiler, and this checkout's schema 8 host extensions. Older CPA hosts do not provide the operation cancellation or registered video contracts.
 - A Chromium/Google Chrome executable on the machine running CPA. The plugin creates its own ephemeral profile and process for each operation.
 - An authorized Muse account, working egress, and the permissions/credits required for the requested capability. Local regression tests do not establish real Muse availability.
 

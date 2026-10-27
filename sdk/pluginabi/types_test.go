@@ -73,3 +73,25 @@ func TestErrorInterfaceAndConstructor(t *testing.T) {
 		t.Fatalf("default envelope JSON unexpectedly contained http_status: %s", string(defaultEnvBytes))
 	}
 }
+
+func TestErrorRoundTripPreservesRetryGuidanceAndScope(t *testing.T) {
+	want := Error{
+		Code:              "submitted",
+		Message:           "upstream operation failed after submission",
+		HTTPStatus:        429,
+		RequestScoped:     true,
+		NoRetry:           true,
+		RetryAfterSeconds: 30,
+	}
+	raw, err := json.Marshal(Envelope{Error: &want})
+	if err != nil {
+		t.Fatalf("marshal error envelope: %v", err)
+	}
+	var decoded Envelope
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal error envelope: %v", err)
+	}
+	if decoded.OK || decoded.Error == nil || *decoded.Error != want {
+		t.Fatalf("decoded error envelope = %#v, want error %#v", decoded, want)
+	}
+}

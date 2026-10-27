@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"testing"
 	"time"
 
@@ -78,11 +77,11 @@ func TestProviderQuotaRanksStaticPluginCandidateAgainstOrdinaryAuth(t *testing.T
 }
 
 func TestProviderQuotaExhaustionFiltersBeforePriorityAndAffinity(t *testing.T) {
-	for _, sticky := range []bool{false, true} {
-		t.Run(strconv.FormatBool(sticky), func(t *testing.T) {
+	for _, mode := range []string{"disabled", SessionAffinityRebindOnAny, SessionAffinityRebindOnQuota} {
+		t.Run(mode, func(t *testing.T) {
 			var selector Selector = &RoundRobinSelector{}
-			if sticky {
-				affinity := NewSessionAffinitySelector(selector)
+			if mode != "disabled" {
+				affinity := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{Fallback: selector, RebindOn: mode})
 				defer affinity.Stop()
 				selector = affinity
 			}
@@ -110,6 +109,17 @@ func TestProviderQuotaExhaustionFiltersBeforePriorityAndAffinity(t *testing.T) {
 				t.Fatal(errObserve)
 			}
 			pick("opencode-go") // Unknown quota is eligible even below the exhausted tier.
+			if errObserve := manager.ObserveProviderQuota(context.Background(), ProviderQuotaSnapshot{Provider: "commandcode", RemainingPercent: 80, ObservedAt: time.Now()}); errObserve != nil {
+				t.Fatal(errObserve)
+			}
+			if mode == "disabled" {
+				pick("commandcode")
+			} else {
+				pick("opencode-go") // Quota exhaustion rebinds even under the quota-only policy.
+			}
+			if errObserve := manager.ObserveProviderQuota(context.Background(), ProviderQuotaSnapshot{Provider: "commandcode", RemainingPercent: 0, ObservedAt: time.Now()}); errObserve != nil {
+				t.Fatal(errObserve)
+			}
 			if errObserve := manager.ObserveProviderQuota(context.Background(), ProviderQuotaSnapshot{Provider: "opencode-go", RemainingPercent: 0, ObservedAt: time.Now()}); errObserve != nil {
 				t.Fatal(errObserve)
 			}

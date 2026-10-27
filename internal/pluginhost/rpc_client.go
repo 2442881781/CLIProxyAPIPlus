@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -44,11 +46,12 @@ type rpcQuotaProvider struct {
 }
 
 type rpcError struct {
-	Code          string
-	message       string
-	statusCode    int
-	requestScoped bool
-	noRetry       bool
+	Code              string
+	message           string
+	statusCode        int
+	requestScoped     bool
+	noRetry           bool
+	retryAfterSeconds int
 }
 
 func (e rpcError) Error() string {
@@ -61,6 +64,27 @@ func (e rpcError) StatusCode() int {
 
 func (e rpcError) IsRequestScoped() bool { return e.requestScoped }
 func (e rpcError) NoRetry() bool         { return e.noRetry }
+
+func (e rpcError) RetryAfter() *time.Duration {
+	if e.retryAfterSeconds <= 0 {
+		return nil
+	}
+	seconds := int64(e.retryAfterSeconds)
+	maxSeconds := int64(1<<63-1) / int64(time.Second)
+	if seconds > maxSeconds {
+		seconds = maxSeconds
+	}
+	retryAfter := time.Duration(seconds) * time.Second
+	return &retryAfter
+}
+
+func (e rpcError) SafeResponseHeaders() http.Header {
+	retryAfter := e.RetryAfter()
+	if retryAfter == nil {
+		return nil
+	}
+	return http.Header{"Retry-After": []string{strconv.FormatInt(int64(*retryAfter/time.Second), 10)}}
+}
 
 type rpcResponseNormalizer struct {
 	*rpcPluginAdapter
@@ -137,6 +161,8 @@ func registerRPCPlugin(ctx context.Context, host *Host, id string, client plugin
 	}
 	if resp.Capabilities.RequestInterceptor {
 		plugin.Capabilities.RequestInterceptor = adapter
+		plugin.Capabilities.RequestInterceptorOmitBodyBefore = resp.Capabilities.RequestInterceptorOmitBodyBefore
+		plugin.Capabilities.RequestInterceptorOmitBodyAfter = resp.Capabilities.RequestInterceptorOmitBodyAfter
 	}
 	if resp.Capabilities.RequestLifecyclePlugin {
 		plugin.Capabilities.RequestLifecyclePlugin = adapter
@@ -371,11 +397,12 @@ func decodeEnvelopeResult[T any](envelope pluginabi.Envelope) (T, error) {
 				message = "plugin call failed"
 			}
 			return zero, rpcError{
-				Code:          strings.TrimSpace(envelope.Error.Code),
-				message:       message,
-				statusCode:    envelope.Error.HTTPStatus,
-				requestScoped: envelope.Error.RequestScoped,
-				noRetry:       envelope.Error.NoRetry,
+				Code:              strings.TrimSpace(envelope.Error.Code),
+				message:           message,
+				statusCode:        envelope.Error.HTTPStatus,
+				requestScoped:     envelope.Error.RequestScoped,
+				noRetry:           envelope.Error.NoRetry,
+				retryAfterSeconds: envelope.Error.RetryAfterSeconds,
 			}
 		}
 		return zero, fmt.Errorf("plugin call failed")

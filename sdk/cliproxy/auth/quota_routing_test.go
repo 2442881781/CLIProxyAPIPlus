@@ -231,6 +231,56 @@ func TestQuotaAwareSelectorKeepsExhaustedWindowCredentialWithCreditsEligible(t *
 	}
 }
 
+func TestSessionAffinityRebindOnQuotaDistinguishesCodexCreditsFromExhaustion(t *testing.T) {
+	for _, hasCredits := range []bool{false, true} {
+		t.Run(strconv.FormatBool(hasCredits), func(t *testing.T) {
+			selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+				Fallback:   &RoundRobinSelector{},
+				TTL:        time.Hour,
+				QuotaAware: true,
+				RebindOn:   SessionAffinityRebindOnQuota,
+			})
+			defer selector.Stop()
+			now := time.Now()
+			bound := quotaRoutingTestAuth("a-bound", "codex", 1, now, map[string]string{"X-Codex-Primary-Used-Percent": "20"})
+			fallback := quotaRoutingTestAuth("b-fallback", "codex", 0, now, map[string]string{"X-Codex-Primary-Used-Percent": "50"})
+			auths := []*Auth{bound, fallback}
+			opts := cliproxyexecutor.Options{Headers: http.Header{"X-Session-Id": {"credits-quota-binding"}}}
+			pick := func(wantID string) {
+				t.Helper()
+				selected, errPick := selector.Pick(context.Background(), "codex", "gpt-5", opts, auths)
+				if errPick != nil || selected == nil || selected.ID != wantID {
+					t.Fatalf("Pick() = %#v, %v; want %q", selected, errPick, wantID)
+				}
+			}
+			pick(bound.ID)
+			bound.Quota.Signals["X-Codex-Primary-Used-Percent"] = "100"
+			if hasCredits {
+				bound.Quota.Signals["X-Codex-Credits-Has-Credits"] = "true"
+				bound.Quota.Signals["X-Codex-Credits-Balance"] = "56438.77"
+				// Credit-backed exhaustion remains eligible until a transient failure.
+				pick(bound.ID)
+			}
+			bound.Unavailable = true
+			bound.NextRetryAfter = now.Add(time.Minute)
+			bound.LastError = &Error{HTTPStatus: http.StatusServiceUnavailable, Message: "temporary overload"}
+			pick(fallback.ID)
+
+			bound.Unavailable = false
+			bound.NextRetryAfter = time.Time{}
+			bound.LastError = nil
+			if hasCredits {
+				// The original binding survives a transient failure when credits pay for requests.
+				pick(bound.ID)
+			} else {
+				bound.Quota.Signals["X-Codex-Primary-Used-Percent"] = "20"
+				// Actual quota exhaustion rebinds permanently, even after the plan recovers.
+				pick(fallback.ID)
+			}
+		})
+	}
+}
+
 func TestQuotaAwareSelectorFallsBackWhenQuotaUnknownOrStale(t *testing.T) {
 	now := time.Now()
 	selector := NewQuotaAwareSelector(&RoundRobinSelector{})
@@ -586,6 +636,50 @@ func TestSessionAffinityFailsOverFromExhaustedQuota(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSessionAffinityQuotaMigrationKeepsLCPContextAndGeneration(t *testing.T) {
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback:   &RoundRobinSelector{},
+		QuotaAware: true,
+		RebindOn:   SessionAffinityRebindOnQuota,
+	})
+	defer selector.Stop()
+	now := time.Now()
+	bound := quotaRoutingTestAuth("a-bound", "codex", 1, now, map[string]string{"normalized_quota_remaining_percent": "50"})
+	other := quotaRoutingTestAuth("b-other", "codex", 0, now, map[string]string{"normalized_quota_remaining_percent": "40"})
+	auths := []*Auth{bound, other}
+	options := func() cliproxyexecutor.Options {
+		return cliproxyexecutor.Options{
+			SourceFormat:    sdktranslator.FormatOpenAI,
+			OriginalRequest: []byte(`{"messages":[{"role":"system","content":"stable"},{"role":"user","content":"hello"}]}`),
+			Metadata:        map[string]any{cliproxyexecutor.CallerScopeMetadataKey: "quota-migration-caller"},
+		}
+	}
+	if selected, errPick := selector.Pick(context.Background(), "codex", "model", options(), auths); errPick != nil || selected == nil || selected.ID != bound.ID {
+		t.Fatalf("initial selection = %#v, %v; want %q", selected, errPick, bound.ID)
+	}
+	bound.Quota.Signals["normalized_quota_remaining_percent"] = "5"
+	opts := options()
+	selected, errPick := selector.Pick(context.Background(), "codex", "model", opts, auths)
+	if errPick != nil || selected == nil || selected.ID != other.ID {
+		t.Fatalf("migration selection = %#v, %v; want %q", selected, errPick, other.ID)
+	}
+	if generation, ok := opts.Metadata[cliproxyexecutor.LCPAccessGenerationMetadataKey].(uint64); !ok || generation == 0 {
+		t.Fatalf("migration generation = %v, want current binding generation", opts.Metadata[cliproxyexecutor.LCPAccessGenerationMetadataKey])
+	}
+	fingerprints, minPrefixLength := lcpFingerprintsFromMetadata(opts.Metadata)
+	tailFingerprints, _ := opts.Metadata[cliproxyexecutor.LCPTailFingerprintsMetadataKey].([]string)
+	envDigest, _ := opts.Metadata[cliproxyexecutor.LCPEnvironmentDigestMetadataKey].(string)
+	namespace := lcpAffinityNamespace("codex", "model", opts.Metadata)
+	match, ok := selector.matcher.MatchFingerprintsWithContext(namespace, fingerprints, tailFingerprints, envDigest, minPrefixLength)
+	if !ok || match.AuthID != other.ID || match.SessionID != opts.Metadata[cliproxyexecutor.LCPAffinitySessionIDMetadataKey] {
+		t.Fatalf("migration binding = %+v, %v; want selected auth and published session identity", match, ok)
+	}
+	bound.Quota.Signals["normalized_quota_remaining_percent"] = "80"
+	if selected, errPick := selector.Pick(context.Background(), "codex", "model", options(), auths); errPick != nil || selected == nil || selected.ID != other.ID {
+		t.Fatalf("post-migration selection = %#v, %v; want sticky %q", selected, errPick, other.ID)
 	}
 }
 
