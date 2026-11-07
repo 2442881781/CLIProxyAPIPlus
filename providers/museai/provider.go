@@ -268,7 +268,7 @@ func dispatch(method string, raw []byte) (any, error) {
 
 func registration() any {
 	return map[string]any{
-		"schema_version": 8,
+		"schema_version": 11,
 		"metadata": pluginapi.Metadata{Name: providerID, Version: pluginVersion, Author: "CLIProxyAPI contributors", GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{
 			{Name: "chromium", Type: pluginapi.ConfigFieldTypeString, Description: "Dedicated Chromium executable; never attaches to a user browser"},
 			{Name: "data-dir", Type: pluginapi.ConfigFieldTypeString, Description: "Private directory for browser runtime, video tasks and media; credentials remain in CPA auth storage"},

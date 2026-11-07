@@ -677,7 +677,7 @@ func TestHostExecutePluginExecutorStreamRewritesResponseModelToClientModel(t *te
 		}
 		payload = append(payload, chunk.Payload...)
 	}
-	if string(payload) != "data: {\"model\":\"public-model\"}\n\n" {
+	if string(payload) != `{"model":"public-model"}` {
 		t.Fatalf("payload = %q, want public model", payload)
 	}
 }

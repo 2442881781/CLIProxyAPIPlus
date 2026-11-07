@@ -32,6 +32,18 @@ func TestQuotaStateRemainingPercent(t *testing.T) {
 			known: true,
 		},
 		{
+			name:     "claude ignores rejected overage window",
+			provider: "claude",
+			signals: map[string]string{
+				"Anthropic-Ratelimit-Unified-7d-Utilization":          "0.62",
+				"Anthropic-Ratelimit-Unified-7d_oi-Utilization":       "1.0",
+				"Anthropic-Ratelimit-Unified-Overage-Status":          "rejected",
+				"Anthropic-Ratelimit-Unified-Overage-Disabled-Reason": "out_of_credits",
+			},
+			want:  38,
+			known: true,
+		},
+		{
 			name:     "codex uses most consumed base window",
 			provider: "codex",
 			signals: map[string]string{

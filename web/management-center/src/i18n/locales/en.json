@@ -1525,6 +1525,7 @@
     "reset_failed": "Reset failed: {{message}}",
     "plan": "Plan",
     "monthly_credits": "Monthly credits",
+    "overage_balance": "Overage balance",
     "used_percent": "{{value}}% used",
     "remaining_percent": "{{value}}% remaining",
     "used_value": "{{used}} / {{limit}} {{unit}} used",

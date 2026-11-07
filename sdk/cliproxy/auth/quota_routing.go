@@ -96,9 +96,16 @@ func normalizedRemainingPercent(signals map[string]string) (float64, bool) {
 func claudeRemainingPercent(signals map[string]string) (float64, bool) {
 	maxUsed := 0.0
 	found := false
+	overageUnavailable := claudeOverageUnavailable(signals)
 	for key, raw := range signals {
 		lowerKey := strings.ToLower(strings.TrimSpace(key))
 		if !strings.HasPrefix(lowerKey, "anthropic-ratelimit-unified-") || !strings.HasSuffix(lowerKey, "-utilization") {
+			continue
+		}
+		// The overage-included window only contributes capacity while overage
+		// spending is allowed. A rejected/disabled overage window must not
+		// block the plan windows that are still serving requests.
+		if overageUnavailable && strings.Contains(lowerKey, "-7d_oi-") {
 			continue
 		}
 		value, ok := parseQuotaNumber(raw)
@@ -122,6 +129,23 @@ func claudeRemainingPercent(signals map[string]string) (float64, bool) {
 		return 0, false
 	}
 	return 100 - maxUsed, true
+}
+
+func claudeOverageUnavailable(signals map[string]string) bool {
+	for key, raw := range signals {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "anthropic-ratelimit-unified-overage-status":
+			status := strings.ToLower(strings.TrimSpace(raw))
+			if status == "rejected" || status == "disabled" {
+				return true
+			}
+		case "anthropic-ratelimit-unified-overage-disabled-reason":
+			if strings.TrimSpace(raw) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func codexRemainingPercent(signals map[string]string) (float64, bool) {

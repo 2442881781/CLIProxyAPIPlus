@@ -1515,6 +1515,7 @@
     "reset_failed": "Не удалось сбросить лимит: {{message}}",
     "plan": "Тариф",
     "monthly_credits": "Месячный баланс",
+    "overage_balance": "Баланс сверх лимита",
     "used_percent": "Использовано {{value}}%",
     "remaining_percent": "Осталось {{value}}%",
     "used_value": "Использовано {{used}} / {{limit}} {{unit}}",

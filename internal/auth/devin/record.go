@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,6 +106,9 @@ func (s *DevinAuthService) CreateAuthRecord(ctx context.Context, token string) (
 	if userStatus != nil {
 		quotaSignals["daily_quota_remaining_percent"] = fmt.Sprintf("%d%%", userStatus.DailyQuotaRemainingPercent)
 		quotaSignals["weekly_quota_remaining_percent"] = fmt.Sprintf("%d%%", userStatus.WeeklyQuotaRemainingPercent)
+		if userStatus.OverageBalanceMicros > 0 {
+			quotaSignals["overage_balance_micros"] = strconv.FormatInt(userStatus.OverageBalanceMicros, 10)
+		}
 		if !userStatus.DailyQuotaResetAt.IsZero() {
 			quotaSignals["daily_quota_reset_at"] = userStatus.DailyQuotaResetAt.Format(time.RFC3339)
 		}

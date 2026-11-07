@@ -55,7 +55,7 @@ func TestCreateAuthRecord(t *testing.T) {
 					t.Errorf("field %s differs between credential attributes and metadata", key)
 				}
 			}
-			if record.Quota.Signals["daily_quota_remaining_percent"] != "100%" || record.Quota.Signals["weekly_quota_remaining_percent"] != "50%" || record.Quota.Signals["daily_quota_reset_at"] == "" {
+			if record.Quota.Signals["daily_quota_remaining_percent"] != "100%" || record.Quota.Signals["weekly_quota_remaining_percent"] != "50%" || record.Quota.Signals["overage_balance_micros"] != "8040000" || record.Quota.Signals["daily_quota_reset_at"] == "" {
 				t.Fatalf("unexpected quota signals: %v", record.Quota.Signals)
 			}
 		})

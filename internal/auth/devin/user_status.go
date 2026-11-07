@@ -35,6 +35,7 @@ type DevinUserStatus struct {
 	Plan                        string    `json:"plan,omitempty"`
 	DailyQuotaRemainingPercent  int64     `json:"daily_quota_remaining_percent"`
 	WeeklyQuotaRemainingPercent int64     `json:"weekly_quota_remaining_percent"`
+	OverageBalanceMicros        int64     `json:"overage_balance_micros"`
 	DailyQuotaResetAt           time.Time `json:"daily_quota_reset_at,omitempty"`
 	WeeklyQuotaResetAt          time.Time `json:"weekly_quota_reset_at,omitempty"`
 	PlanStart                   time.Time `json:"plan_start,omitempty"`
@@ -218,6 +219,8 @@ func parsePlanStatus(data []byte, status *DevinUserStatus) {
 				status.DailyQuotaRemainingPercent = int64(val)
 			case 15:
 				status.WeeklyQuotaRemainingPercent = int64(val)
+			case 16:
+				status.OverageBalanceMicros = int64(val)
 			case 17:
 				if val > 0 {
 					status.DailyQuotaResetAt = time.Unix(int64(val), 0).UTC()

@@ -439,8 +439,10 @@ func (s *Service) prepareCoreAuthForModelRegistration(ctx context.Context, auth 
 			}
 		}
 		if !auth.HasFileSnapshot() && !existing.Disabled && existing.Status != coreauth.StatusDisabled && !auth.Disabled && auth.Status != coreauth.StatusDisabled {
-			auth.LastRefreshedAt = existing.LastRefreshedAt
-			auth.NextRefreshAfter = existing.NextRefreshAfter
+			if !coreauth.CredentialsChanged(existing, auth) {
+				auth.LastRefreshedAt = existing.LastRefreshedAt
+				auth.NextRefreshAfter = existing.NextRefreshAfter
+			}
 			if auth.Quota.ObservedAt.Before(existing.Quota.ObservedAt) {
 				auth.Quota.ObservedAt = existing.Quota.ObservedAt
 				auth.Quota.Signals = existing.Quota.Signals

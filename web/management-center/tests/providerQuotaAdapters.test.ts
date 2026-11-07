@@ -344,6 +344,7 @@ describe('AI provider quota payload adapters', () => {
             plan: 'Team',
             daily_quota_remaining_percent: '70%',
             weekly_quota_remaining_percent: '40%',
+            overage_balance_micros: '8040000',
             daily_quota_reset_at: '1800000000000',
           },
         },
@@ -353,6 +354,9 @@ describe('AI provider quota payload adapters', () => {
 
     expect(quota.plan).toBe('Team');
     expect(quota.windows.map((window) => window.usedPercent)).toEqual([30, 60]);
+    expect(quota.balance).toBe(8.04);
+    expect(quota.balanceUnit).toBe('USD');
+    expect(quota.balanceLabelKey).toBe('provider_quota.overage_balance');
   });
 });
 

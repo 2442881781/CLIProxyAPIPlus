@@ -8,6 +8,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require golang.org/x/net v0.60.0 // indirect
+require (
+	github.com/MoeForge/moego v0.1.0-alpha.1 // indirect
+	golang.org/x/net v0.60.0 // indirect
+)
 
 replace github.com/router-for-me/CLIProxyAPI/v8 => ../..

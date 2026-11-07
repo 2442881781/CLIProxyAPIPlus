@@ -433,6 +433,7 @@ export interface ProviderQuotaData {
   windows: ProviderQuotaWindow[];
   balance?: number;
   balanceUnit?: string;
+  balanceLabelKey?: string;
   resetCredits?: ProviderQuotaResetCredit[];
   resetCreditsError?: string;
 }

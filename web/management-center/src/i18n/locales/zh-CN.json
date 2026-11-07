@@ -1525,6 +1525,7 @@
     "reset_failed": "重置失败：{{message}}",
     "plan": "套餐",
     "monthly_credits": "月度余额",
+    "overage_balance": "额外余额",
     "used_percent": "已用 {{value}}%",
     "remaining_percent": "剩余 {{value}}%",
     "used_value": "已用 {{used}} / {{limit}} {{unit}}",

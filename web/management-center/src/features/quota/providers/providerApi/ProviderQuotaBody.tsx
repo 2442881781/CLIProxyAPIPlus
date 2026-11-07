@@ -29,7 +29,9 @@ export function ProviderQuotaBody({ quota, classes }: ProviderQuotaBodyProps) {
           )}
           {quota.balance !== undefined && (
             <div className={classes.codexPlanItem}>
-              <span className={classes.codexPlanLabel}>{t('provider_quota.monthly_credits')}</span>
+              <span className={classes.codexPlanLabel}>
+                {t(quota.balanceLabelKey ?? 'provider_quota.monthly_credits')}
+              </span>
               <span className={classes.codexPlanValue}>
                 {quota.balanceUnit === 'USD' ? '$' : ''}
                 {formatValue(quota.balance)}

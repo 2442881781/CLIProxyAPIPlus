@@ -70,6 +70,7 @@ type Handler struct {
 	searchService           *searchproxy.Service
 	siwcOAuthFactory        func(*config.Config) siwcOAuthService
 	siwcCommitMu            sync.Mutex
+	pluginLoginSaveMu       sync.Mutex
 }
 
 type configReloadSnapshot struct {

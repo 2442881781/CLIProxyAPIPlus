@@ -73,6 +73,10 @@ func buildMockUserStatusResponse() []byte {
 	planStatus = protowire.AppendTag(planStatus, 15, protowire.VarintType)
 	planStatus = protowire.AppendVarint(planStatus, 50)
 
+	// overage balance: $8.04
+	planStatus = protowire.AppendTag(planStatus, 16, protowire.VarintType)
+	planStatus = protowire.AppendVarint(planStatus, 8040000)
+
 	// daily reset: 1789200000
 	planStatus = protowire.AppendTag(planStatus, 17, protowire.VarintType)
 	planStatus = protowire.AppendVarint(planStatus, 1789200000)
@@ -140,6 +144,9 @@ func TestParseGetUserStatusResponse(t *testing.T) {
 	}
 	if status.WeeklyQuotaRemainingPercent != 50 {
 		t.Errorf("expected WeeklyQuotaRemainingPercent=50, got %d", status.WeeklyQuotaRemainingPercent)
+	}
+	if status.OverageBalanceMicros != 8040000 {
+		t.Errorf("expected OverageBalanceMicros=8040000, got %d", status.OverageBalanceMicros)
 	}
 	expectedDailyReset := time.Unix(1789200000, 0).UTC()
 	if !status.DailyQuotaResetAt.Equal(expectedDailyReset) {

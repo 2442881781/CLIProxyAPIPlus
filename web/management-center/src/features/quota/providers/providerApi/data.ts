@@ -324,7 +324,17 @@ const parseDevinQuota = (file: AuthFileItem, t: TFunction): ProviderQuotaData =>
   addRemainingWindow('weekly');
   if (windows.length === 0) throw new Error(t('provider_quota.empty_data'));
   const plan = signals.plan;
-  return { windows, ...(typeof plan === 'string' && plan.trim() ? { plan: plan.trim() } : {}) };
+  const overageBalanceMicros = asNumber(
+    signals.overage_balance_micros ?? signals.overageBalanceMicros
+  );
+  const balance = overageBalanceMicros !== null ? overageBalanceMicros / 1_000_000 : null;
+  return {
+    windows,
+    ...(typeof plan === 'string' && plan.trim() ? { plan: plan.trim() } : {}),
+    ...(balance !== null && balance > 0
+      ? { balance, balanceUnit: 'USD', balanceLabelKey: 'provider_quota.overage_balance' }
+      : {}),
+  };
 };
 
 const snapshotSourceToQuotaData = (
