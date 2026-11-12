@@ -81,6 +81,7 @@ func rpcStreamError(message string, detail *pluginabi.Error) error {
 			retryAfterSeconds: detail.RetryAfterSeconds,
 			requestScoped:     detail.RequestScoped,
 			noRetry:           detail.NoRetry,
+			credentialScoped:  detail.CredentialScoped,
 		}
 	}
 	if message != "" {

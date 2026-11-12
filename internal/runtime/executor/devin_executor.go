@@ -239,6 +239,12 @@ func (e *DevinExecutor) CountTokens(_ context.Context, _ *cliproxyauth.Auth, req
 // Execute performs non-streaming execution against the Devin backend.
 func (e *DevinExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	ctx = helps.EnsureSessionContext(ctx, opts, req.Payload)
+	if errExpand := helps.ExpandResponsesCompactionCapsules(&req, &opts, "devin"); errExpand != nil {
+		return resp, statusErr{code: http.StatusBadRequest, msg: errExpand.Error()}
+	}
+	if helps.HasResponsesCompactionTriggerRequest(req, opts) {
+		return e.executeDevinResponsesCompaction(ctx, auth, req, opts)
+	}
 	targetModel := thinking.ParseSuffix(req.Model).ModelName
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, targetModel, auth)
@@ -277,8 +283,11 @@ func (e *DevinExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		errData, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
+		errData, errRead := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
 		helps.AppendAPIResponseChunk(ctx, e.cfg, errData)
+		if errRead != nil {
+			helps.RecordAPIResponseError(ctx, e.cfg, errRead)
+		}
 		return resp, newDevinStatusErrorForAuth(httpResp.StatusCode, httpResp.Header, errData, auth)
 	}
 
@@ -329,6 +338,12 @@ func (e *DevinExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 // ExecuteStream performs streaming execution against the Devin backend.
 func (e *DevinExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (_ *cliproxyexecutor.StreamResult, err error) {
 	ctx = helps.EnsureSessionContext(ctx, opts, req.Payload)
+	if errExpand := helps.ExpandResponsesCompactionCapsules(&req, &opts, "devin"); errExpand != nil {
+		return nil, statusErr{code: http.StatusBadRequest, msg: errExpand.Error()}
+	}
+	if helps.HasResponsesCompactionTriggerRequest(req, opts) {
+		return e.executeDevinResponsesCompactionStream(ctx, auth, req, opts)
+	}
 	targetModel := thinking.ParseSuffix(req.Model).ModelName
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, targetModel, auth)
@@ -363,9 +378,12 @@ func (e *DevinExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		errData, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
+		errData, errRead := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
 		_ = httpResp.Body.Close()
 		helps.AppendAPIResponseChunk(ctx, e.cfg, errData)
+		if errRead != nil {
+			helps.RecordAPIResponseError(ctx, e.cfg, errRead)
+		}
 		return nil, newDevinStatusErrorForAuth(httpResp.StatusCode, httpResp.Header, errData, auth)
 	}
 
@@ -1222,7 +1240,7 @@ func (e *DevinExecutor) streamDevinFramesForAuth(
 		_ = completedDoc.Set("interaction.finish_reason", completionFinishReason)
 	}
 	if finalUsage != nil {
-		totalInput := finalUsage.PromptTokens + finalUsage.CachedTokens
+		totalInput := devinTotalInputTokens(finalUsage)
 		totalOutput := finalUsage.CompletionTokens
 		totalTokens := totalInput + totalOutput
 
@@ -1653,7 +1671,7 @@ func consumeDevinFramesToInteractionsForAuth(body io.Reader, model, chatModelUID
 	}
 
 	if finalUsage != nil {
-		totalInput := finalUsage.PromptTokens + finalUsage.CachedTokens
+		totalInput := devinTotalInputTokens(finalUsage)
 		totalOutput := finalUsage.CompletionTokens
 		totalTokens := totalInput + totalOutput
 
@@ -2682,15 +2700,23 @@ func (e *DevinExecutor) getSensitiveWords() []string {
 	return nil
 }
 
+func (e *DevinExecutor) getSensitiveWordsReplace() map[string]string {
+	if e != nil && e.cfg != nil && len(e.cfg.Devin.SensitiveWordsReplace) > 0 {
+		return e.cfg.Devin.SensitiveWordsReplace
+	}
+	return nil
+}
+
 func (e *DevinExecutor) getSensitiveWordMatcher() *helps.SensitiveWordMatcher {
 	if e == nil {
 		return nil
 	}
 	words := e.getSensitiveWords()
-	if len(words) == 0 {
+	replacements := e.getSensitiveWordsReplace()
+	if len(words) == 0 && len(replacements) == 0 {
 		return nil
 	}
-	key := strings.Join(words, "\x00")
+	key := helps.SensitiveWordConfigCacheKey(words, replacements)
 	e.matcherMu.RLock()
 	if e.lastWordsKey == key {
 		m := e.cachedMatcher
@@ -2705,7 +2731,7 @@ func (e *DevinExecutor) getSensitiveWordMatcher() *helps.SensitiveWordMatcher {
 		return e.cachedMatcher
 	}
 	e.lastWordsKey = key
-	e.cachedMatcher = helps.BuildSensitiveWordMatcher(words)
+	e.cachedMatcher = helps.BuildSensitiveWordMatcherWithReplacements(words, replacements)
 	return e.cachedMatcher
 }
 
@@ -2864,6 +2890,17 @@ func resolveDevinSessionAndCascadeIDs(ctx context.Context, sessionID, cascadeID 
 		cascadeID = normalizeDevinUUID(cascadeID)
 	}
 	return sessionID, cascadeID
+}
+
+// devinTotalInputTokens returns the full prompt size. Devin reports the prompt in
+// three disjoint parts: uncached (field 2), cache write (field 4) and cache read
+// (field 5). A cache miss on the GPT route is almost all cache write, so leaving
+// it out reported a few tokens for a full prompt.
+func devinTotalInputTokens(u *helps.DevinUsage) int64 {
+	if u == nil {
+		return 0
+	}
+	return u.PromptTokens + u.CachedTokens + u.CacheWriteTokens
 }
 
 func normalizeDevinUUID(raw string) string {

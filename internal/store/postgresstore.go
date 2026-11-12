@@ -57,6 +57,8 @@ type PostgresStore struct {
 	providerQuotaStore *postgresProviderQuotaStore
 	mu                 sync.Mutex
 	persistAuthFn      func(ctx context.Context, relID string, data []byte) error
+	refreshSchemaMu    sync.Mutex
+	refreshSchemaReady bool
 }
 
 // NewPostgresStore establishes a connection to PostgreSQL and prepares the local workspace.
@@ -215,7 +217,7 @@ func (s *PostgresStore) EnsureSchema(ctx context.Context) error {
 	`, usageTable)); err != nil {
 		return fmt.Errorf("postgres store: create usage table: %w", err)
 	}
-	return nil
+	return s.ensureRefreshSchema(ctx)
 }
 
 // Bootstrap synchronizes configuration and auth records between PostgreSQL and the local workspace.
