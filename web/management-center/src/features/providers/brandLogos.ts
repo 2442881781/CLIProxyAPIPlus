@@ -10,6 +10,7 @@ import xaiLightLogo from '@/assets/icons/grok.svg';
 import xaiDarkLogo from '@/assets/icons/grok-dark.svg';
 import kimiLightLogo from '@/assets/icons/kimi-light.svg';
 import kimiDarkLogo from '@/assets/icons/kimi-dark.svg';
+import metaLogo from '@/assets/icons/meta.svg';
 import type { ProviderBrand } from './types';
 
 export interface ProviderBrandLogo {
@@ -26,6 +27,7 @@ export const PROVIDER_LOGOS: Record<ProviderBrand, ProviderBrandLogo> = {
   claude: { src: claudeLogo },
   codex: { src: codexLogo },
   xai: { src: xaiLightLogo, darkSrc: xaiDarkLogo, transparent: true },
+  meta: { src: metaLogo, transparent: true },
   vertex: { src: vertexLogo },
   openaiCompatibility: { src: openaiLightLogo, darkSrc: openaiDarkLogo, transparent: true },
   fennoAI: { src: fennoAILogo, transparent: true },

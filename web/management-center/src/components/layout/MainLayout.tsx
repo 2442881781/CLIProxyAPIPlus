@@ -33,6 +33,7 @@ import {
   IconSearch,
   IconServer,
   IconSidebarStore,
+  IconSidebarRouting,
   IconSidebarSystem,
   IconChevronDown,
 } from '@/components/ui/icons';
@@ -70,6 +71,7 @@ const sidebarIcons: Record<string, ReactNode> = {
   accessGroups: <IconNetwork size={18} />,
   searchKeys: <IconSearch size={18} />,
   serverMonitor: <IconServer size={18} />,
+  routing: <IconSidebarRouting size={18} />,
   plugins: <IconSidebarPlugins size={18} />,
   pluginStore: <IconSidebarStore size={18} />,
   config: <IconSidebarConfig size={18} />,
@@ -620,6 +622,12 @@ export function MainLayout() {
           labelKey: 'nav.model_routes',
           metaKey: 'nav_meta.model_routes',
           icon: sidebarIcons.modelRoutes,
+        },
+        {
+          path: '/routing',
+          labelKey: 'nav.routing',
+          metaKey: 'nav_meta.routing',
+          icon: sidebarIcons.routing,
         },
         {
           path: '/auth-files',

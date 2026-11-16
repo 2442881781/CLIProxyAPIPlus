@@ -6,6 +6,7 @@ interface ToggleSwitchProps {
   onChange: (value: boolean) => void;
   label?: ReactNode;
   ariaLabel?: string;
+  ariaDescribedBy?: string;
   disabled?: boolean;
   labelPosition?: 'left' | 'right';
 }
@@ -15,6 +16,7 @@ export function ToggleSwitch({
   onChange,
   label,
   ariaLabel,
+  ariaDescribedBy,
   disabled = false,
   labelPosition = 'right',
 }: ToggleSwitchProps) {
@@ -38,6 +40,7 @@ export function ToggleSwitch({
         onChange={handleChange}
         disabled={disabled}
         aria-label={ariaLabel}
+        aria-describedby={ariaDescribedBy}
       />
       <span className={styles.track}>
         <span className={styles.thumb} />
