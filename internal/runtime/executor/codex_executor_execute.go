@@ -173,15 +173,13 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if !useSIWC {
 		normalizeCodexInstructionsDoc(doc, helps.IsNativeCodexRequest(req.Payload, opts))
 		if !isCompactionSummary && (e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff) {
-			if !e.basispointsEnabled(auth, baseModel) {
-				checkModel := req.Model
-				if strings.TrimSpace(checkModel) == "" {
-					checkModel = baseModel
-				}
-				ensureImageGenerationToolDoc(doc, checkModel, auth, opts.Headers)
-				if !codexAuthUsesAPIKey(auth) {
-					normalizeCodexImageGenerationToolsDoc(doc)
-				}
+			checkModel := req.Model
+			if strings.TrimSpace(checkModel) == "" {
+				checkModel = baseModel
+			}
+			ensureImageGenerationToolDoc(doc, checkModel, auth, opts.Headers)
+			if !codexAuthUsesAPIKey(auth) {
+				normalizeCodexImageGenerationToolsDoc(doc)
 			}
 		}
 	} else {

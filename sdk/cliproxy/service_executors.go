@@ -156,12 +156,104 @@ func (s *Service) unregisterOpenAICompatExecutor(providerKey string) {
 	if !okExecutor || existing == nil {
 		return
 	}
-	if _, okOpenAICompat := existing.(*executor.OpenAICompatExecutor); okOpenAICompat {
+	// The published executor may be an embedder wrapper around a native
+	// executor; consult the tracked owned executor instead.
+	owned, hasOwned := s.ownedExecutor(providerKey)
+	candidate := existing
+	if hasOwned && owned != nil {
+		candidate = owned
+	}
+	if _, okOpenAICompat := candidate.(*executor.OpenAICompatExecutor); okOpenAICompat {
 		s.coreManager.UnregisterExecutor(providerKey)
+		if s.ownedExecutors != nil {
+			delete(s.ownedExecutors, providerKey)
+		}
+		if s.ownedRevisions != nil {
+			delete(s.ownedRevisions, providerKey)
+		}
 		return
 	}
-	if pluginhost.IsPluginRefreshCompatExecutor(existing) {
+	if pluginhost.IsPluginRefreshCompatExecutor(candidate) {
 		s.coreManager.UnregisterExecutor(providerKey)
+		if s.ownedExecutors != nil {
+			delete(s.ownedExecutors, providerKey)
+		}
+		if s.ownedRevisions != nil {
+			delete(s.ownedRevisions, providerKey)
+		}
+	}
+}
+
+func (s *Service) ownedExecutor(provider string) (coreauth.ProviderExecutor, bool) {
+	if s == nil || s.coreManager == nil {
+		return nil, false
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return nil, false
+	}
+	if s.ownedExecutors != nil {
+		if exec, ok := s.ownedExecutors[provider]; ok && exec != nil {
+			if revision, okRev := s.ownedRevisions[provider]; okRev {
+				if s.coreManager.ExecutorRevision(provider) != revision {
+					// Published changed since the service registered this
+					// executor (external overwrite or removal). The cache is
+					// stale; fall back to the currently published executor.
+					delete(s.ownedExecutors, provider)
+					delete(s.ownedRevisions, provider)
+					return s.coreManager.Executor(provider)
+				}
+				return exec, true
+			}
+			// Legacy entry without revision (not written by registerExecutor):
+			// fall back to the published executor.
+			delete(s.ownedExecutors, provider)
+			return s.coreManager.Executor(provider)
+		}
+	}
+	return s.coreManager.Executor(provider)
+}
+
+func (s *Service) registerExecutor(exec coreauth.ProviderExecutor) {
+	s.registerExecutorWithJB(exec, true)
+}
+
+// registerCompatExecutor registers an executor that already carries inlined JB
+// wiring (OpenAI-compat), so the shared decorator must not wrap it twice.
+func (s *Service) registerCompatExecutor(exec coreauth.ProviderExecutor) {
+	s.registerExecutorWithJB(exec, false)
+}
+
+func (s *Service) registerExecutorWithJB(exec coreauth.ProviderExecutor, decorateJB bool) {
+	if s == nil || s.coreManager == nil || exec == nil {
+		return
+	}
+	owned := exec
+	if s.executorWrapper != nil {
+		if wrapped := s.executorWrapper(strings.ToLower(strings.TrimSpace(exec.Identifier())), exec); wrapped != nil {
+			exec = wrapped
+		}
+	}
+	// JB decoration is skipped while the feature is disabled: ResolveJB yields
+	// an empty snapshot then, so the decorator would only be a pass-through.
+	// Config apply reloads the engine and re-registers executors, so enabling
+	// JB later still decorates them.
+	if decorateJB && s.jbEngine != nil && s.jbEngine.Enabled() {
+		exec = executor.NewJBWiringExecutor(exec, s.jbEngine)
+	}
+	provider := strings.ToLower(strings.TrimSpace(exec.Identifier()))
+	if provider != "" {
+		if s.ownedExecutors == nil {
+			s.ownedExecutors = make(map[string]coreauth.ProviderExecutor)
+		}
+		s.ownedExecutors[provider] = owned
+		if s.ownedRevisions == nil {
+			s.ownedRevisions = make(map[string]uint64)
+		}
+	}
+	revision := s.coreManager.RegisterExecutorWithRevision(exec)
+	if provider != "" && revision != 0 {
+		s.ownedRevisions[provider] = revision
 	}
 }
 
@@ -295,7 +387,7 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 	s.cfgMu.RUnlock()
 	if strings.EqualFold(strings.TrimSpace(a.Provider), "codex") {
 		if !forceReplace {
-			existingExecutor, hasExecutor := s.coreManager.Executor("codex")
+			existingExecutor, hasExecutor := s.ownedExecutor("codex")
 			if hasExecutor {
 				existingCodexAutoExecutor, isCodexAutoExecutor := executor.UnwrapJBWiringExecutor(existingExecutor).(*executor.CodexAutoExecutor)
 				if isCodexAutoExecutor && existingCodexAutoExecutor.UsesConfig(cfg) {
@@ -303,7 +395,7 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 				}
 			}
 		}
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewCodexAutoExecutor(cfg), s.jbEngine))
+		s.registerExecutor(executor.NewCodexAutoExecutor(cfg))
 		return
 	}
 	// Skip disabled auth entries when (re)binding executors.
@@ -324,25 +416,31 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 	}
 	switch strings.ToLower(a.Provider) {
 	case constant.Gemini:
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewGeminiExecutor(cfg), s.jbEngine))
+		s.registerExecutor(executor.NewGeminiExecutor(cfg))
 	case constant.GeminiInteractions:
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewGeminiInteractionsExecutor(cfg), s.jbEngine))
+		s.registerExecutor(executor.NewGeminiInteractionsExecutor(cfg))
 	case "vertex":
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewGeminiVertexExecutor(cfg), s.jbEngine))
+		s.registerExecutor(executor.NewGeminiVertexExecutor(cfg))
 	case "aistudio":
 		if s.wsGateway != nil {
-			s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewAIStudioExecutor(cfg, a.ID, s.wsGateway), s.jbEngine))
+			s.registerExecutor(executor.NewAIStudioExecutor(cfg, a.ID, s.wsGateway))
 		}
 		return
 	case "antigravity":
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewAntigravityExecutor(cfg), s.jbEngine))
+		s.registerExecutor(executor.NewAntigravityExecutor(cfg))
 	case "claude":
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewClaudeExecutor(cfg), s.jbEngine))
+		if existing, found := s.ownedExecutor("claude"); found {
+			if previous, ok := existing.(*executor.ClaudeExecutor); ok {
+				s.registerExecutor(previous.WithConfig(cfg))
+				return
+			}
+		}
+		s.registerExecutor(executor.NewClaudeExecutor(cfg))
 	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewKimiExecutor(cfg), s.jbEngine))
+		s.registerExecutor(executor.NewKimiExecutor(cfg))
 	case "xai":
 		if !forceReplace {
-			existingExecutor, hasExecutor := s.coreManager.Executor("xai")
+			existingExecutor, hasExecutor := s.ownedExecutor("xai")
 			if hasExecutor {
 				existingXAIAutoExecutor, isXAIAutoExecutor := executor.UnwrapJBWiringExecutor(existingExecutor).(*executor.XAIAutoExecutor)
 				if isXAIAutoExecutor && existingXAIAutoExecutor.UsesConfig(cfg) {
@@ -350,11 +448,11 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 				}
 			}
 		}
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewXAIAutoExecutor(cfg), s.jbEngine))
+		s.registerExecutor(executor.NewXAIAutoExecutor(cfg))
 	case "devin":
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewDevinExecutor(cfg), s.jbEngine))
+		s.registerExecutor(executor.NewDevinExecutor(cfg))
 	case "meta":
-		s.coreManager.RegisterExecutor(executor.NewJBWiringExecutor(executor.NewMetaExecutor(cfg), s.jbEngine))
+		s.registerExecutor(executor.NewMetaExecutor(cfg))
 	default:
 		providerKey := strings.ToLower(strings.TrimSpace(a.Provider))
 		if providerKey == "" {
@@ -389,12 +487,18 @@ func (s *Service) registerOpenAICompatProviderExecutor(providerKey string, auth 
 	nextExecutor := s.wrapOpenAICompatIfPluginAuth(compatExecutor, auth, cfg)
 	if !forceReplace {
 		if existingExecutor, hasExecutor := s.coreManager.Executor(providerKey); hasExecutor {
-			if shouldKeepExistingOpenAICompatExecutor(s, existingExecutor, nextExecutor, cfg, respectNonOwned) {
+			decisionExisting := existingExecutor
+			if _, hasOwned := s.ownedExecutor(providerKey); hasOwned {
+				if owned, ownedOK := s.ownedExecutor(providerKey); ownedOK && owned != nil {
+					decisionExisting = owned
+				}
+			}
+			if shouldKeepExistingOpenAICompatExecutor(s, decisionExisting, nextExecutor, cfg, respectNonOwned) {
 				return
 			}
 		}
 	}
-	s.coreManager.RegisterExecutor(nextExecutor)
+	s.registerCompatExecutor(nextExecutor)
 }
 
 func (s *Service) wrapOpenAICompatIfPluginAuth(compatExecutor *executor.OpenAICompatExecutor, auth *coreauth.Auth, cfg *config.Config) coreauth.ProviderExecutor {
@@ -531,7 +635,7 @@ func (s *Service) pluginModelsForProvider(providerKey string) []*ModelInfo {
 	if s == nil || s.pluginHost == nil {
 		return nil
 	}
-	return s.pluginHost.ModelsForProvider(providerKey)
+	return s.pluginHost.StaticAppendModelsForProvider(providerKey)
 }
 
 // appendPluginModels appends the provider's plugin static models that are not excluded.

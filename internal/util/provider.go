@@ -215,8 +215,8 @@ func MaskAuthorizationHeader(value string) string {
 //
 // Behavior by header key (case-insensitive):
 //   - "Authorization": Preserve the auth type prefix (e.g., "Bearer ") and mask only the credential part.
-//   - Headers containing "api-key": Mask the entire value using HideAPIKey.
 //   - Cookie and Set-Cookie: Omit the complete credential-bearing value.
+//   - Headers containing "api-key", "apikey", "token", "secret", or "cookie": Mask the entire value using HideAPIKey.
 //   - Others: Return the original value unchanged.
 //
 // Parameters:

@@ -123,6 +123,18 @@ func (e *Engine) UpdateConfig(cfg *config.SDKConfig) {
 	e.sdkCfg = cfg
 }
 
+// Enabled reports whether the current configuration turns JB assistance on.
+// Callers install the shared executor decorator only while this is true,
+// because ResolveJB returns an empty snapshot when the feature is disabled.
+func (e *Engine) Enabled() bool {
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.sdkCfg != nil && e.sdkCfg.JB.IsEnabled()
+}
+
 // Load reads all configured JB assets. It is called at startup and again by
 // the watcher whenever config.yaml changes; the per-file re-reads make the
 // corpus/spec/wordlists effectively hot-reloadable without restarting.
