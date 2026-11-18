@@ -57,6 +57,8 @@ func CountOpenAIChatTokens(enc tokenizer.Codec, payload []byte) (int64, error) {
 	collectOpenAIResponseFormat(root.Get("response_format"), &segments)
 	addIfNotEmpty(&segments, root.Get("input").String())
 	addIfNotEmpty(&segments, root.Get("prompt").String())
+	addIfNotEmpty(&segments, root.Get("instructions").String())
+	addIfNotEmpty(&segments, root.Get("system").String())
 
 	joined := strings.TrimSpace(strings.Join(segments, "\n"))
 	if joined == "" {

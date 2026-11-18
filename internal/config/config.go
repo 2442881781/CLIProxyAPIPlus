@@ -18,6 +18,10 @@ type Config struct {
 	// Models selects optional catalog sources independently for each catalog.
 	Models ModelCatalogs `yaml:"models" json:"models"`
 
+	// ContextLimit rejects GPT requests whose counted input tokens exceed the
+	// resolved per-model context cap. See ContextLimitConfig.
+	ContextLimit ContextLimitConfig `yaml:"context-limit" json:"context-limit"`
+
 	SDKConfig `yaml:",inline"`
 	// Host is the network host/interface on which the API server will bind.
 	// Default is empty ("") to bind all interfaces (IPv4 + IPv6). Use "127.0.0.1" or "localhost" for local-only access.

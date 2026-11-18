@@ -1235,3 +1235,35 @@ func (m OpenAICompatibilityModel) GetIsCompat() bool               { return m.Is
 func (m OpenAICompatibilityModel) GetUseMaxCompletionTokens() bool { return m.UseMaxCompletionTokens }
 
 func (m OpenAICompatibilityModel) GetThinking() *registry.ThinkingSupport { return m.Thinking }
+
+// ContextLimitRule defines a per-model input token cap. Name is matched
+// case-insensitively against the requested model id; Alias, when set, is also
+// compared so configured aliases take the same cap as the upstream name.
+type ContextLimitRule struct {
+	Name  string `yaml:"name" json:"name"`
+	Alias string `yaml:"alias,omitempty" json:"alias,omitempty"`
+	Limit int    `yaml:"limit" json:"limit"`
+}
+
+// ContextLimitConfig gates requests whose counted input tokens exceed a
+// resolved per-model cap. It exists to keep requests inside a model's billed
+// context window (for example GPT models whose usage beyond the advertised
+// window is charged at a higher tier). Enforcement is limited to GPT-family
+// model ids (gpt-*): other families pass through unchanged.
+type ContextLimitConfig struct {
+	// Enabled toggles the guard. Nil or true enforces; false disables it entirely.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+
+	// Default is the fallback token cap for GPT-family models when neither a
+	// models rule nor the catalog supplies a window. Zero disables the
+	// catch-all fallback (unmatched GPT models pass).
+	Default int `yaml:"default,omitempty" json:"default,omitempty"`
+
+	// SolDefault is the fallback cap for GPT models whose id ends in "-sol"
+	// (e.g. gpt-6.2-sol). It takes precedence over Default for those models.
+	SolDefault int `yaml:"sol-default,omitempty" json:"sol-default,omitempty"`
+
+	// Models holds explicit per-model caps that override the catalog window
+	// and the fallbacks above.
+	Models []ContextLimitRule `yaml:"models,omitempty" json:"models,omitempty"`
+}
