@@ -91,6 +91,28 @@ func TestContextLimitIgnoresNonGPT(t *testing.T) {
 	}
 }
 
+// Inline data-URL images must be charged per-image, not by base64 byte length.
+// A request with several large images but little text should stay under the cap.
+func TestContextLimitIgnoresInlineImageBytes(t *testing.T) {
+	cfg := &proxyconfig.Config{}
+	cfg.ContextLimit.Default = 20000 // small cap; text fits, base64 would blow it
+	srv, hits := newContextLimitEngine(t, cfg)
+	defer srv.Close()
+
+	img := "data:image/png;base64," + strings.Repeat("QUJD", 30000) // ~120KB base64
+	parts := make([]map[string]any, 0, 6)
+	parts = append(parts, map[string]any{"type": "text", "text": "describe these"})
+	for range 5 {
+		parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": img}})
+	}
+	body, _ := json.Marshal(map[string]any{"model": "gpt-6.2-astra", "messages": []map[string]any{{"role": "user", "content": parts}}})
+
+	resp, _ := postChat(t, srv.URL, body)
+	if resp.StatusCode != http.StatusOK || *hits != 1 {
+		t.Fatalf("image-heavy request should pass (images counted per-image); status=%d hits=%d", resp.StatusCode, *hits)
+	}
+}
+
 func TestContextLimitDisabled(t *testing.T) {
 	cfg := &proxyconfig.Config{}
 	cfg.ContextLimit.Enabled = new(false)
