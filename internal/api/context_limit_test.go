@@ -139,6 +139,8 @@ func TestResolveContextTokenLimit(t *testing.T) {
 		{name: "explicit rule by alias", cfg: proxyconfig.ContextLimitConfig{Models: []proxyconfig.ContextLimitRule{{Name: "upstream", Alias: "gpt-9-x", Limit: 42}}}, model: "gpt-9-x", want: 42},
 		{name: "non-gpt passes", model: "claude-opus-4", want: 0},
 		{name: "prefixed gpt still gpt", model: "teamA/gpt-9-sol", want: 272000},
+		{name: "catalog sol window", model: "gpt-6.1-sol", want: 500000},
+		{name: "catalog sol prefix", model: "codex/gpt-6.1-sol", want: 500000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

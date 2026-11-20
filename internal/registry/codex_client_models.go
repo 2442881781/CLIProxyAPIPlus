@@ -25,6 +25,7 @@ type codexClientModelsStore struct {
 	revision          uint64
 	responsesLiteMap  map[string]bool
 	thinkingLevelsMap map[string][]string
+	contextWindowMap  map[string]int64
 }
 
 var codexClientCatalogStore = &codexClientModelsStore{}
@@ -84,8 +85,24 @@ func CodexClientModelThinkingLevels(slug string) []string {
 	return append([]string(nil), levels...)
 }
 
+// CodexClientModelContextWindow returns the advertised context_window for slug
+// in the active Codex client model catalog, or 0 if absent. The slug is matched
+// after stripping a provider/alias prefix segment (the part after the last "/").
+func CodexClientModelContextWindow(slug string) int64 {
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if slug == "" {
+		return 0
+	}
+	if i := strings.LastIndexByte(slug, '/'); i >= 0 {
+		slug = slug[i+1:]
+	}
+	codexClientCatalogStore.mu.RLock()
+	defer codexClientCatalogStore.mu.RUnlock()
+	return codexClientCatalogStore.contextWindowMap[slug]
+}
+
 func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
-	responsesLiteMap, thinkingLevelsMap, err := parseAndValidateCodexClientModelsJSON(data)
+	responsesLiteMap, thinkingLevelsMap, contextWindowMap, err := parseAndValidateCodexClientModelsJSON(data)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", source, err)
 	}
@@ -99,6 +116,7 @@ func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
 	codexClientCatalogStore.data = cloned
 	codexClientCatalogStore.responsesLiteMap = responsesLiteMap
 	codexClientCatalogStore.thinkingLevelsMap = thinkingLevelsMap
+	codexClientCatalogStore.contextWindowMap = contextWindowMap
 	codexClientCatalogStore.revision++
 	return true, nil
 }
@@ -106,36 +124,40 @@ func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
 // ValidateCodexClientModelsJSON validates the fields required to serve a
 // complete Codex client model catalog.
 func ValidateCodexClientModelsJSON(data []byte) error {
-	_, _, err := parseAndValidateCodexClientModelsJSON(data)
+	_, _, _, err := parseAndValidateCodexClientModelsJSON(data)
 	return err
 }
 
-func parseAndValidateCodexClientModelsJSON(data []byte) (map[string]bool, map[string][]string, error) {
+func parseAndValidateCodexClientModelsJSON(data []byte) (map[string]bool, map[string][]string, map[string]int64, error) {
 	var payload codexClientModelsPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, nil, fmt.Errorf("decode Codex client model catalog: %w", err)
+		return nil, nil, nil, fmt.Errorf("decode Codex client model catalog: %w", err)
 	}
 	if len(payload.Models) == 0 {
-		return nil, nil, fmt.Errorf("Codex client model catalog has no models")
+		return nil, nil, nil, fmt.Errorf("Codex client model catalog has no models")
 	}
 
 	seen := make(map[string]struct{}, len(payload.Models))
 	responsesLiteMap := make(map[string]bool, len(payload.Models))
 	thinkingLevelsMap := make(map[string][]string, len(payload.Models))
+	contextWindowMap := make(map[string]int64, len(payload.Models))
 	for i, model := range payload.Models {
 		slug, err := requiredCodexClientModelString(model, "slug")
 		if err != nil {
-			return nil, nil, fmt.Errorf("Codex client model catalog models[%d]: %w", i, err)
+			return nil, nil, nil, fmt.Errorf("Codex client model catalog models[%d]: %w", i, err)
 		}
 		if _, exists := seen[slug]; exists {
-			return nil, nil, fmt.Errorf("Codex client model catalog contains duplicate slug %q", slug)
+			return nil, nil, nil, fmt.Errorf("Codex client model catalog contains duplicate slug %q", slug)
 		}
 		seen[slug] = struct{}{}
 
 		if err = validateCodexClientModel(model); err != nil {
-			return nil, nil, fmt.Errorf("Codex client model catalog model %q: %w", slug, err)
+			return nil, nil, nil, fmt.Errorf("Codex client model catalog model %q: %w", slug, err)
 		}
 		lowerSlug := strings.ToLower(slug)
+		if cw, ok := model["context_window"].(float64); ok && cw > 0 {
+			contextWindowMap[lowerSlug] = int64(cw)
+		}
 		if lite, ok := model["use_responses_lite"].(bool); ok && lite {
 			responsesLiteMap[lowerSlug] = true
 		}
@@ -153,7 +175,7 @@ func parseAndValidateCodexClientModelsJSON(data []byte) (map[string]bool, map[st
 			}
 		}
 	}
-	return responsesLiteMap, thinkingLevelsMap, nil
+	return responsesLiteMap, thinkingLevelsMap, contextWindowMap, nil
 }
 
 func validateCodexClientModel(model map[string]any) error {

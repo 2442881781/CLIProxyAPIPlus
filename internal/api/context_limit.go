@@ -106,9 +106,17 @@ func resolveContextTokenLimit(lc proxyconfig.ContextLimitConfig, model string) i
 		if info.MaxContextLength > 0 {
 			return info.MaxContextLength
 		}
+		// Prefer the live Codex catalog window over the static ContextLength:
+		// models.json can lag the upstream billed window (e.g. gpt-6.1-sol 500k).
+		if cw := registry.CodexClientModelContextWindow(model); cw > 0 {
+			return int(cw)
+		}
 		if info.ContextLength > 0 {
 			return info.ContextLength
 		}
+	}
+	if cw := registry.CodexClientModelContextWindow(model); cw > 0 {
+		return int(cw)
 	}
 	if strings.HasSuffix(model, "-sol") && lc.SolDefault > 0 {
 		return lc.SolDefault
